@@ -198,13 +198,16 @@ impl Engine {
 
     /// How long the worker may sleep before it must reconsider.
     fn next_wait(&self, now: Instant) -> Duration {
-        if self.has_pending_send() || self.queue.len() >= self.config.batch_size {
-            return Duration::ZERO;
-        }
+        // Backoff takes precedence over a pending batch. After a retryable
+        // failure `pending` is deliberately kept, so checking it first would
+        // return ZERO and spin the worker for the whole backoff window.
         if let Some(after) = self.retry_after {
             if after > now {
                 return (after - now).min(self.config.flush_interval);
             }
+        }
+        if self.has_pending_send() || self.queue.len() >= self.config.batch_size {
+            return Duration::ZERO;
         }
         if self.queue.is_empty() {
             // Nothing to do until notified; still wake occasionally so a
@@ -652,6 +655,22 @@ mod tests {
         client.track(AnalyticsEvent::AppStarted);
         wait_until(|| recorder.attempts() >= 2);
         client.shutdown();
+    }
+
+    #[test]
+    fn backoff_sleeps_instead_of_busy_waiting() {
+        let store: Arc<dyn StateStore> = Arc::new(InMemoryStore::new());
+        let mut engine = new_engine(store);
+        engine.track(AnalyticsEvent::AppStarted);
+        engine.prepare();
+        assert!(engine.has_pending_send());
+        let now = Instant::now();
+        engine.retry_after = Some(now + Duration::from_secs(3));
+        let wait = engine.next_wait(now);
+        assert!(
+            wait >= Duration::from_secs(1),
+            "worker must sleep through the backoff window, got {wait:?}"
+        );
     }
 
     #[test]

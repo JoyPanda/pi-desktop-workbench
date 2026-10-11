@@ -17,7 +17,7 @@ Please report vulnerabilities **privately** — do not open a public issue.
 
 Use GitHub's [private vulnerability reporting](https://github.com/imrj05/orbit/security/advisories/new)
 on this repository, or email the maintainer at
-**work.rjkashyap05@gmail.com**.
+**info@orbitpi.app**.
 
 Include, where possible:
 

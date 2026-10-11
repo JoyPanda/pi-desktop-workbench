@@ -868,6 +868,23 @@ impl OrbitApp {
         vec![
             self.settings_section(
                 theme,
+                &tr!("worktree.settings.manage_section"),
+                vec![self.setting_row(
+                    theme,
+                    &tr!("worktree.settings.manage"),
+                    Some(&tr!("worktree.settings.manage_hint")),
+                    None,
+                    Some(worktree_primary_button(
+                        "worktree-settings-open",
+                        tr!("worktree.settings.manage_open"),
+                        theme,
+                        this.clone(),
+                        |app, cx| app.open_worktrees(cx),
+                    )),
+                )],
+            ),
+            self.settings_section(
+                theme,
                 &tr!("worktree.settings.location_section"),
                 vec![
                     self.setting_row(
@@ -1038,13 +1055,18 @@ impl OrbitApp {
                             .mx_auto()
                             .px(DynamicSpacing::Base20.px(&theme))
                             .py(DynamicSpacing::Base20.px(&theme))
+                            .debug_selector(|| "worktree-page-content".to_string())
                             .flex()
                             .flex_col()
                             .gap(DynamicSpacing::Base16.px(&theme))
                             .children(self.worktree_setup_banner(theme, this.clone(), cx))
                             .children(self.worktrees_error_banner(theme, this.clone()))
                             .children(self.worktree_howto_card(theme, this.clone()))
-                            .child(self.worktrees_list(theme, this.clone(), cx)),
+                            .child(
+                                div()
+                                    .debug_selector(|| "worktree-page-list".to_string())
+                                    .child(self.worktrees_list(theme, this.clone(), cx)),
+                            ),
                     ),
             )
             .into_any_element()
@@ -1252,6 +1274,7 @@ impl OrbitApp {
             .unwrap_or_default();
         let mut card = div()
             .w_full()
+            .min_w_0()
             .bg(theme.bg_composer)
             .border_1()
             .border_color(theme.border)
@@ -1401,6 +1424,7 @@ impl OrbitApp {
         Some(
             div()
                 .w_full()
+                .min_w_0()
                 .bg(theme.stop_red.opacity(0.08))
                 .border_1()
                 .border_color(theme.stop_red.opacity(0.35))
@@ -1472,7 +1496,9 @@ impl OrbitApp {
         });
         Some(
             div()
+                .debug_selector(|| "worktree-howto-card".to_string())
                 .w_full()
+                .min_w_0()
                 .bg(theme.bg_composer)
                 .border_1()
                 .border_color(theme.border)

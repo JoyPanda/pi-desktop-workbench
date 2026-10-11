@@ -6,6 +6,8 @@ GLOSSARY = {
         "Worktree": "工作树",
         "Advanced": "高级",
         "Open Worktrees": "打开工作树",
+        "Manage worktrees": "管理工作树",
+        "Create, open, rename, move, lock, and remove worktrees for the current repository.": "为当前仓库创建、打开、重命名、移动、锁定和移除工作树。",
         "bare": "裸仓库",
         "detached": "游离",
         "Active": "当前",

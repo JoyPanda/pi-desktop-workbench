@@ -1,0 +1,39 @@
+# Orbit
+
+> Orbit is a native desktop client for the pi coding agent. Chat, tools,
+> review, Git, providers, and usage in one window — the same sessions as the
+> terminal.
+
+Orbit (also written "Orbit Pi") is a free, open-source workbench built in Rust
+with GPUI, the GPU-accelerated UI framework from the Zed editor. It drives the
+pi CLI you already have installed over pi's RPC interface; it does not bundle or
+replace pi, and it uses your existing pi configuration and sessions.
+
+## Key facts
+
+- Platform: macOS 13+, Windows, Linux
+- Built with: Rust + GPUI — a native app, no Electron or web view
+- License: Apache-2.0; free, no account, no subscription
+- Data: local-first; anonymous, opt-out product analytics only
+- Interface: keyboard-first, native theming and fonts, integrated terminal
+
+## Features
+
+- Multiple pi sessions and workspaces in one window
+- Inline diff review with per-turn checkpoints
+- Git and GitHub: issues, pull requests, merges, branch checkout
+- Model providers: Anthropic, OpenAI, Bedrock, OpenCode Go, Ollama, and custom
+  endpoints
+- Usage and quota analytics: tokens, cached tokens, sessions, workspaces
+- MCP servers, skills, and plugins
+- Native settings, appearance, and access modes (Supervised, Auto-accept, Full)
+
+## Links
+
+- Website: https://orbitpi.app
+- Download: https://github.com/imrj05/orbit/releases/latest
+- Source: https://github.com/imrj05/orbit
+- Changelog: https://orbitpi.app/changelog
+- RSS: https://orbitpi.app/changelog/rss.xml
+- Privacy: https://orbitpi.app/privacy
+- pi coding agent: https://github.com/earendil-works/pi

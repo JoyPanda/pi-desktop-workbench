@@ -19,6 +19,7 @@ const links = [
   { label: "Usage", href: "/#usage" },
   { label: "Skills", href: "/#skills" },
   { label: "MCP", href: "/#mcp" },
+  { label: "Docs", href: "/docs" },
   { label: "Changelog", href: "/changelog" },
 ];
 

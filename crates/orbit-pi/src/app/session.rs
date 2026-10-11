@@ -290,6 +290,7 @@ impl OrbitApp {
             removed: self.removed,
             mcp_stamp: self.mcp_stamp,
             widgets,
+            queue: self.queue.clone(),
             parked_at: Instant::now(),
         };
         match self.current_session_path.take() {
@@ -789,6 +790,9 @@ impl OrbitApp {
             self.added = parked.added;
             self.removed = parked.removed;
             self.extension_widgets = parked.widgets;
+            // pi re-emits `queue_update` only on a change, so a warm resume
+            // restores the pending bar from the drained mirror instead.
+            self.queue = parked.queue;
             self.send(CommandBody::GetState, "get_state");
             self.refresh_context_stats();
             // A warm process already reported capabilities; a cheap refresh

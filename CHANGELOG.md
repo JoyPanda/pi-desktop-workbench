@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Report a bug** from Settings → Report a bug: choose an **issue type**
+  (bug / feature / other, which sets the GitHub label and the section names),
+  paste the context into the field at the top, and **Generate draft** turns it
+  into an issue title and description with the app's active model (falling back
+  to the notes when pi is unavailable). The form attaches the build details —
+  Orbit version, app ID, OS and architecture, install kind, pi CLI version, and
+  the signed-in `gh` account — and creates the issue through the `gh` CLI when
+  it is installed and signed in, otherwise opening GitHub's new-issue page with
+  the title, body, and label prefilled. **Screenshots** can be attached too:
+  they upload with `gh issue create --attach` when `gh` is signed in, and
+  otherwise GitHub's web form opens with the images saved to a temp folder to
+  drag in. The form is its own settings section (also reachable from the command
+  palette), and its strings are localized in all ten shipped locales.
+
+### Fixed
+
+- Removing a workspace from the sidebar no longer leaves its heading behind.
+  Workspace paths are canonicalized (symlinks resolved, so macOS `/tmp` and
+  `/private/tmp` are one folder) when the project list is loaded, when a folder
+  is added, and when the active workspace is set — so a session's recorded
+  `cwd` always lands under its project, a legacy store that listed the same
+  folder twice collapses to one entry, and one click removes the folder for
+  good.
+
 ## [0.2.7] - 2026-10-09
 
 ### Added

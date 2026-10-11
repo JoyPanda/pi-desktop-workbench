@@ -306,6 +306,24 @@ the PR list drops its duplicated state pill — and the PR detail now shares the
 detail's reading-column + metadata-rail layout (review, checks, changes, branches,
 timeline).
 
+The in-app bug report (Settings → Report a bug) picks an issue type (bug /
+feature / other, which sets the GitHub label and the generated section
+headings), takes free-form context at the top, and drafts the issue title and
+description from it with the app's active model — the same one-shot, tool-free
+`pi -p` call the Git page's generator uses (`issue_message.rs`), with a
+kind-aware prompt that returns a heading-free description so the form supplies
+the section headings; when pi is unavailable the draft falls back to the notes
+themselves. Screenshots are supported too: they upload with
+`gh issue create --attach` when `gh` is signed in (Orbit writes them to a temp
+directory first), and a `gh` missing that flag or a signed-out `gh` degrades to
+GitHub's prefilled web form with the images saved for the user to drag in.
+Filing goes to `imrj05/orbit` with the machine's build details attached — Orbit
+version, app ID (`dev.orbit.pi`), OS and architecture, install kind, pi CLI
+version, and the signed-in `gh` account — through `gh issue create --repo` when
+the CLI is installed and authenticated, falling back to GitHub's new-issue page
+with the title, body, and label prefilled. `gh` keeps ownership of the token:
+Orbit still never stores one (`bug_report.rs`).
+
 Composer sending is configurable in Settings → Agent → Behavior: Enter queues a follow-up
 by default or steers the running task, with Alt/Option+Enter selecting the opposite mode.
 The explicit ⌘⇧Enter / Ctrl+Shift+Enter steering shortcut stays fixed. The choice is a

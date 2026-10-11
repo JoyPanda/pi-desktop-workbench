@@ -1,14 +1,10 @@
 "use client";
 
 import { useSyncExternalStore, type ReactNode } from "react";
-import {
-  AppleIcon,
-  Download01Icon,
-  MicrosoftIcon,
-} from "@hugeicons/core-free-icons";
+import { Download01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
-import { LinuxIcon } from "@/components/brand-icons";
+import { LinuxIcon, MacosIcon, WindowsIcon } from "@/components/brand-icons";
 import { ButtonLink } from "@/components/ui";
 
 export type Platform = "macos" | "windows" | "linux";
@@ -51,10 +47,10 @@ export function usePlatform(): Platform | null {
 
 function PlatformIcon({ platform }: { platform: Platform | null }) {
   if (platform === "macos") {
-    return <HugeiconsIcon icon={AppleIcon} data-icon="inline-start" />;
+    return <MacosIcon data-icon="inline-start" />;
   }
   if (platform === "windows") {
-    return <HugeiconsIcon icon={MicrosoftIcon} data-icon="inline-start" />;
+    return <WindowsIcon data-icon="inline-start" />;
   }
   if (platform === "linux") {
     return <LinuxIcon data-icon="inline-start" />;

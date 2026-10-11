@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Suspense } from "react";
-import { AppleIcon, Download01Icon, MicrosoftIcon } from "@hugeicons/core-free-icons";
+import { Download01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
-import { LinuxIcon } from "@/components/brand-icons";
+import { LinuxIcon, MacosIcon, WindowsIcon } from "@/components/brand-icons";
 
 import { ChangelogFeed } from "@/components/changelog/feed";
 import { ChangelogSkeleton } from "@/components/changelog/skeleton";
@@ -90,13 +90,13 @@ export default async function ChangelogPage() {
   const downloadHref = release?.macos ?? LATEST_RELEASE_URL;
   const platforms = [
     {
-      icon: <HugeiconsIcon icon={AppleIcon} className="size-3.5" />,
+      icon: <MacosIcon className="size-3.5" />,
       label: "macOS",
       meta: ".dmg",
       href: release?.macos ?? LATEST_RELEASE_URL,
     },
     {
-      icon: <HugeiconsIcon icon={MicrosoftIcon} className="size-3.5" />,
+      icon: <WindowsIcon className="size-3.5" />,
       label: "Windows",
       meta: ".exe",
       href: release?.windows ?? LATEST_RELEASE_URL,

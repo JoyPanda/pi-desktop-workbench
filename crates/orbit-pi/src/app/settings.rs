@@ -46,7 +46,7 @@ const BLUR_KNOB: f32 = 14.;
 /// Grouped so the app's own preferences lead (General / Appearance /
 /// Shortcuts), the agent and its resources follow (Runtime / Agent /
 /// Providers / Models), the extensions pi loads close the list (Skills /
-/// Plugins / MCP), and About sits alone at the end.
+/// Plugins / MCP), and About and Report a bug sit alone at the end.
 const SETTINGS_SECTIONS: &[(SettingsSection, &str, &str)] = &[
     (
         SettingsSection::General,
@@ -101,6 +101,11 @@ const SETTINGS_SECTIONS: &[(SettingsSection, &str, &str)] = &[
     ),
     (SettingsSection::Mcp, "icons/tools/mcp.svg", "settings.mcp"),
     (SettingsSection::About, "icons/info.svg", "settings.about"),
+    (
+        SettingsSection::ReportBug,
+        "icons/github.svg",
+        "settings.report_bug",
+    ),
 ];
 
 /// Every searchable setting, flattened: section, label key, and the extra
@@ -368,12 +373,22 @@ const SETTINGS_SEARCH_INDEX: &[(SettingsSection, &str, &str)] = &[
     (
         SettingsSection::Privacy,
         "settings.anonymous_analytics",
-        "telemetry analytics usage anonymous privacy opt out data collection",
+        "telemetry analytics usage anonymous privacy opt out data collection personal",
     ),
     (
         SettingsSection::About,
         "settings.about",
         "about version updates source github",
+    ),
+    (
+        SettingsSection::ReportBug,
+        "settings.report_bug",
+        "bug report issue crash problem broken github feedback",
+    ),
+    (
+        SettingsSection::ReportBug,
+        "bug_report.heading",
+        "bug report issue title description steps reproduce diagnostics",
     ),
 ];
 
@@ -537,6 +552,7 @@ impl OrbitApp {
                                         SettingsSection::Runtime
                                             | SettingsSection::Skills
                                             | SettingsSection::About
+                                            | SettingsSection::ReportBug
                                     );
                                     let row = div()
                                         .id(ElementId::Name(format!("settings-nav-{label}").into()))
@@ -865,6 +881,10 @@ impl OrbitApp {
                 (tr!("settings.privacy"), tr!("settings.privacy_description"))
             }
             SettingsSection::About => (tr!("settings.about"), tr!("settings.about_description")),
+            SettingsSection::ReportBug => (
+                tr!("settings.report_bug"),
+                tr!("settings.report_bug_description"),
+            ),
         };
         div()
             .flex()
@@ -1019,6 +1039,7 @@ impl OrbitApp {
                     self.settings_group(theme, about),
                 ]
             }
+            SettingsSection::ReportBug => self.bug_report_rows(theme, cx),
         }
     }
 
@@ -5301,9 +5322,9 @@ impl OrbitApp {
             .into_any_element()
     }
 
-    /// Settings → Privacy: the single anonymous-usage-analytics switch. The
-    /// paragraph names what is collected and what never is; disabling takes
-    /// effect immediately and clears anything queued.
+    /// Settings → Privacy: the single anonymous-usage-analytics switch plus a
+    /// plain-language disclosure of exactly what is and is never collected.
+    /// Disabling takes effect immediately and clears anything queued.
     pub(super) fn privacy_rows(
         &self,
         theme: Theme,
@@ -5311,23 +5332,165 @@ impl OrbitApp {
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
         let enabled = crate::analytics::is_enabled(cx);
-        vec![self.settings_section(
-            theme,
-            &tr!("settings.anonymous_analytics"),
-            vec![self.setting_row(
+        vec![
+            self.settings_section(
                 theme,
                 &tr!("settings.anonymous_analytics"),
-                Some(&tr!("settings.anonymous_analytics_description")),
-                None,
-                Some(self.settings_toggle(
-                    "analytics-toggle",
-                    enabled,
-                    theme,
-                    this,
-                    Self::toggle_analytics,
-                )),
-            )],
-        )]
+                vec![
+                    self.setting_row(
+                        theme,
+                        &tr!("settings.anonymous_analytics"),
+                        Some(&tr!("settings.anonymous_analytics_description")),
+                        None,
+                        Some(self.settings_toggle(
+                            "analytics-toggle",
+                            enabled,
+                            theme,
+                            this.clone(),
+                            Self::toggle_analytics,
+                        )),
+                    ),
+                    // A read-only disclosure: the two halves of what the toggle
+                    // above actually means, so the privacy promise is visible
+                    // in the app rather than only in PRIVACY.md.
+                    self.setting_row(
+                        theme,
+                        &tr!("settings.analytics_collected_title"),
+                        Some(&tr!("settings.analytics_collected_body")),
+                        None,
+                        None,
+                    ),
+                    self.setting_row(
+                        theme,
+                        &tr!("settings.analytics_never_title"),
+                        Some(&tr!("settings.analytics_never_body")),
+                        None,
+                        None,
+                    ),
+                ],
+            ),
+            self.settings_section(
+                theme,
+                &tr!("settings.session_retention"),
+                vec![
+                    self.setting_row(
+                        theme,
+                        &tr!("settings.session_retention_enabled"),
+                        Some(&tr!("settings.session_retention_enabled_description")),
+                        None,
+                        Some(self.settings_toggle(
+                            "session-retention-toggle",
+                            self.retention.enabled,
+                            theme,
+                            this.clone(),
+                            Self::toggle_session_retention,
+                        )),
+                    ),
+                    self.setting_row(
+                        theme,
+                        &tr!("settings.session_retention_action"),
+                        Some(&tr!("settings.session_retention_action_description")),
+                        None,
+                        Some(self.retention_mode_select(theme, this.clone(), cx)),
+                    ),
+                    self.setting_row(
+                        theme,
+                        &tr!("settings.session_retention_age"),
+                        Some(&tr!("settings.session_retention_age_description")),
+                        None,
+                        Some(self.retention_days_select(theme, this.clone(), cx)),
+                    ),
+                    self.setting_row(
+                        theme,
+                        &tr!("settings.session_retention_run"),
+                        Some(&tr!("settings.session_retention_run_description")),
+                        None,
+                        Some(self.retention_run_button(theme, this.clone())),
+                    ),
+                ],
+            ),
+        ]
+    }
+
+    /// Settings → Privacy: the retention action dropdown (archive / delete).
+    fn retention_mode_select(
+        &self,
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let options = vec![
+            tr!("settings.session_retention_mode_archive"),
+            tr!("settings.session_retention_mode_delete"),
+        ];
+        let selected = match self.retention.mode {
+            crate::session_retention::RetentionMode::Archive => 0,
+            crate::session_retention::RetentionMode::Delete => 1,
+        };
+        self.select_control(
+            "session-retention-mode-select",
+            SettingsSelect::RetentionMode,
+            options[selected].clone(),
+            options,
+            selected,
+            theme,
+            this,
+            cx,
+        )
+    }
+
+    /// Settings → Privacy: the idle-threshold dropdown.
+    fn retention_days_select(
+        &self,
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        use crate::session_retention::DAY_PRESETS;
+        let options: Vec<String> = DAY_PRESETS
+            .iter()
+            .map(|days| tr!("settings.session_retention_days", days = days))
+            .collect();
+        let selected = DAY_PRESETS
+            .iter()
+            .position(|days| *days == self.retention.days)
+            .unwrap_or(0);
+        self.select_control(
+            "session-retention-days-select",
+            SettingsSelect::RetentionDays,
+            options[selected].clone(),
+            options,
+            selected,
+            theme,
+            this,
+            cx,
+        )
+    }
+
+    /// Settings → Privacy: run the policy immediately (the same pass the
+    /// launch hook runs) and report the result as a toast.
+    fn retention_run_button(&self, theme: Theme, this: Entity<OrbitApp>) -> AnyElement {
+        button_frame(div().id("session-retention-run"), &theme, ButtonSize::Large)
+            .border_1()
+            .border_color(theme.border)
+            .raised(theme.bg_raised, &theme)
+            .cursor_pointer()
+            .hover(|style| style.raised(theme.bg_hover, &theme))
+            .active(|style| style.raised(theme.active, &theme))
+            .text_color(theme.text_2)
+            .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                this.update(cx, |app, cx| app.run_session_retention(cx));
+            })
+            .child(tr!("settings.session_retention_run"))
+            .into_any_element()
+    }
+
+    /// Flip the session-retention policy and persist it. It takes effect on
+    /// the next launch, or right away from "Clean up now".
+    pub(super) fn toggle_session_retention(&mut self, cx: &mut Context<Self>) {
+        self.retention.enabled = !self.retention.enabled;
+        self.retention.persist();
+        cx.notify();
     }
 
     /// Flip the analytics opt-out. The client stops collecting and clears its
@@ -6308,7 +6471,9 @@ impl OrbitApp {
             | SettingsSelect::BackdropFade
             | SettingsSelect::TitleModel
             | SettingsSelect::DefaultModel
-            | SettingsSelect::DefaultThinking => unreachable!(),
+            | SettingsSelect::DefaultThinking
+            | SettingsSelect::RetentionMode
+            | SettingsSelect::RetentionDays => unreachable!(),
         };
         let selected = values
             .iter()
@@ -6814,6 +6979,23 @@ impl OrbitApp {
                 crate::dither::background();
                 return;
             }
+            SettingsSelect::RetentionMode => {
+                self.retention.mode = match ix {
+                    1 => crate::session_retention::RetentionMode::Delete,
+                    _ => crate::session_retention::RetentionMode::Archive,
+                };
+                self.retention.persist();
+                cx.notify();
+                return;
+            }
+            SettingsSelect::RetentionDays => {
+                if let Some(days) = crate::session_retention::DAY_PRESETS.get(ix) {
+                    self.retention.days = *days;
+                    self.retention.persist();
+                }
+                cx.notify();
+                return;
+            }
             _ => {}
         }
         use crate::theme::{Language, FONT_SIZES, SPACING_DENSITIES};
@@ -6841,7 +7023,9 @@ impl OrbitApp {
             | SettingsSelect::BackdropFade
             | SettingsSelect::TitleModel
             | SettingsSelect::DefaultModel
-            | SettingsSelect::DefaultThinking => unreachable!(),
+            | SettingsSelect::DefaultThinking
+            | SettingsSelect::RetentionMode
+            | SettingsSelect::RetentionDays => unreachable!(),
         }
         theme::set_ui_prefs(cx, ui);
     }

@@ -78,6 +78,17 @@ impl ArchivedSessions {
         }
     }
 
+    /// Ensure a session is archived; returns whether it was newly added.
+    /// Unlike [`toggle`], a repeated add is a no-op, so a bulk archive pass
+    /// can never un-archive an already-archived session.
+    pub fn add(&mut self, path: &Path) -> bool {
+        if self.contains(path) {
+            return false;
+        }
+        self.entries.push(path.to_path_buf());
+        true
+    }
+
     /// Forget a session (e.g. after its file was deleted).
     pub fn remove(&mut self, path: &Path) {
         self.entries.retain(|entry| entry != path);
@@ -113,6 +124,16 @@ pub fn all() -> ArchivedSessions {
 /// Whether a session path is archived.
 pub fn contains(path: &Path) -> bool {
     with_store(|store| store.contains(path))
+}
+
+/// Ensure a session is archived and persist the change. Idempotent: an
+/// already-archived path is left archived (see [`ArchivedSessions::add`]).
+pub fn add(path: &Path) {
+    with_store(|store| {
+        if store.add(path) {
+            store.persist();
+        }
+    });
 }
 
 /// Flip a session's archived state and persist the change.
@@ -152,6 +173,18 @@ mod tests {
         let archived = ArchivedSessions::from_paths(&["/store/a.jsonl"]);
         assert!(archived.contains(Path::new("/store/a.jsonl")));
         assert!(!archived.contains(Path::new("/store/b.jsonl")));
+    }
+
+    #[test]
+    fn add_is_idempotent() {
+        let mut archived = ArchivedSessions::default();
+        assert!(archived.add(Path::new("/store/a.jsonl")));
+        assert!(archived.contains(Path::new("/store/a.jsonl")));
+        assert!(
+            !archived.add(Path::new("/store/a.jsonl")),
+            "a repeated add must not un-archive"
+        );
+        assert_eq!(archived.paths().len(), 1);
     }
 
     #[test]

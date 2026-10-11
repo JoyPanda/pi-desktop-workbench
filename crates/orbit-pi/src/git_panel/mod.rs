@@ -46,7 +46,7 @@ use crate::theme::{self, Theme, ThemeMode};
 use crate::usage::tooltip::Tooltip;
 
 mod failure;
-mod widgets;
+pub(crate) mod widgets;
 
 use failure::{ActionError, RecoveryAction};
 use widgets::{
@@ -1229,7 +1229,7 @@ impl GitPanel {
         cx.notify();
         self.spawn_data(
             cx,
-            move || gh::create_issue(&cwd, &title, &body, &labels, &[]),
+            move || gh::create_issue(&cwd, None, &title, &body, &labels, &[], &[]),
             |panel, result, cx| {
                 panel.issue_busy = false;
                 match result {

@@ -11,7 +11,7 @@
 //! listing and mutations land in later phases; keeping the runner and parsers
 //! here means they can be unit-tested without a network.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Deserialize;
@@ -298,22 +298,33 @@ pub fn view_issue(cwd: &Path, number: u64) -> Result<GhIssue, String> {
     )?)
 }
 
-/// Create an issue, returning `gh`'s printed URL.
+/// Create an issue, returning `gh`'s printed URL. `repo` targets an explicit
+/// `owner/name`; `None` uses the repository of `cwd` (the workspace's own
+/// issue tracker). The in-app bug report passes the project's repository so a
+/// report is filed there no matter which workspace is open. `attachments` are
+/// local image/video paths uploaded with `--attach` and appended to the body.
 pub fn create_issue(
     cwd: &Path,
+    repo: Option<&str>,
     title: &str,
     body: &str,
     labels: &[String],
     assignees: &[String],
+    attachments: &[PathBuf],
 ) -> Result<String, String> {
-    let mut args: Vec<String> = vec![
-        "issue".into(),
-        "create".into(),
-        "--title".into(),
-        title.into(),
-        "--body".into(),
-        body.into(),
-    ];
+    let mut args: Vec<String> = vec!["issue".into(), "create".into()];
+    if let Some(repo) = repo.map(str::trim).filter(|repo| !repo.is_empty()) {
+        args.push("--repo".into());
+        args.push(repo.to_string());
+    }
+    args.push("--title".into());
+    args.push(title.into());
+    args.push("--body".into());
+    args.push(body.into());
+    for attachment in attachments {
+        args.push("--attach".into());
+        args.push(attachment.to_string_lossy().into_owned());
+    }
     for label in labels {
         args.push("--label".into());
         args.push(label.clone());

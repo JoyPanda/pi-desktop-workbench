@@ -112,6 +112,12 @@ Development and staging are **off by default** so a `cargo run` never pollutes
 the production dashboard. Without an app key the client is inert and Orbit runs
 normally. The app key is configuration, not a committed secret.
 
+Release builds embed the key at compile time: `crates/orbit-analytics/build.rs`
+bakes the build-time `ORBIT_ANALYTICS_APP_KEY` into the binary, and the release
+workflow passes the `ORBIT_ANALYTICS_APP_KEY` GitHub secret to every platform
+build. A process-environment `ORBIT_ANALYTICS_APP_KEY` still overrides the baked
+value at launch, which is how local development points at a local endpoint.
+
 ### Changing the endpoint
 
 Pass a different `AnalyticsConfig` to `AnalyticsClient::new`, or set

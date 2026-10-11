@@ -32,6 +32,9 @@ impl OrbitApp {
         if self.toasts.expire(Instant::now(), toast_fade) {
             cx.notify();
         }
+        // Session retention: once per launch, archive or delete sessions the
+        // user's policy marks idle. A no-op until enabled in Settings.
+        self.run_session_retention_once(cx);
         self.tick_background(cx);
         // MCP: external-change detection, the debounced `pi mcp list` probe,
         // and a deferred restart that applies new server configuration while
@@ -495,6 +498,9 @@ impl OrbitApp {
                 // follow-up / retry can continue past `agent_end`).
                 Event::AgentSettled => {
                     parked.busy = false;
+                    // A settled run has no queued continuation left; clear
+                    // the mirror even if the final `queue_update` was missed.
+                    parked.queue = PendingQueue::default();
                     // A pending session has no sidebar row yet, so there is
                     // no path to name in a notification; it is re-keyed
                     // moments later and notices from then on.
@@ -509,7 +515,16 @@ impl OrbitApp {
                         ));
                     }
                 }
-                Event::ProcessExited => parked.busy = false,
+                Event::ProcessExited => {
+                    parked.busy = false;
+                    parked.queue = PendingQueue::default();
+                }
+                // pi emits `queue_update` only when the queue changes, so a
+                // parked session must mirror it here to restore the pending
+                // bar on resume — and to drop messages pi already delivered.
+                Event::QueueUpdate { value } => {
+                    parked.queue = PendingQueue::from_value(value);
+                }
                 // A parked session has no visible dialog surface; cancel
                 // so its blocked run can settle (an active session renders
                 // the dialog in `tick` above).

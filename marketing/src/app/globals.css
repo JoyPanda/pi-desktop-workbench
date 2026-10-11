@@ -341,6 +341,156 @@ body {
   z-index: 2;
 }
 
+/* Long-form prose for legal and policy pages. */
+.prose-orbit {
+  color: var(--ink-2);
+  font-size: 14.5px;
+  line-height: 1.8;
+}
+
+.prose-orbit > * + * {
+  margin-top: 1.15em;
+}
+
+.prose-orbit h2 {
+  margin-top: 2.4em;
+  color: var(--ink);
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.prose-orbit h3 {
+  margin-top: 1.8em;
+  color: var(--ink);
+  font-size: 0.98rem;
+  font-weight: 600;
+}
+
+.prose-orbit strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.prose-orbit a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--edge-strong);
+  transition: text-decoration-color 120ms ease;
+}
+
+.prose-orbit a:hover {
+  text-decoration-color: var(--brand);
+}
+
+.prose-orbit ul,
+.prose-orbit ol {
+  padding-left: 1.3em;
+}
+
+.prose-orbit ul {
+  list-style: disc;
+}
+
+.prose-orbit ol {
+  list-style: decimal;
+}
+
+.prose-orbit li + li {
+  margin-top: 0.45em;
+}
+
+.prose-orbit li::marker {
+  color: var(--ink-3);
+}
+
+.prose-orbit code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.15em 0.4em;
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.prose-orbit hr {
+  border: 0;
+  border-top: 1px solid var(--edge-subtle);
+  margin: 2em 0;
+}
+
+/* Docs additions: code blocks, tables, and keyboard keys. */
+.prose-orbit pre {
+  margin-top: 1.4em;
+  overflow-x: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--edge-subtle);
+  border-radius: 12px;
+  background: var(--well);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.prose-orbit pre code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ink-2);
+  font-size: inherit;
+}
+
+.prose-orbit table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.prose-orbit th,
+.prose-orbit td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--edge-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose-orbit th {
+  color: var(--ink);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.prose-orbit tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.prose-orbit th:first-child,
+.prose-orbit td:first-child {
+  padding-left: 0;
+}
+
+.prose-orbit th:last-child,
+.prose-orbit td:last-child {
+  padding-right: 0;
+}
+
+.prose-orbit kbd {
+  display: inline-block;
+  padding: 3px 6px;
+  border: 1px solid var(--edge-default);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 /* Entry animations: a gentle blur-rise, used on the hero only. */
 @keyframes rise-in {
   0% {
@@ -479,14 +629,229 @@ body {
   mask-image: radial-gradient(120% 120% at 100% 100%, #000 0%, #0000 70%);
 }
 
+/* ── Hero orbital field ──────────────────────────────────────────────────
+ * A galaxy-flavoured ambient layer: tilted concentric orbits, each with one
+ * travelling node, over a soft brand core, a faint nebula, and a sparse
+ * starfield. Decorative only — the field is masked so it dissolves into the
+ * page, and every colour resolves from theme tokens so it flips with the
+ * active theme. */
+.orbit-field {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  animation: orbit-in 1.2s cubic-bezier(0.16, 1, 0.3, 1) 0.1s both;
+  -webkit-mask-image: radial-gradient(82% 72% at 50% 44%, #000 0%, #0000 82%);
+  mask-image: radial-gradient(82% 72% at 50% 44%, #000 0%, #0000 82%);
+}
+
+.orbit-scene {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: min(1180px, 132vw);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  perspective: 1200px;
+}
+
+.orbit-plane {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  transform-style: preserve-3d;
+}
+
+.orbit-ring {
+  position: relative;
+  border-radius: 50%;
+  border: 1px solid color-mix(in oklab, var(--brand) 46%, transparent);
+  animation: orbit-spin linear infinite;
+}
+
+.orbit-plane:nth-child(2) .orbit-ring {
+  border-color: color-mix(in oklab, var(--brand) 26%, transparent);
+}
+
+.orbit-plane:nth-child(3) .orbit-ring {
+  border-style: dashed;
+  border-color: color-mix(in oklab, var(--brand) 34%, transparent);
+}
+
+.orbit-plane:nth-child(4) .orbit-ring {
+  border-color: color-mix(in oklab, var(--brand) 52%, transparent);
+}
+
+.orbit-node {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 7px;
+  height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 18px 3px color-mix(in oklab, var(--brand) 80%, transparent);
+}
+
+.orbit-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 260px;
+  height: 260px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--brand) 42%, transparent) 0%,
+    transparent 68%
+  );
+  filter: blur(2px);
+}
+
+/* Nebula wash — a cool brand cloud with a faint warm counterpoint. */
+.orbit-nebula {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      38% 30% at 63% 37%,
+      color-mix(in oklab, var(--brand) 17%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      30% 26% at 33% 61%,
+      color-mix(in oklab, var(--gold) 9%, transparent),
+      transparent 72%
+    );
+}
+
+/* Sparse starfield, drawn with two offset dot grids. */
+.orbit-stars {
+  position: absolute;
+  inset: 0;
+  opacity: 0.14;
+  background-image:
+    radial-gradient(circle, var(--ink) 1px, transparent 1.4px),
+    radial-gradient(circle, var(--ink) 1px, transparent 1.4px);
+  background-size: 190px 190px, 130px 130px;
+  background-position: 0 0, 60px 90px;
+}
+
+@keyframes orbit-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes orbit-in {
+  0% {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Reviews — a parallax wall. Three columns of quote cards drift vertically at
+   different speeds and directions, fading into the band at the top and bottom
+   edges. Pure CSS, no JavaScript; hover or keyboard focus pauses the drift and
+   the global reduced-motion rule lays the cards out in place. */
+.reviews-scroller {
+  position: relative;
+  height: 560px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10%,
+    #000 90%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10%,
+    #000 90%,
+    transparent 100%
+  );
+}
+
+.reviews-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  height: 100%;
+}
+
+.reviews-col {
+  position: relative;
+  overflow: hidden;
+}
+
+.reviews-track {
+  display: flex;
+  flex-direction: column;
+  animation: reviews-drift linear infinite;
+  will-change: transform;
+}
+
+.reviews-track--down {
+  animation-direction: reverse;
+}
+
+.reviews-scroller:hover .reviews-track,
+.reviews-scroller:focus-within .reviews-track {
+  animation-play-state: paused;
+}
+
+@keyframes reviews-drift {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-33.3333%);
+  }
+}
+
+@media (min-width: 640px) {
+  .reviews-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1024px) {
+  .reviews-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rise,
   .rise-window,
   .caret,
   .pulse-dot,
   .nav-in,
-  .shimmer-text {
+  .shimmer-text,
+  .orbit-field,
+  .orbit-ring,
+  .reviews-scroller,
+  .reviews-track {
     animation: none;
+  }
+  .reviews-scroller {
+    height: auto;
+    overflow: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .reviews-track [data-dupe] {
+    display: none;
   }
   *,
   ::before,

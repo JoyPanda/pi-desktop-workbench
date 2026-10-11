@@ -19,6 +19,7 @@ name: Release
 # are validated.
 #
 # Secrets (Settings → Secrets and variables → Actions):
+#   ORBIT_ANALYTICS_APP_KEY      Countly application key baked into the binary
 #   APPLE_CERTIFICATE_P12        base64 Developer ID Application .p12
 #   APPLE_CERTIFICATE_PASSWORD   password for that .p12
 #   KEYCHAIN_PASSWORD            any throwaway password for the temp keychain
@@ -111,6 +112,9 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       # Baked into the binary by build.rs; empty leaves the updater dormant.
       ORBIT_UPDATE_PUBLIC_KEY: ${{ secrets.ORBIT_UPDATE_PUBLIC_KEY }}
+      # Baked into the binary by orbit-analytics/build.rs; empty leaves
+      # telemetry inert.
+      ORBIT_ANALYTICS_APP_KEY: ${{ secrets.ORBIT_ANALYTICS_APP_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -260,6 +264,7 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
           ORBIT_UPDATE_PUBLIC_KEY: ${{ secrets.ORBIT_UPDATE_PUBLIC_KEY }}
+          ORBIT_ANALYTICS_APP_KEY: ${{ secrets.ORBIT_ANALYTICS_APP_KEY }}
         run: ./scripts/bundle-linux.sh
 
       - name: Upload Linux artifacts
@@ -303,6 +308,7 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
           ORBIT_UPDATE_PUBLIC_KEY: ${{ secrets.ORBIT_UPDATE_PUBLIC_KEY }}
+          ORBIT_ANALYTICS_APP_KEY: ${{ secrets.ORBIT_ANALYTICS_APP_KEY }}
         run: ./scripts/bundle-windows.ps1
 
       - name: Upload Windows artifacts

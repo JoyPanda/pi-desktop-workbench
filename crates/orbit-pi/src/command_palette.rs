@@ -533,6 +533,12 @@ impl CommandPalette {
                 tr!("settings.about"),
                 "settings about version app",
             ),
+            (
+                SettingsSection::ReportBug,
+                "icons/github.svg",
+                tr!("settings.report_bug"),
+                "bug report issue crash problem github feedback",
+            ),
         ] {
             let order = items.len();
             items.push(PaletteItem::settings(section, icon, label, keywords, order));

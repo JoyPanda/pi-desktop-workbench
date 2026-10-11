@@ -249,6 +249,7 @@ fn shortcut_switch_to_a_warm_session_keeps_the_running_process(cx: &mut gpui::Te
                     removed: 0,
                     mcp_stamp: stamp,
                     widgets: Vec::new(),
+                    queue: PendingQueue::default(),
                     parked_at: Instant::now(),
                 },
             );
@@ -330,6 +331,7 @@ exec cat >/dev/null
                     removed: 0,
                     mcp_stamp: stamp,
                     widgets: Vec::new(),
+                    queue: PendingQueue::default(),
                     parked_at: Instant::now(),
                 },
             );
@@ -483,6 +485,7 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                     removed: 0,
                     mcp_stamp: stamp_b,
                     widgets: Vec::new(),
+                    queue: PendingQueue::default(),
                     parked_at: Instant::now(),
                 },
             );
@@ -504,6 +507,163 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                 "A resumes its own warm process"
             );
             assert!(child_alive(running_pid), "A's run was not killed");
+        });
+    });
+}
+
+/// Issue #57: the pending queue must survive a switch away and back. pi only
+/// emits `queue_update` when the queue changes, so a warm session that
+/// reopens with an unchanged queue would show an empty bar unless Orbit keeps
+/// the mirror on the parked session.
+#[gpui::test]
+fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let running_path = PathBuf::from("/tmp/orbit-park-tests/queue-running.jsonl");
+    let target_path = PathBuf::from("/tmp/orbit-park-tests/queue-target.jsonl");
+    let running = FakePi::start("queue-running");
+    let target = FakePi::start("queue-target");
+    let running_session = SessionInfo {
+        path: running_path.clone(),
+        id: "running".into(),
+        cwd: PathBuf::from("/tmp/orbit-park-tests"),
+        title: "Running".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+    };
+    let target_session = SessionInfo {
+        path: target_path.clone(),
+        id: "target".into(),
+        cwd: PathBuf::from("/tmp/orbit-park-tests"),
+        title: "Target".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+    };
+
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            // A live run with a follow-up queued behind it — the bar above
+            // the composer is showing it.
+            let client = spawn_fake(app, &running);
+            app.adopt_client(client);
+            app.current_session_path = Some(running_path.clone());
+            app.busy = true;
+            app.queue.follow_up.push("summarize when done".into());
+
+            let parked_target = spawn_fake(app, &target);
+            let stamp = app.mcp.fingerprint_for(Some(&target_session.cwd));
+            app.park(
+                target_path.clone(),
+                ParkedSession {
+                    client: parked_target,
+                    transcript: Transcript::new(),
+                    busy: false,
+                    added: 0,
+                    removed: 0,
+                    mcp_stamp: stamp,
+                    widgets: Vec::new(),
+                    queue: PendingQueue::default(),
+                    parked_at: Instant::now(),
+                },
+            );
+
+            app.switch_to_session(target_session.clone(), true, cx);
+            assert!(
+                app.queue.is_empty(),
+                "the target shows its own (empty) queue"
+            );
+
+            app.switch_to_session(running_session.clone(), true, cx);
+            assert_eq!(
+                app.queue.follow_up,
+                vec!["summarize when done".to_string()],
+                "the queued message returns with the session"
+            );
+        });
+    });
+}
+
+/// The parked mirror must not go stale: a `queue_update` drained while the
+/// session is in the background has to replace the value captured at park
+/// time, so a follow-up pi already delivered is not shown again on resume.
+#[gpui::test]
+fn parked_queue_tracks_updates_while_away(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let running_path = PathBuf::from("/tmp/orbit-park-tests/queue-drain.jsonl");
+    let target_path = PathBuf::from("/tmp/orbit-park-tests/queue-drain-target.jsonl");
+    // Emits an empty `queue_update` a beat after boot (pi drained the
+    // follow-up), then stays alive in the background.
+    let script = r#"#!/bin/sh
+sleep 1
+printf '%s\n' '{"type":"queue_update","steering":[],"followUp":[]}'
+exec cat >/dev/null
+"#;
+    let running = FakePi::install("queue-drain", script.to_string());
+    let target = FakePi::start("queue-drain-target");
+    let running_session = SessionInfo {
+        path: running_path.clone(),
+        id: "running".into(),
+        cwd: PathBuf::from("/tmp/orbit-park-tests"),
+        title: "Running".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+    };
+    let target_session = SessionInfo {
+        path: target_path.clone(),
+        id: "target".into(),
+        cwd: PathBuf::from("/tmp/orbit-park-tests"),
+        title: "Target".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+    };
+
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let client = spawn_fake(app, &running);
+            app.adopt_client(client);
+            app.current_session_path = Some(running_path.clone());
+            app.busy = true;
+            app.queue.follow_up.push("delivered while away".into());
+
+            let parked_target = spawn_fake(app, &target);
+            let stamp = app.mcp.fingerprint_for(Some(&target_session.cwd));
+            app.park(
+                target_path.clone(),
+                ParkedSession {
+                    client: parked_target,
+                    transcript: Transcript::new(),
+                    busy: false,
+                    added: 0,
+                    removed: 0,
+                    mcp_stamp: stamp,
+                    widgets: Vec::new(),
+                    queue: PendingQueue::default(),
+                    parked_at: Instant::now(),
+                },
+            );
+            app.switch_to_session(target_session.clone(), true, cx);
+        });
+    });
+
+    // The parked process drains the empty queue.
+    pump_until(cx, &app, Duration::from_secs(5), |app| {
+        app.lives
+            .get(&running_path)
+            .is_some_and(|parked| parked.queue.is_empty())
+    });
+
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            assert!(
+                app.lives
+                    .get(&running_path)
+                    .is_some_and(|parked| parked.queue.is_empty()),
+                "the parked mirror tracked the drained queue"
+            );
+            app.switch_to_session(running_session.clone(), true, cx);
+            assert!(
+                app.queue.is_empty(),
+                "the delivered follow-up is not shown again on resume"
+            );
         });
     });
 }

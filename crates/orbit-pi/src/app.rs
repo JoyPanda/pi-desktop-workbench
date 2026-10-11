@@ -160,6 +160,11 @@ struct ParkedSession {
     /// Extension `setWidget` blocks live at park time, so switching back to a
     /// warm session restores them (a parked process never re-emits).
     widgets: Vec<ExtensionWidget>,
+    /// The session's pending steering / follow-up queue at park time. pi only
+    /// emits `queue_update` when the queue changes, so a warm resume would
+    /// otherwise show nothing — and a stale restore would show messages pi
+    /// already delivered. Drain keeps it current while parked.
+    queue: PendingQueue,
     /// When this session was last parked; drives idle TTL reaping.
     parked_at: Instant,
 }
@@ -262,6 +267,11 @@ pub struct OrbitApp {
     /// Settings → Agent: auto session titles. Persisted to
     /// `~/.orbit-pi/auto-title.json`, which the bundled title extension reads.
     auto_title: crate::auto_title::AutoTitleConfig,
+    /// Settings → Privacy: the session-retention policy. Persisted to
+    /// `~/.orbit-pi/session-retention.json`; applied once per launch.
+    retention: crate::session_retention::RetentionConfig,
+    /// One-shot latch: the launch retention pass must run exactly once.
+    retention_ran: bool,
     /// Display name pi reports for the session (`get_state.sessionName`).
     session_name: Option<String>,
     /// pi is compacting right now (`get_state` / `compaction_*`).
@@ -386,6 +396,27 @@ pub struct OrbitApp {
     settings_select_highlight: Option<usize>,
     /// Scroll handle for the settings dropdown's option list.
     settings_select_scroll: UniformListScrollHandle,
+    /// Settings → Report a bug: the issue title.
+    bug_report_title: Entity<ComposerInput>,
+    /// Settings → Report a bug: the free-form context the model drafts from.
+    bug_report_context: Entity<ComposerInput>,
+    /// Settings → Report a bug: what happened (the report body).
+    bug_report_what: Entity<ComposerInput>,
+    /// Settings → Report a bug: steps to reproduce (optional).
+    bug_report_steps: Entity<ComposerInput>,
+    /// Settings → Report a bug: which kind of issue to file (bug / feature /
+    /// other). Drives the GitHub label and the draft prompt.
+    bug_report_kind: crate::issue_message::ReportKind,
+    /// Settings → Report a bug: screenshots to attach. GitHub's API cannot
+    /// upload binaries, so these are written to disk and the web form is
+    /// opened for the user to drag them in.
+    bug_report_screenshots: Vec<Attachment>,
+    /// A draft is being generated off-thread with the active model.
+    bug_report_generating: bool,
+    /// A report is being filed off-thread; the form's submit control is busy.
+    bug_report_busy: bool,
+    /// The last filing failure, shown under the form until the next attempt.
+    bug_report_error: Option<String>,
     /// Global settings search. Typing filters the section list down to the
     /// settings whose label or keywords match, across every section.
     settings_search: Entity<ComposerInput>,
@@ -952,6 +983,15 @@ impl Attachment {
     fn to_prompt_image(&self) -> Value {
         serde_json::json!({ "type": "image", "data": self.data, "mimeType": self.mime })
     }
+
+    /// The decoded image bytes, for writing the file to disk (the bug report
+    /// hands screenshots to GitHub's web editor, which is the only place
+    /// GitHub accepts binary attachments).
+    fn bytes(&self) -> Option<Vec<u8>> {
+        base64::engine::general_purpose::STANDARD
+            .decode(&self.data)
+            .ok()
+    }
 }
 
 /// A model choice from the pi runtime catalog.
@@ -1031,6 +1071,39 @@ impl OrbitApp {
                 .with_wrap(false)
         });
         let settings_search_sub = cx.observe(&settings_search, |_, _, cx| cx.notify());
+        // Settings → Report a bug: the issue title, the description, and the
+        // optional reproduction steps. The description fields carry the
+        // `Editor` context so Enter inserts a newline rather than submitting
+        // the chat composer.
+        let bug_report_title = cx.new(|cx| {
+            ComposerInput::new(cx)
+                .with_element_id("bug-report-title")
+                .with_placeholder_key("bug_report.title_placeholder")
+                .with_key_context("Composer Picker")
+                .with_max_lines(1)
+                .with_wrap(false)
+        });
+        let bug_report_what = cx.new(|cx| {
+            ComposerInput::new(cx)
+                .with_element_id("bug-report-what")
+                .with_placeholder_key("bug_report.what_placeholder")
+                .with_key_context("Editor")
+                .with_max_lines(8)
+        });
+        let bug_report_context = cx.new(|cx| {
+            ComposerInput::new(cx)
+                .with_element_id("bug-report-context")
+                .with_placeholder_key("bug_report.context_placeholder")
+                .with_key_context("Editor")
+                .with_max_lines(8)
+        });
+        let bug_report_steps = cx.new(|cx| {
+            ComposerInput::new(cx)
+                .with_element_id("bug-report-steps")
+                .with_placeholder_key("bug_report.steps_placeholder")
+                .with_key_context("Editor")
+                .with_max_lines(6)
+        });
         let open_in_filter = cx.new(|cx| {
             ComposerInput::new(cx)
                 .with_placeholder_key("app.filter")
@@ -1118,6 +1191,7 @@ impl OrbitApp {
         // real ~/.pi/agent/sessions so they are shared with the CLI.
         let workspace = load_last_workspace()
             .or_else(|| std::env::current_dir().ok())
+            .map(|path| sessions::canonical_workspace_path(&path))
             .unwrap_or_else(|| PathBuf::from("."));
         let workspace_logo = crate::workspace_logo::load(&workspace);
         let extensions = BundledExtensions::install();
@@ -1374,6 +1448,8 @@ impl OrbitApp {
             auto_compaction: true,
             auto_retry: true,
             auto_title: crate::auto_title::AutoTitleConfig::load(),
+            retention: crate::session_retention::RetentionConfig::load(),
+            retention_ran: false,
             session_name: None,
             is_compacting: false,
             retrying: false,
@@ -1423,6 +1499,15 @@ impl OrbitApp {
             _settings_search_sub: settings_search_sub,
             settings_select_highlight: None,
             settings_select_scroll: UniformListScrollHandle::new(),
+            bug_report_title,
+            bug_report_what,
+            bug_report_context,
+            bug_report_steps,
+            bug_report_kind: crate::issue_message::ReportKind::Bug,
+            bug_report_screenshots: Vec::new(),
+            bug_report_generating: false,
+            bug_report_busy: false,
+            bug_report_error: None,
             notification_prefs: notifications::Prefs::load(),
             notification_auth: notifications::DesktopAuth::Unknown,
             notification_auth_pending: false,
@@ -1819,6 +1904,10 @@ impl OrbitApp {
     /// new-task page opens on the last folder instead of the process cwd
     /// (which is `/` when the app is launched from Finder).
     pub(super) fn set_current_workspace(&mut self, cwd: PathBuf) {
+        // Resolve symlinks once at the boundary so the active folder, the
+        // persisted last-workspace, and every pi session spawned here all
+        // share one identity (`/tmp` and `/private/tmp` are not two folders).
+        let cwd = sessions::canonical_workspace_path(&cwd);
         persist_last_workspace(&cwd);
         self.workspace_logo = crate::workspace_logo::load(&cwd);
         // A different workspace may belong to a different repository; the
@@ -1834,7 +1923,7 @@ impl OrbitApp {
     /// whenever the user picks a folder to work in — starting a task there,
     /// browsing for one, or opening one of its sessions. Never writes to pi.
     pub(super) fn add_workspace(&mut self, cwd: PathBuf, cx: &App) {
-        let cwd = normalize_workspace_path(&cwd.to_string_lossy());
+        let cwd = sessions::canonical_workspace_path(&cwd);
         if self.workspaces.iter().any(|w| w == &cwd) {
             return;
         }
@@ -1871,13 +1960,17 @@ impl OrbitApp {
     }
 
     /// Drop a project from Orbit's sidebar. pi's session files stay exactly
-    /// where they are — only Orbit's own list changes.
+    /// where they are — only Orbit's own list changes. A symlinked spelling of
+    /// the same folder (`/tmp` vs `/private/tmp`, or a legacy duplicate written
+    /// before paths were canonicalized) is dropped with it, so one click removes
+    /// the folder entirely instead of leaving a second empty heading behind.
     pub(super) fn remove_workspace(&mut self, cwd: &Path, cx: &App) {
-        let before = self.workspaces.len();
-        self.workspaces.retain(|w| w.as_path() != cwd);
-        if self.workspaces.len() != before {
-            self.workspace_added_at.remove(cwd);
-            self.workspace_marks.remove(cwd);
+        if drop_workspace(&mut self.workspaces, cwd) {
+            // Drop every removed entry's stamp and mark, not just the one that
+            // matched by path.
+            let remaining: HashSet<PathBuf> = self.workspaces.iter().cloned().collect();
+            self.workspace_added_at.retain(|w, _| remaining.contains(w));
+            self.workspace_marks.retain(|w, _| remaining.contains(w));
             self.persist_workspace_prefs();
             crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::ProjectDeleted);
         }
@@ -2221,7 +2314,7 @@ fn parse_workspace_store(value: &Value) -> WorkspaceStore {
         let (path, added_at, mark) = match entry {
             // Legacy format: a bare path string.
             Value::String(raw) => (
-                normalize_workspace_path(raw),
+                sessions::canonical_workspace_path(Path::new(raw)),
                 None,
                 WorkspaceMark::default(),
             ),
@@ -2239,7 +2332,7 @@ fn parse_workspace_store(value: &Value) -> WorkspaceStore {
                     icon: map.get("icon").and_then(Value::as_str).map(str::to_string),
                     tint: map.get("tint").and_then(Value::as_str).map(str::to_string),
                 };
-                (normalize_workspace_path(raw), added, mark)
+                (sessions::canonical_workspace_path(Path::new(raw)), added, mark)
             }
             _ => continue,
         };
@@ -2319,7 +2412,7 @@ fn last_workspace_path() -> PathBuf {
 fn load_last_workspace() -> Option<PathBuf> {
     let raw = fs::read_to_string(last_workspace_path()).ok()?;
     let value = serde_json::from_str::<Value>(&raw).ok()?;
-    let path = normalize_workspace_path(value.get("path")?.as_str()?);
+    let path = sessions::canonical_workspace_path(Path::new(value.get("path")?.as_str()?));
     path.is_dir().then_some(path)
 }
 
@@ -2328,7 +2421,7 @@ fn persist_last_workspace(path: &Path) {
     if let Some(parent) = file.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    let path = normalize_workspace_path(&path.to_string_lossy());
+    let path = sessions::canonical_workspace_path(path);
     let payload = serde_json::json!({ "path": path.to_string_lossy() });
     let _ = fs::write(file, payload.to_string());
 }
@@ -2343,6 +2436,17 @@ fn normalize_workspace_path(raw: &str) -> PathBuf {
     } else {
         PathBuf::from(trimmed)
     }
+}
+
+/// Drop `cwd` (and any symlinked spelling of the same folder) from
+/// `workspaces`, returning whether anything was removed. Pure list edit — the
+/// caller owns persistence and the per-workspace metadata cleanup, which keeps
+/// the removal rule testable without touching disk.
+fn drop_workspace(workspaces: &mut Vec<PathBuf>, cwd: &Path) -> bool {
+    let target = sessions::canonical_workspace_path(cwd);
+    let before = workspaces.len();
+    workspaces.retain(|w| w.as_path() != cwd && sessions::canonical_workspace_path(w) != target);
+    workspaces.len() != before
 }
 
 /// State of the row-actions popup in the sessions sidebar: which session
@@ -2392,6 +2496,7 @@ pub(crate) enum SettingsSection {
     Plugins,
     Mcp,
     About,
+    ReportBug,
 }
 
 /// Which branch source the Create Worktree dialog uses.
@@ -2754,6 +2859,9 @@ enum SettingsSelect {
     DefaultModel,
     /// The default model's thinking level (Settings → Agent).
     DefaultThinking,
+    /// The session-retention action and threshold (Settings → Privacy).
+    RetentionMode,
+    RetentionDays,
 }
 
 // ── feature modules ───────────────────────────────────────────────────────
@@ -2761,6 +2869,7 @@ enum SettingsSelect {
 // wiring. Rendering and feature-specific logic live in child modules; they
 // are descendants of `app`, so they reach private fields/methods directly.
 mod ask;
+mod bug_report_ui;
 mod composer_ops;
 mod dialogs;
 mod events;
@@ -2770,6 +2879,7 @@ mod open_in;
 mod pi_update_ui;
 mod pickers;
 mod plugin_update_ui;
+mod retention_ui;
 mod runtime;
 mod search;
 mod session;
@@ -2807,6 +2917,8 @@ mod sidebar_active_reveal_tests;
 mod sidebar_group_tests;
 #[cfg(test)]
 mod sidebar_placeholder_tests;
+#[cfg(test)]
+mod sidebar_remove_tests;
 #[cfg(test)]
 mod sidebar_sort_tests;
 #[cfg(test)]

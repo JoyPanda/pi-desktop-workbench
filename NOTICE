@@ -11,6 +11,8 @@ third-party components under their own licenses, including:
   turn-checkpoint, syntax-highlighting, and localization patterns adapted in
   crates/orbit-pi are derived from it under its MIT license
 - The HugeIcons icon set (MIT)
+- The skill-icons Tux mark used on the marketing site (MIT), by tandpfun —
+  https://github.com/tandpfun/skill-icons
 - Bundled font families, each under the SIL Open Font License 1.1
   (OFL.txt files ship alongside the fonts under
   crates/orbit-pi/assets/fonts/bundled/)

@@ -1,12 +1,8 @@
 import Link from "next/link";
-import {
-  AppleIcon,
-  ArrowRight01Icon,
-  GithubIcon,
-  MicrosoftIcon,
-} from "@hugeicons/core-free-icons";
+import { ArrowRight01Icon, GithubIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { LinuxIcon } from "@/components/brand-icons";
+import { LinuxIcon, MacosIcon, WindowsIcon } from "@/components/brand-icons";
+import { OrbitField } from "@/components/orbit-field";
 import { OsDownloadButton } from "@/components/download-button";
 import { Shot } from "@/components/shot";
 import { Band, ButtonLink, Shell } from "@/components/ui";
@@ -22,12 +18,12 @@ export async function Hero() {
 
   const platforms = [
     {
-      icon: <HugeiconsIcon icon={AppleIcon} className="size-3.5" />,
+      icon: <MacosIcon className="size-3.5" />,
       label: "macOS 13+",
       href: release?.macos,
     },
     {
-      icon: <HugeiconsIcon icon={MicrosoftIcon} className="size-3.5" />,
+      icon: <WindowsIcon className="size-3.5" />,
       label: "Windows",
       href: release?.windows,
     },
@@ -41,6 +37,7 @@ export async function Hero() {
   return (
     <Shell>
       <Band className="relative overflow-hidden pb-24 pt-16 sm:pb-32 sm:pt-24">
+        <OrbitField />
         <div className="relative z-[1] mx-auto flex max-w-[760px] flex-col items-center text-center">
           {release ? (
             <Link

@@ -24,6 +24,31 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       changeFrequency: "daily",
       priority: 0.8,
     },
+    ...[
+      { path: "/docs", priority: 0.7 },
+      { path: "/docs/getting-started", priority: 0.6 },
+      { path: "/docs/sessions", priority: 0.6 },
+      { path: "/docs/worktrees", priority: 0.6 },
+      { path: "/docs/mcp", priority: 0.6 },
+      { path: "/docs/access-modes", priority: 0.6 },
+      { path: "/docs/shortcuts", priority: 0.6 },
+    ].map((page) => ({
+      url: `${SITE.url}${page.path}`,
+      lastModified,
+      changeFrequency: "monthly" as const,
+      priority: page.priority,
+    })),
+    ...[
+      { path: "/privacy", priority: 0.4 },
+      { path: "/terms", priority: 0.3 },
+      { path: "/security", priority: 0.4 },
+      { path: "/contact", priority: 0.4 },
+    ].map((page) => ({
+      url: `${SITE.url}${page.path}`,
+      lastModified,
+      changeFrequency: "yearly" as const,
+      priority: page.priority,
+    })),
     ...releases.map((entry) => ({
       url: `${SITE.url}/changelog/${entry.tag}`,
       lastModified: entry.date

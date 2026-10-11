@@ -95,6 +95,26 @@ fn load_sessions_in(dir: &Path) -> Vec<SessionInfo> {
     out
 }
 
+/// Sessions whose newest message is more than `days` old — the retention
+/// policy's candidate set. Age uses the same last-activity time the sidebar
+/// shows, so a session merely opened (bookkeeping appends) is never swept.
+pub fn older_than(days: u32, now: SystemTime) -> Vec<SessionInfo> {
+    older_than_in(&sessions_dir(), days, now)
+}
+
+/// The scan body of [`older_than`], with the store directory injectable for
+/// tests.
+pub(crate) fn older_than_in(dir: &Path, days: u32, now: SystemTime) -> Vec<SessionInfo> {
+    let threshold = Duration::from_secs(u64::from(days) * 86_400);
+    load_sessions_in(dir)
+        .into_iter()
+        .filter(|session| {
+            now.duration_since(session.modified)
+                .is_ok_and(|age| age > threshold)
+        })
+        .collect()
+}
+
 /// Only session files matter — header/group-directory events are ignored.
 fn is_session_file(path: &Path) -> bool {
     path.extension().is_some_and(|ext| ext == "jsonl")
@@ -271,7 +291,10 @@ fn read_session(path: &Path) -> Option<SessionInfo> {
         return None;
     }
     let id = header.get("id")?.as_str()?.to_string();
-    let cwd = PathBuf::from(header.get("cwd")?.as_str()?);
+    // Resolve the recorded cwd to the same identity Orbit stores for a
+    // project, so a session created in a symlinked path (`/tmp` →
+    // `/private/tmp` on macOS) still lands under its workspace.
+    let cwd = canonical_workspace_path(Path::new(header.get("cwd")?.as_str()?));
 
     // Scan a bounded number of lines for the first user message → preview.
     let mut first_text = String::new();
@@ -553,6 +576,46 @@ pub fn workspace_label(cwd: &Path) -> String {
     cwd.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| cwd.to_string_lossy().to_string())
+}
+
+/// A workspace path with a stable identity: symlinks resolved and a trailing
+/// separator trimmed, so a folder and its symlinked form (`/tmp` →
+/// `/private/tmp` on macOS) map to one workspace. Falls back to the lexical
+/// path when the folder no longer exists, so a removed workspace still
+/// compares by its recorded path.
+pub fn canonical_workspace_path(path: &Path) -> PathBuf {
+    match fs::canonicalize(path) {
+        Ok(canonical) => strip_verbatim_prefix(canonical),
+        Err(_) => {
+            let raw = path.to_string_lossy();
+            let trimmed = raw.trim_end_matches(std::path::MAIN_SEPARATOR);
+            if trimmed.is_empty() {
+                PathBuf::from(raw.as_ref())
+            } else {
+                PathBuf::from(trimmed)
+            }
+        }
+    }
+}
+
+/// `fs::canonicalize` answers with a `\\?\` verbatim path on Windows; pi and
+/// the rest of Orbit speak the plain form, so unwrap the prefix.
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    let Some(rest) = raw.strip_prefix(r"\\?\") else {
+        return path;
+    };
+    if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        PathBuf::from(format!(r"\\{unc}"))
+    } else {
+        PathBuf::from(rest)
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
+    path
 }
 
 /// Compact age label for a session row (`2m`, `2h`, `1d`, `2mo`, `1y`).
@@ -1010,6 +1073,58 @@ mod tests {
         });
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].path, older_created);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn older_than_selects_only_sessions_past_the_threshold() {
+        // Age comes from the last message, not the file mtime or creation.
+        let dir = std::env::temp_dir().join("orbit-older-than-test");
+        let _ = fs::remove_dir_all(&dir);
+        // Mirror pi's store: `<store>/<workspace-slug>/<timestamp>.jsonl`.
+        let group = dir.join("ws");
+        fs::create_dir_all(&group).unwrap();
+        let now = SystemTime::now();
+        let stamp = |secs_ago: u64| {
+            chrono::DateTime::<chrono::Utc>::from(now - Duration::from_secs(secs_ago)).to_rfc3339()
+        };
+        // 40 days idle, 10 days idle, and just inside the 30-day window
+        // (timestamps are millisecond-precision, so the boundary itself
+        // reads as a shade older — a real edge, tested at 29 days below).
+        for (name, secs) in [
+            ("old", 40 * 86_400u64),
+            ("recent", 10 * 86_400),
+            ("edge", 30 * 86_400 - 3_600),
+        ] {
+            let path = group.join(format!("{name}.jsonl"));
+            fs::write(
+                &path,
+                format!(
+                    "{{\"type\":\"session\",\"id\":\"{name}\",\"cwd\":\"/tmp/ws\"}}\n\
+                     {{\"type\":\"message\",\"timestamp\":\"{}\",\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n",
+                    stamp(secs)
+                ),
+            )
+            .unwrap();
+            // Touch the file so its mtime is newest: age must ignore it.
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(SystemTime::now())
+                .unwrap();
+        }
+
+        let old = older_than_in(&dir, 30, now);
+        assert_eq!(old.len(), 1, "only the 40-day session is past 30 days");
+        assert!(old[0].path.ends_with("old.jsonl"));
+        // A session inside the window is not swept; one day less is.
+        assert!(older_than_in(&dir, 30, now)
+            .iter()
+            .all(|s| !s.path.ends_with("edge.jsonl")));
+        assert!(older_than_in(&dir, 29, now)
+            .iter()
+            .any(|s| s.path.ends_with("edge.jsonl")));
         let _ = fs::remove_dir_all(&dir);
     }
 

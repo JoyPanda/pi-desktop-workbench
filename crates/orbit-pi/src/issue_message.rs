@@ -79,6 +79,113 @@ pub fn generate(
     process_response(&raw).ok_or_else(|| tr!("errors.no_draft"))
 }
 
+/// Which kind of report the in-app Settings → Report a bug form is filing.
+/// Drives the GitHub label and the draft prompt's framing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ReportKind {
+    #[default]
+    Bug,
+    Feature,
+    Other,
+}
+
+impl ReportKind {
+    /// The repository label to apply when one exists for this kind.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Bug => Some("bug"),
+            Self::Feature => Some("enhancement"),
+            Self::Other => None,
+        }
+    }
+
+    /// How the prompt names the document.
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Bug => "GitHub bug report",
+            Self::Feature => "GitHub feature request",
+            Self::Other => "GitHub issue",
+        }
+    }
+
+    /// The body rule, tailored per kind.
+    fn body_rule(self) -> &'static str {
+        match self {
+            Self::Bug => {
+                "The BODY is a concise description of the problem in GitHub-flavored Markdown: what the user was doing, what happened, and what was expected."
+            }
+            Self::Feature => {
+                "The BODY is a concise description in GitHub-flavored Markdown: the problem or friction the request addresses, then the proposed solution."
+            }
+            Self::Other => {
+                "The BODY is a concise description in GitHub-flavored Markdown of the issue or request."
+            }
+        }
+    }
+}
+
+/// Generate a report draft (title + description) from the user's own context
+/// for the in-app Settings → Report a bug form.
+///
+/// Unlike [`generate`], **no repository context is sampled**: an in-app report
+/// describes Orbit itself, not the workspace that happens to be open, so the
+/// user's notes are the only input. The description is drawn as plain prose
+/// without headings, so the form can place it under its own section heading.
+/// `kind` shapes the prompt (bug vs. feature vs. general). Blocking; call on
+/// the background executor.
+pub fn generate_report(
+    cwd: &Path,
+    provider: Option<&str>,
+    model: Option<&str>,
+    kind: ReportKind,
+    context: &str,
+) -> Result<Draft, String> {
+    let system = report_system_prompt(kind);
+    let prompt = report_user_prompt(kind, context);
+    let raw = run_pi(cwd, provider, model, &system, &prompt)?;
+    process_response(&raw).ok_or_else(|| tr!("errors.no_draft"))
+}
+
+/// The report system prompt. The body is deliberately heading-free: the form
+/// owns the section structure.
+fn report_system_prompt(kind: ReportKind) -> String {
+    format!(
+        "You are an AI assistant helping a user write a {noun}.\n\
+         You turn a rough description into concise, specific prose a maintainer can act on.\n\n\
+         # Rules:\n\
+         1. The TITLE is a single line: specific, no trailing period, no `bug:`/`feat:`/`#` prefix, under ~72 characters.\n\
+         2. {body_rule}\n\
+         3. Do NOT add any Markdown headings (`#`) — the form supplies the section headings.\n\
+         4. If the notes already describe how to reproduce the problem or how to verify the request, render those as a numbered list at the end of the body.\n\
+         5. Do not invent facts the notes do not support. Do not mention that the text was generated, and add no meta-commentary.\n\
+         6. Output EXACTLY one fenced ```text block: the title on the first line, a blank line, then the Markdown body. No other prose.\n",
+        noun = kind.noun(),
+        body_rule = kind.body_rule()
+    )
+}
+
+/// The report user message: just the notes, plus the shape reminder.
+fn report_user_prompt(kind: ReportKind, context: &str) -> String {
+    let context = context.trim();
+    let notes = if context.is_empty() {
+        "(no notes provided)".to_string()
+    } else {
+        truncate(context, MAX_CONTEXT_BYTES)
+    };
+    format!(
+        "<user-notes>\n{notes}\n</user-notes>\n\n\
+         <reminder>\n\
+         Write the {noun} from the notes above: one title line, a blank line, then the Markdown body with no headings.\n\
+         ONLY return a single markdown code block, NO OTHER PROSE!\n\
+         ```text\n\
+         title goes here\n\n\
+         body goes here\n\
+         ```\n\
+         </reminder>",
+        noun = kind.noun()
+    )
+}
+
 /// A no-model fallback: a title from the hint or branch, and a Markdown body.
 /// With a repository template, the notes are dropped into its first section so
 /// the result still follows the template's shape.
@@ -726,5 +833,32 @@ mod tests {
             "some notes\n\nno headings here"
         );
         assert_eq!(fill_first_section("body", ""), "body");
+    }
+
+    #[test]
+    fn report_prompts_ask_for_a_heading_free_body_and_carry_the_notes() {
+        let system = report_system_prompt(ReportKind::Bug);
+        assert!(
+            system.contains("Do NOT add any Markdown headings"),
+            "{system}"
+        );
+        // The feature framing names the problem/proposal, not a bug.
+        let feature = report_system_prompt(ReportKind::Feature);
+        assert!(feature.contains("feature request"), "{feature}");
+        assert!(feature.contains("proposed solution"), "{feature}");
+
+        let prompt = report_user_prompt(ReportKind::Bug, "Crashes when I click Save");
+        assert!(prompt.contains("Crashes when I click Save"), "{prompt}");
+        assert!(prompt.contains("```text"), "{prompt}");
+        // Empty notes still produce a usable prompt rather than a bare tag.
+        assert!(report_user_prompt(ReportKind::Bug, "   ").contains("(no notes provided)"));
+    }
+
+    #[test]
+    fn report_kinds_map_to_repository_labels() {
+        assert_eq!(ReportKind::Bug.label(), Some("bug"));
+        assert_eq!(ReportKind::Feature.label(), Some("enhancement"));
+        assert_eq!(ReportKind::Other.label(), None);
+        assert_eq!(ReportKind::default(), ReportKind::Bug);
     }
 }

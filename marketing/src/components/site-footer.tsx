@@ -16,14 +16,20 @@ const COLUMNS = [
       { label: "Models & providers", href: "/#providers", external: false },
       { label: "Git", href: "/#git", external: false },
       { label: "Usage", href: "/#usage", external: false },
+      { label: "Reviews", href: "/#reviews", external: false },
+      { label: "FAQ", href: "/#faq", external: false },
       { label: "Download", href: "/#install", external: false },
     ],
   },
   {
     title: "Resources",
     links: [
+      { label: "Docs", href: "/docs", external: false },
+      { label: "Install", href: "/docs/getting-started", external: false },
+      { label: "Worktrees", href: "/docs/worktrees", external: false },
+      { label: "MCP servers", href: "/docs/mcp", external: false },
+      { label: "Shortcuts", href: "/docs/shortcuts", external: false },
       { label: "Changelog", href: "/changelog", external: false },
-      { label: "Release notes", href: "/changelog", external: false },
     ],
   },
   {
@@ -43,6 +49,15 @@ const COLUMNS = [
       { label: "Email", href: `mailto:${SITE.email}`, external: false },
     ],
   },
+  {
+    title: "Legal",
+    links: [
+      { label: "Privacy", href: "/privacy", external: false },
+      { label: "Terms", href: "/terms", external: false },
+      { label: "Security", href: "/security", external: false },
+      { label: "Contact", href: "/contact", external: false },
+    ],
+  },
 ];
 
 const PILL =
@@ -56,7 +71,7 @@ export async function SiteFooter() {
     <footer>
       <Shell>
         <Band className="relative overflow-hidden pb-12 pt-14 sm:pt-16">
-          <div className="relative z-[1] grid gap-12 md:grid-cols-[minmax(0,1.6fr)_repeat(3,minmax(0,1fr))] md:gap-8">
+          <div className="relative z-[1] grid gap-12 md:grid-cols-[minmax(0,1.6fr)_repeat(4,minmax(0,1fr))] md:gap-8">
             <div className="md:pr-10">
               <Link
                 href="/"
@@ -95,7 +110,7 @@ export async function SiteFooter() {
               ) : null}
             </div>
 
-            <div className="grid grid-cols-2 gap-8 sm:grid-cols-3 md:contents">
+            <div className="grid grid-cols-2 gap-8 sm:grid-cols-4 md:contents">
               {COLUMNS.map((column) => (
                 <nav key={column.title} aria-label={column.title}>
                   <p className="mb-4 font-mono text-[10.5px] uppercase tracking-[0.16em] text-ink-3">

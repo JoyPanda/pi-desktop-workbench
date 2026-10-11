@@ -56,7 +56,10 @@ pub struct AppMetadata {
 }
 
 impl AppMetadata {
-    /// Detect build/platform facts from the compiled target.
+    /// Detect build/platform facts from the compiled target. The app version
+    /// defaults to this crate's own `CARGO_PKG_VERSION`; an application should
+    /// override it via [`AppMetadata::with_app_version`] so telemetry reports
+    /// the product version, not the analytics crate's version.
     pub fn detect() -> Self {
         let environment = if cfg!(debug_assertions) {
             Environment::Development
@@ -213,13 +216,28 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+/// Resolve the Countly application key. A non-empty runtime value wins so
+/// development can point at a local key; otherwise the value embedded at build
+/// time by `build.rs` is used, so a packaged release can send telemetry with no
+/// launch environment. An empty result leaves analytics inert.
+fn resolve_app_key(runtime: Option<&str>, embedded: Option<&str>) -> String {
+    runtime
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| embedded.map(str::trim).filter(|value| !value.is_empty()))
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// Configuration resolved from the process environment. Real deployments set
 /// `ORBIT_ANALYTICS_APP_KEY` (and optionally `ORBIT_ANALYTICS_ENDPOINT`,
 /// `ORBIT_ANALYTICS_ENVIRONMENT`, `ORBIT_ANALYTICS_DISABLED`).
 ///
 /// The app key is deliberately read from the environment rather than committed
-/// to source control. With no key, analytics stays inert and Orbit behaves
-/// normally.
+/// to source control. When the process environment does not define it, the
+/// value baked in at build time by the crate's `build.rs` is used instead, so a
+/// packaged release can send telemetry without any launch environment. With no
+/// key at all, analytics stays inert and Orbit behaves normally.
 pub fn config_from_env() -> AnalyticsConfig {
     let environment = std::env::var("ORBIT_ANALYTICS_ENVIRONMENT")
         .ok()
@@ -235,7 +253,15 @@ pub fn config_from_env() -> AnalyticsConfig {
         .and_then(|value| Url::parse(value.trim()).ok())
         .unwrap_or_else(|| Url::parse(PRODUCTION_ENDPOINT).expect("valid production endpoint"));
 
-    let app_key = std::env::var("ORBIT_ANALYTICS_APP_KEY").unwrap_or_default();
+    // Runtime environment wins so development can point at a local key; the
+    // build-time value (embedded by build.rs, fed by the release CI secret) is
+    // the fallback for packaged builds launched without a shell environment.
+    // An empty runtime value falls through to the embedded key rather than
+    // disabling telemetry by accident; use ORBIT_ANALYTICS_DISABLED for that.
+    let app_key = resolve_app_key(
+        std::env::var("ORBIT_ANALYTICS_APP_KEY").ok().as_deref(),
+        option_env!("ORBIT_ANALYTICS_APP_KEY"),
+    );
     let disabled = std::env::var("ORBIT_ANALYTICS_DISABLED")
         .map(|value| !matches!(value.trim(), "0" | "false" | "no" | ""))
         .unwrap_or(false);
@@ -297,6 +323,21 @@ mod tests {
         let mut config = AnalyticsConfig::production("key");
         config.endpoint = Url::parse("https://user:pass@example.com").unwrap();
         assert_eq!(config.validate(), Err(ConfigError::CredentialedEndpoint));
+    }
+
+    #[test]
+    fn app_key_precedence() {
+        // Runtime wins when non-empty; otherwise the build-time value is used.
+        assert_eq!(
+            resolve_app_key(Some("runtime"), Some("embedded")),
+            "runtime"
+        );
+        assert_eq!(resolve_app_key(Some("  runtime "), None), "runtime");
+        assert_eq!(resolve_app_key(Some(""), Some("embedded")), "embedded");
+        assert_eq!(resolve_app_key(None, Some("embedded")), "embedded");
+        // Whitespace counts as empty on both sides.
+        assert_eq!(resolve_app_key(Some("  "), Some("  ")), "");
+        assert_eq!(resolve_app_key(None, None), "");
     }
 
     #[test]

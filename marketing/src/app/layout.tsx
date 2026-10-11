@@ -1,22 +1,22 @@
 import type { Metadata, Viewport } from "next";
-import { Geist_Mono, Sora } from "next/font/google";
 import Script from "next/script";
 import { JsonLd } from "@/components/json-ld";
 import { LightboxProvider } from "@/components/lightbox";
+import { FONT_CLASSES } from "@/lib/fonts";
+import { getLatestRelease } from "@/lib/releases";
 import { SITE } from "@/lib/site";
+import { THEME_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
-const sora = Sora({
-  subsets: ["latin"],
-  variable: "--font-sora",
-  display: "swap",
-});
-
-const geistMono = Geist_Mono({
-  subsets: ["latin"],
-  variable: "--font-geist-mono",
-  display: "swap",
-});
+/**
+ * Search-engine ownership tokens. Google's is stable (and mirrored in DNS), so
+ * it lives in code. Bing and Yandex tokens are read from env and only rendered
+ * when set, so the build never ships an empty `content=""` meta tag. Set
+ * `BING_VERIFICATION` (Bing Webmaster Tools) and `YANDEX_VERIFICATION`
+ * (Yandex Webmaster) in the deployment environment.
+ */
+const BING_VERIFICATION = process.env.BING_VERIFICATION?.trim();
+const YANDEX_VERIFICATION = process.env.YANDEX_VERIFICATION?.trim();
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE.url),
@@ -33,7 +33,10 @@ export const metadata: Metadata = {
   publisher: SITE.name,
   category: "Developer Tools",
   referrer: "origin-when-cross-origin",
-  alternates: { canonical: "/" },
+  alternates: {
+    canonical: "/",
+    types: { "application/rss+xml": `${SITE.url}/changelog/rss.xml` },
+  },
   openGraph: {
     type: "website",
     siteName: SITE.name,
@@ -62,6 +65,28 @@ export const metadata: Metadata = {
   },
   formatDetection: { email: false, address: false, telephone: false },
   manifest: "/manifest.webmanifest",
+  // Confirms site ownership in Google Search Console. The same token is also
+  // published as a DNS TXT record on the domain.
+  verification: {
+    google: "BXytVhKqWEHfSTa-uxejpCPRbyhlN_9RAY2eiz0B2hk",
+    ...(BING_VERIFICATION || YANDEX_VERIFICATION
+      ? {
+          other: {
+            ...(BING_VERIFICATION
+              ? { "msvalidate.01": BING_VERIFICATION }
+              : {}),
+            ...(YANDEX_VERIFICATION
+              ? { "yandex-verification": YANDEX_VERIFICATION }
+              : {}),
+          },
+        }
+      : {}),
+  },
+  appleWebApp: {
+    capable: true,
+    title: SITE.name,
+    statusBarStyle: "black-translucent",
+  },
 };
 
 export const viewport: Viewport = {
@@ -74,58 +99,104 @@ export const viewport: Viewport = {
   initialScale: 1,
 };
 
-/** Runs before paint so the stored system/preference theme applies without a flash. */
-const THEME_SCRIPT = `(function(){try{var s=localStorage.getItem('theme');var light=s?s==='light':window.matchMedia('(prefers-color-scheme: light)').matches;var r=document.documentElement;r.classList.toggle('light',light);r.classList.toggle('dark',!light);r.style.colorScheme=light?'light':'dark';}catch(e){}})();`;
-
 /** Site-wide structured data for rich results. */
-const JSON_LD = {
-  "@context": "https://schema.org",
-  "@graph": [
-    {
-      "@type": "WebSite",
-      "@id": `${SITE.url}/#website`,
-      url: SITE.url,
-      name: SITE.name,
-      description: SITE.description,
-      inLanguage: "en",
-      publisher: { "@id": `${SITE.url}/#organization` },
-    },
-    {
-      "@type": "Organization",
-      "@id": `${SITE.url}/#organization`,
-      name: SITE.name,
-      url: SITE.url,
-      logo: {
-        "@type": "ImageObject",
-        url: `${SITE.url}/icon.png`,
-        width: 256,
-        height: 256,
+function buildJsonLd(version?: string) {
+  return {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": `${SITE.url}/#website`,
+        url: SITE.url,
+        name: SITE.name,
+        description: SITE.description,
+        inLanguage: "en",
+        publisher: { "@id": `${SITE.url}/#organization` },
       },
-      sameAs: [SITE.github],
-      email: SITE.email,
-    },
-    {
-      "@type": "SoftwareApplication",
-      "@id": `${SITE.url}/#softwareapplication`,
-      name: SITE.name,
-      applicationCategory: "DeveloperApplication",
-      operatingSystem: "macOS, Windows, Linux",
-      description: SITE.description,
-      url: SITE.url,
-      downloadUrl: `${SITE.github}/releases/latest`,
-      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-      publisher: { "@id": `${SITE.url}/#organization` },
-    },
-  ],
-};
+      {
+        "@type": "Organization",
+        "@id": `${SITE.url}/#organization`,
+        name: SITE.name,
+        url: SITE.url,
+        logo: {
+          "@type": "ImageObject",
+          url: `${SITE.url}/icon.png`,
+          width: 256,
+          height: 256,
+        },
+        sameAs: [
+          SITE.github,
+          `https://x.com/${SITE.twitter.replace(/^@/, "")}`,
+        ],
+        email: SITE.email,
+        contactPoint: {
+          "@type": "ContactPoint",
+          email: SITE.email,
+          contactType: "customer support",
+        },
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": `${SITE.url}/#softwareapplication`,
+        name: SITE.name,
+        alternateName: "Orbit Pi",
+        applicationCategory: "DeveloperApplication",
+        applicationSubCategory: "AI Coding Agent Client",
+        operatingSystem: "macOS, Windows, Linux",
+        description: SITE.description,
+        url: SITE.url,
+        downloadUrl: `${SITE.github}/releases/latest`,
+        installUrl: `${SITE.github}/releases/latest`,
+        softwareHelp: `${SITE.github}#readme`,
+        // Only present once the release resolves; the key is dropped otherwise.
+        softwareVersion: version,
+        codeRepository: SITE.github,
+        license: "https://www.apache.org/licenses/LICENSE-2.0",
+        author: { "@id": `${SITE.url}/#organization` },
+        publisher: { "@id": `${SITE.url}/#organization` },
+        offers: {
+          "@type": "Offer",
+          price: "0",
+          priceCurrency: "USD",
+          availability: "https://schema.org/InStock",
+        },
+        featureList: [
+          "Native desktop app built with Rust and GPUI",
+          "Multiple pi sessions and workspaces in one window",
+          "Inline diff review with per-turn checkpoints",
+          "Git and GitHub issues, pull requests, and merges",
+          "Model providers: Anthropic, OpenAI, Bedrock, Ollama, and custom",
+          "Usage and quota analytics",
+          "MCP servers, skills, and plugins",
+          "Integrated terminal and keyboard-first navigation",
+        ],
+        screenshot: [
+          "/screens/session.png",
+          "/screens/review.png",
+          "/screens/git.png",
+          "/screens/usage.png",
+        ].map((path) => ({
+          "@type": "ImageObject",
+          url: `${SITE.url}${path}`,
+        })),
+        sameAs: [
+          SITE.github,
+          `https://x.com/${SITE.twitter.replace(/^@/, "")}`,
+        ],
+      },
+    ],
+  };
+}
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const release = await getLatestRelease();
+
   return (
     <html
       lang="en"
       data-scroll-behavior="smooth"
       suppressHydrationWarning
-      className={`dark ${sora.variable} ${geistMono.variable} h-full`}
+      className={`dark ${FONT_CLASSES} h-full`}
     >
       <body className="min-h-full flex flex-col bg-page text-ink">
         <Script
@@ -133,7 +204,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           strategy="beforeInteractive"
           dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }}
         />
-        <JsonLd data={JSON_LD} />
+        <JsonLd data={buildJsonLd(release?.version)} />
         <LightboxProvider>{children}</LightboxProvider>
       </body>
     </html>

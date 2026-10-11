@@ -15,7 +15,7 @@ function resolveSiteUrl(): string {
 
   // Never let localhost leak into a production build's canonical/OG tags.
   if (process.env.NODE_ENV === "development") return "http://localhost:3000";
-  return "https://orbit.rajeshwarkashyap.in";
+  return "https://orbitpi.app";
 }
 
 export const SITE_URL = resolveSiteUrl();

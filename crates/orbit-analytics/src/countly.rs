@@ -13,6 +13,12 @@ use url::Url;
 
 use crate::config::AnalyticsConfig;
 use crate::event::QueuedEvent;
+use crate::privacy;
+
+/// Identifies Orbit's first-party client in Countly's `sdk_name` field. There
+/// is no third-party Countly SDK in this path, so `sdk_version` carries the
+/// product version rather than this crate's own version.
+const SDK_NAME: &str = "orbit-rust";
 
 /// One `/i` request: the URL plus form fields, ready to send.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +86,7 @@ impl CountlyTransport {
         let client = reqwest::blocking::Client::builder()
             .timeout(config.request_timeout)
             .connect_timeout(Duration::from_secs(5))
-            .user_agent(concat!("Orbit/", env!("CARGO_PKG_VERSION")))
+            .user_agent(format!("Orbit/{}", config.metadata.app_version))
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
         Self { client }
@@ -159,8 +165,10 @@ pub fn build_request(
         ("device_id".into(), installation_id.to_string()),
         ("session_id".into(), session_id.to_string()),
         ("timestamp".into(), now_ms.to_string()),
-        ("sdk_name".into(), "orbit-rust".into()),
-        ("sdk_version".into(), env!("CARGO_PKG_VERSION").into()),
+        ("sdk_name".into(), SDK_NAME.into()),
+        // The product version, not orbit-analytics' own crate version: the app
+        // overrides `metadata.app_version` with its own `CARGO_PKG_VERSION`.
+        ("sdk_version".into(), config.metadata.app_version.clone()),
     ];
 
     if begin_session {
@@ -183,8 +191,21 @@ pub fn build_request(
     let events_json: Vec<Value> = events
         .iter()
         .map(|queued| {
+            // Defense in depth: events come from a closed enum, but run the same
+            // filter the tests use so a future event that carries a path, email,
+            // or secret-shaped value is stripped before it can leave the process.
+            // Only the event's own properties are filtered; the metadata
+            // segmentation below is trusted and built internally.
+            let mut event_properties = queued.event.properties();
+            let removed = privacy::sanitize(&mut event_properties);
+            if removed > 0 {
+                eprintln!(
+                    "orbit-analytics: stripped {removed} forbidden property(ies) from {}",
+                    queued.event.name()
+                );
+            }
             let mut segmentation = metadata_segmentation(config);
-            for (key, value) in queued.event.properties() {
+            for (key, value) in event_properties {
                 segmentation.insert(key, value);
             }
             json!({
@@ -290,6 +311,16 @@ mod tests {
             std::env::consts::ARCH
         );
         assert_eq!(events[0]["segmentation"]["os"], std::env::consts::OS);
+        // The trusted metadata segmentation must survive the runtime privacy
+        // filter; `environment` is a legitimate dimension even though it also
+        // appears in the forbidden-key list.
+        assert_eq!(events[0]["segmentation"]["environment"], "production");
+        // `sdk_version` tracks the product version in `metadata`, not this
+        // crate's own version.
+        assert_eq!(
+            request.field("sdk_version"),
+            Some(env!("CARGO_PKG_VERSION"))
+        );
     }
 
     #[test]

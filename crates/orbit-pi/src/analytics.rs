@@ -29,11 +29,16 @@ fn state_path() -> std::path::PathBuf {
         .join("analytics.json")
 }
 
-/// Build the configuration from the environment, wiring in the app's locale.
+/// Build the configuration from the environment, wiring in the app's own
+/// version and locale so telemetry identifies the product rather than the
+/// `orbit-analytics` crate's version.
 pub fn config() -> AnalyticsConfig {
     let mut config = config_from_env();
     let locale = rust_i18n::locale().to_string();
-    config.metadata = config.metadata.with_locale(locale);
+    config.metadata = config
+        .metadata
+        .with_app_version(env!("CARGO_PKG_VERSION"))
+        .with_locale(locale);
     config
 }
 
