@@ -4121,7 +4121,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-pi"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4161,7 +4161,7 @@ dependencies = [
 
 [[package]]
 name = "orbit-rpc"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "anyhow",
  "serde",
