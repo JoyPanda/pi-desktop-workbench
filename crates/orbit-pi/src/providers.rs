@@ -912,6 +912,52 @@ pub(crate) fn provider_display_name(id: &str) -> String {
         .join(" ")
 }
 
+/// Brand ink for a provider's mark, as `(dark, light)` hex — the same
+/// per-mode shape as `mentions::file_type_badge`, so identity color reads on
+/// both canvases.
+///
+/// `None` means the brand *is* ink, not hue — OpenAI's wordmark, Ollama,
+/// opencode, xAI, Vercel, llama.cpp, and the rest — and the caller keeps its
+/// neutral. Marks are monochrome SVGs (GPUI rasterizes them as a single-color
+/// mask), so this is a tint, not a multi-color logo; only the identity hue
+/// comes through.
+pub(crate) fn provider_brand(provider: &str) -> Option<(u32, u32)> {
+    // The catalog-index filename is not a real provider id; Ollama Cloud
+    // shares Ollama's mark.
+    let provider = match provider {
+        "ollama-cloud" => "ollama",
+        ".manifest" => "manifest",
+        other => other,
+    };
+    Some(match provider {
+        "amazon-bedrock" => (0xFF9900, 0xC77700),
+        "ant-ling" => (0x1677FF, 0x0E5FCC),
+        "anthropic" => (0xD97757, 0xB55035),
+        "azure-openai-responses" => (0x0078D4, 0x005A9E),
+        "baseten" => (0x16A34A, 0x128040),
+        "cerebras" => (0xF15A29, 0xC7461C),
+        "cloudflare-ai-gateway" | "cloudflare-workers-ai" => (0xF38020, 0xC25E00),
+        "deepseek" => (0x4D6BFE, 0x3A52C9),
+        "fireworks" => (0x8B5CF6, 0x6D28D9),
+        "google" | "google-vertex" => (0x4285F4, 0x1A73E8),
+        "groq" => (0xF55036, 0xC93A22),
+        "huggingface" => (0xFFD21E, 0xA87800),
+        "kimi-coding" | "moonshotai" | "moonshotai-cn" => (0x3D5AFE, 0x2E45C9),
+        "minimax" | "minimax-cn" => (0xFF4D4F, 0xCC3B3D),
+        "mistral" => (0xFA520F, 0xC63D00),
+        "nvidia" => (0x76B900, 0x5A8C00),
+        "openrouter" => (0x6467F2, 0x5053C9),
+        "qwen-token-plan" | "qwen-token-plan-cn" | "qwen-token-plan-individual" => {
+            (0x615CED, 0x4E49C9)
+        }
+        "together" => (0x0F6FFF, 0x0B57CC),
+        "xiaomi" | "xiaomi-token-plan-ams" | "xiaomi-token-plan-cn"
+        | "xiaomi-token-plan-sgp" => (0xFF6900, 0xCC5400),
+        "zai" | "zai-coding-cn" => (0x3B5BFF, 0x2A43CC),
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -922,6 +968,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("models.json")
+    }
+
+    #[test]
+    fn brand_aliases_and_skips_monochrome_brands() {
+        // Aliases share the underlying brand's ink.
+        assert_eq!(provider_brand("google-vertex"), provider_brand("google"));
+        assert_eq!(provider_brand("moonshotai-cn"), provider_brand("moonshotai"));
+        assert_eq!(provider_brand("ollama-cloud"), provider_brand("ollama"));
+        // Distinct brands get distinct hues…
+        assert!(provider_brand("deepseek").is_some());
+        assert_ne!(provider_brand("deepseek"), provider_brand("nvidia"));
+        // …and ink-only brands stay neutral. OpenAI's knot and Codex are
+        // black/white wordmarks: the theme ink, never a tinted hue.
+        assert!(provider_brand("openai").is_none());
+        assert!(provider_brand("openai-codex").is_none());
+        assert!(provider_brand("opencode-go").is_none());
+        assert!(provider_brand("my-gateway").is_none());
     }
 
     #[test]

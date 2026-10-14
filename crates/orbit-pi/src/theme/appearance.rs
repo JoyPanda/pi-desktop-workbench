@@ -152,11 +152,6 @@ pub fn set_appearance_prefs(cx: &mut App, prefs: AppearancePrefs) -> io::Result<
     if appearance_prefs(cx) == prefs {
         return Ok(());
     }
-    let mode = match prefs.resolve(cx.window_appearance()).appearance() {
-        ThemeMode::Dark => orbit_analytics::ThemeMode::Dark,
-        ThemeMode::Light => orbit_analytics::ThemeMode::Light,
-    };
-    crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::ThemeChanged { mode });
     prefs.persist_to(&persist_path())?;
     cx.set_global(prefs);
     // Notify even when editing the inactive palette or choosing a mode that

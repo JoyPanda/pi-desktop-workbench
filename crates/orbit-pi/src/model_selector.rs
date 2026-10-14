@@ -6,10 +6,16 @@
 //!
 //! - compact raised surface (`menu_bg`, strong border, layered shadow)
 //! - inset search field, then a horizontally scrollable scope row (`All`,
-//!   `Favorites` when any exist, and each provider), then the list
-//! - models are grouped under provider headers (name + count), with
-//!   favorited models pinned under a `Favorites` section at the top; a
+//!   `Recents`/`Favorites` when any exist, and each provider), then the list
+//! - models are grouped under provider headers (name + count), with recently
+//!   used models pinned under a `Recents` section and favorited models under a
+//!   `Favorites` section above the provider groups (a model that is both
+//!   appears once, under `Recents`); selecting a model records it as recent; a
 //!   thinking list is flat, one icon-chip row per reasoning level
+//! - option rows share one tight `Base01` rhythm, the same gap the composer's
+//!   access/workflow menus use (the command palette stacks rows with none);
+//!   grouping is carried by the uppercase section headers alone, never by a
+//!   hairline between every row
 //! - every model row carries a star: an accent star at rest for favorites,
 //!   revealed on hover for the rest, so any model can be pinned
 //! - keyboard highlight uses `overlay_strong`; the current choice keeps the
@@ -28,17 +34,18 @@ use std::time::{Duration, Instant};
 
 use crate::app::{
     button_frame, icon, icon_button_frame, icon_dyn, picker_entry, picker_search_frame,
-    picker_surface, ModelEntry, TipExt,
+    picker_surface, provider_mark_color, ModelEntry, TipExt,
 };
 use crate::composer::ComposerInput;
 use crate::context_meter::format_tokens;
 use crate::favorites::Favorites;
+use crate::recent_models::Recents;
 use crate::model_selector_match::is_model_selected;
 use crate::providers::provider_display_name;
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    context_menu, input, list, list_item, picker, BufferLineHeight, ButtonSize, DynamicSpacing,
-    IconSize, Radius, TextSize,
+    context_menu, input, list, picker, BufferLineHeight, ButtonSize, DynamicSpacing, IconSize,
+    Radius, TextSize,
 };
 use crate::theme::{self, Theme};
 
@@ -48,8 +55,6 @@ const MODEL_POPOVER_W: f32 = 360.;
 /// Thinking popover width — level rows are short, so it hugs tighter than the
 /// model catalog while still fitting the footer legend on one line.
 const THINKING_POPOVER_W: f32 = 300.;
-/// Hairline separator drawn between sibling option rows (a fixed 1px).
-const SEP_H: f32 = 1.;
 /// Option rows visible before the list scrolls.
 const VISIBLE_ROWS: f32 = 6.;
 
@@ -62,10 +67,9 @@ struct ListMetrics {
     row_h: f32,
     /// A group header: a list sub-header row plus its bottom padding.
     header_h: f32,
-    /// Air between list children. Two option rows are separated by
-    /// `row_gap` above and below a 1px hairline, so sibling models get
-    /// `2 * row_gap + SEP_H` of breathing room while a header hugs its
-    /// first row.
+    /// Air between list children. One tight `Base01` step, matching the
+    /// composer's access/workflow menus, so a run of option rows reads as one
+    /// quiet stack instead of a list of separated cards.
     row_gap: f32,
 }
 
@@ -75,13 +79,13 @@ impl ListMetrics {
             row_h: picker::two_line_entry_height(theme).into(),
             header_h: (list::sub_header_height(theme) + list::sub_header_padding_bottom(theme))
                 .into(),
-            row_gap: DynamicSpacing::Base06.px(theme).into(),
+            row_gap: DynamicSpacing::Base01.px(theme).into(),
         }
     }
 
     /// Largest list height before it scrolls (≈ 6 visible option rows).
     fn list_max_h(&self) -> f32 {
-        VISIBLE_ROWS * (self.row_h + self.row_gap + SEP_H)
+        VISIBLE_ROWS * (self.row_h + self.row_gap)
     }
 }
 
@@ -107,6 +111,8 @@ enum Scope {
     /// The full catalog, grouped by provider.
     #[default]
     All,
+    /// Only recently used models, most-recent first.
+    Recents,
     /// Only favorited models, pinned under a Favorites section.
     Favorites,
     /// A single provider, listed flat.
@@ -122,6 +128,8 @@ enum Row {
         provider: String,
         count: usize,
         favorites: bool,
+        /// The pinned Recents section at the top of the list.
+        recents: bool,
     },
     /// A thinking level (`level` is the raw pi value; display only).
     Level { level: String, selected: bool },
@@ -226,6 +234,7 @@ impl ModelSelector {
             selected_catalog_ix,
             &Scope::All,
             &Favorites::default(),
+            &Recents::default(),
             "",
         );
         let mut list_scroll = ScrollHandle::new();
@@ -307,6 +316,7 @@ impl ModelSelector {
         selected_catalog_ix: Option<usize>,
         scope: &Scope,
         favorites: &Favorites,
+        recents: &Recents,
         needle: &str,
     ) -> Vec<Row> {
         let matches = |text: &str| needle.is_empty() || text.to_lowercase().contains(needle);
@@ -326,9 +336,32 @@ impl ModelSelector {
             return rows;
         }
 
+        // A dedicated Recents scope: flat and in most-recent-first order (not
+        // catalog order), still honoring the text filter.
+        if *scope == Scope::Recents {
+            for (provider, id) in recents.entries() {
+                let Some(ix) = models
+                    .iter()
+                    .position(|model| &model.provider == provider && &model.id == id)
+                else {
+                    continue;
+                };
+                let model = &models[ix];
+                if matches(&model.name) || matches(&model.id) || matches(&model.provider) {
+                    rows.push(Row::Model {
+                        model_ix: ix,
+                        selected: selected_catalog_ix == Some(ix),
+                    });
+                }
+            }
+            return rows;
+        }
+
         let in_scope = |model: &ModelEntry| -> bool {
             match scope {
                 Scope::All => true,
+                // Handled above.
+                Scope::Recents => false,
                 Scope::Favorites => favorites.contains(&model.provider, &model.id),
                 Scope::Provider(provider) => &model.provider == provider,
             }
@@ -340,39 +373,85 @@ impl ModelSelector {
                 && (matches(&model.name) || matches(&model.id) || matches(&model.provider))
         };
 
-        // In the All scope, favorite models are pinned under their own header
-        // at the top of the list, and their provider group skips them so no
-        // model appears twice.
+        // Recents and favorites pin above the provider groups — recents at the
+        // very top (a recently used model is the likeliest pick), then
+        // favorites. Both de-dup against the groups below, and recents win over
+        // favorites, so no model appears twice.
         let mut pinned: Vec<usize> = Vec::new();
-        if *scope == Scope::All && !favorites.is_empty() {
-            pinned = models
-                .iter()
-                .enumerate()
-                .filter(|(_, model)| {
-                    favorites.contains(&model.provider, &model.id) && included(model)
-                })
-                .map(|(ix, _)| ix)
-                .collect();
-            if !pinned.is_empty() {
+
+        // Recents lead the All scope; a provider scope pins that provider's own
+        // recents (the chip already names the provider).
+        if matches!(scope, Scope::All | Scope::Provider(_)) {
+            let section: Vec<usize> = if *scope == Scope::All {
+                recents
+                    .entries()
+                    .iter()
+                    .filter_map(|(provider, id)| {
+                        models
+                            .iter()
+                            .position(|model| &model.provider == provider && &model.id == id)
+                    })
+                    .filter(|&ix| included(&models[ix]))
+                    .collect()
+            } else {
+                models
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, model)| {
+                        recents.contains(&model.provider, &model.id) && included(model)
+                    })
+                    .map(|(ix, _)| ix)
+                    .collect()
+            };
+            if !section.is_empty() {
                 rows.push(Row::Header {
                     provider: String::new(),
-                    count: pinned.len(),
-                    favorites: true,
+                    count: section.len(),
+                    favorites: false,
+                    recents: true,
                 });
-                for ix in &pinned {
+                for ix in &section {
                     rows.push(Row::Model {
                         model_ix: *ix,
                         selected: selected_catalog_ix == Some(*ix),
                     });
                 }
+                pinned.extend(section);
             }
         }
-        let is_pinned = |ix: usize| pinned.contains(&ix);
+
+        if *scope == Scope::All && !favorites.is_empty() {
+            let section: Vec<usize> = models
+                .iter()
+                .enumerate()
+                .filter(|(ix, model)| {
+                    favorites.contains(&model.provider, &model.id)
+                        && included(model)
+                        && !pinned.contains(ix)
+                })
+                .map(|(ix, _)| ix)
+                .collect();
+            if !section.is_empty() {
+                rows.push(Row::Header {
+                    provider: String::new(),
+                    count: section.len(),
+                    favorites: true,
+                    recents: false,
+                });
+                for ix in &section {
+                    rows.push(Row::Model {
+                        model_ix: *ix,
+                        selected: selected_catalog_ix == Some(*ix),
+                    });
+                }
+                pinned.extend(section);
+            }
+        }
 
         let mut providers: Vec<String> = Vec::new();
         let mut groups: Vec<Vec<usize>> = Vec::new();
         for (ix, model) in models.iter().enumerate() {
-            if !included(model) || is_pinned(ix) {
+            if !included(model) || pinned.contains(&ix) {
                 continue;
             }
             match providers.iter().position(|p| p == &model.provider) {
@@ -384,13 +463,14 @@ impl ModelSelector {
             }
         }
         for (provider, group) in providers.iter().zip(groups) {
-            // A provider scope and the Favorites scope are stated by the
-            // chip, so only the All scope needs group headers.
+            // A provider scope is stated by the chip, so only the All scope
+            // needs group headers.
             if *scope == Scope::All {
                 rows.push(Row::Header {
                     provider: provider.clone(),
                     count: group.len(),
                     favorites: false,
+                    recents: false,
                 });
             }
             for ix in group {
@@ -412,6 +492,7 @@ impl ModelSelector {
             self.selected_catalog_ix,
             &self.scope,
             &crate::favorites::all(),
+            &crate::recent_models::all(),
             needle,
         )
     }
@@ -459,11 +540,19 @@ impl ModelSelector {
     fn scope_row(&self, theme: Theme, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let this = cx.weak_entity();
         let favorites = crate::favorites::all();
+        let recents = crate::recent_models::all();
         let mut entries: Vec<(String, Scope, &'static str)> = vec![(
             tr!("model_selector.all"),
             Scope::All,
             "icons/extensions.svg",
         )];
+        if !recents.is_empty() {
+            entries.push((
+                tr!("model_selector.recents"),
+                Scope::Recents,
+                "icons/clock.svg",
+            ));
+        }
         if !favorites.is_empty() {
             entries.push((
                 tr!("model_selector.favorites"),
@@ -482,10 +571,11 @@ impl ModelSelector {
         // Part of the picker head: inset like the search row above it.
         let mut row = div()
             .id("picker-scope")
+            .debug_selector(|| "picker-scope".to_string())
             .w_full()
             .flex_none()
             .px(picker::search_padding_x(&theme))
-            .py(DynamicSpacing::Base06.px(&theme))
+            .py(DynamicSpacing::Base04.px(&theme))
             .flex()
             .items_center()
             .gap(DynamicSpacing::Base06.px(&theme))
@@ -494,19 +584,27 @@ impl ModelSelector {
             .overflow_x_scroll();
         for (ix, (label, scope, static_icon)) in entries.into_iter().enumerate() {
             let active = self.scope == scope;
-            let brand = if active {
-                theme.active_fg
-            } else {
-                theme.text_3
-            };
             // `All`/`Favorites` carry a static glyph; each provider chip
-            // carries its own brand mark.
+            // carries its own brand mark, in the provider's identity color —
+            // except on the active fill, where `active_fg` keeps contrast.
             let lead = match &scope {
                 Scope::Provider(provider) => {
-                    icon_dyn(provider_icon(provider), IconSize::Small.px(&theme), brand)
+                    let color = if active {
+                        theme.active_fg
+                    } else {
+                        provider_mark_color(provider, &theme, theme.text_3)
+                    };
+                    icon_dyn(provider_icon(provider), IconSize::Small.px(&theme), color)
                         .into_any_element()
                 }
-                _ => icon(static_icon, IconSize::Small.px(&theme), brand).into_any_element(),
+                _ => {
+                    let brand = if active {
+                        theme.active_fg
+                    } else {
+                        theme.text_3
+                    };
+                    icon(static_icon, IconSize::Small.px(&theme), brand).into_any_element()
+                }
             };
             let chip_id = ElementId::NamedInteger("scope-chip".into(), ix as u64);
             let this = this.clone();
@@ -559,33 +657,20 @@ impl ModelSelector {
         rows.iter().position(|row| !row.is_header())
     }
 
-    /// Whether a hairline separator follows row `ix` — only between two
-    /// sibling option rows (headers carry their own separation).
-    fn separator_after(rows: &[Row], ix: usize) -> bool {
-        ix + 1 < rows.len() && !rows[ix].is_header() && !rows[ix + 1].is_header()
-    }
-
     fn content_height(rows: &[Row], metrics: &ListMetrics) -> f32 {
         if rows.is_empty() {
             return 0.;
         }
         let rows_h: f32 = rows.iter().map(|row| row.height(metrics)).sum();
-        let seps = (0..rows.len())
-            .filter(|&ix| Self::separator_after(rows, ix))
-            .count();
-        let children = rows.len() + seps;
-        rows_h + seps as f32 * SEP_H + (children - 1) as f32 * metrics.row_gap
+        rows_h + (rows.len() - 1) as f32 * metrics.row_gap
     }
 
-    /// Pixel offset of a row's top edge, accounting for the separators and
-    /// gaps interleaved between list children.
+    /// Pixel offset of a row's top edge, accounting for the gaps between list
+    /// children.
     fn row_top(rows: &[Row], ix: usize, metrics: &ListMetrics) -> f32 {
         let mut y = 0.;
-        for i in 0..ix {
-            y += rows[i].height(metrics) + metrics.row_gap;
-            if Self::separator_after(rows, i) {
-                y += SEP_H + metrics.row_gap;
-            }
+        for row in rows.iter().take(ix) {
+            y += row.height(metrics) + metrics.row_gap;
         }
         y
     }
@@ -657,6 +742,9 @@ impl ModelSelector {
             Scope::Provider(provider)
                 if !self.models.iter().any(|model| &model.provider == provider) =>
             {
+                self.scope = Scope::All;
+            }
+            Scope::Recents if crate::recent_models::all().is_empty() => {
                 self.scope = Scope::All;
             }
             Scope::Favorites if crate::favorites::all().is_empty() => {
@@ -840,6 +928,7 @@ impl Render for ModelSelector {
         let count_label = match self.kind {
             PickerKind::Thinking => tr!("model_selector.n_levels", count = option_count),
             PickerKind::Model => match self.scope {
+                Scope::Recents => tr!("model_selector.n_recent", count = option_count),
                 Scope::Favorites => tr!("model_selector.n_favorites", count = option_count),
                 _ => tr!("model_selector.n_models", count = option_count),
             },
@@ -850,6 +939,7 @@ impl Render for ModelSelector {
         // measured-layout sizing inside the deferred popover.
         let mut list = div()
             .id("picker-list")
+            .debug_selector(|| "picker-list".to_string())
             .w_full()
             .max_h(px(metrics.list_max_h()))
             .overflow_y_scroll()
@@ -867,12 +957,10 @@ impl Render for ModelSelector {
                 &this,
                 theme,
             ));
-            if Self::separator_after(&rows, ix) {
-                list = list.child(separator(theme));
-            }
         }
 
         picker_surface(div(), &theme)
+            .debug_selector(|| "picker-surface".to_string())
             .w(px(width))
             .flex()
             .flex_col()
@@ -892,6 +980,7 @@ impl Render for ModelSelector {
             // search field — grouped above the list with a divider
             .child(
                 picker_search_frame(div(), &theme)
+                    .debug_selector(|| "picker-search".to_string())
                     .child(icon(
                         "icons/search.svg",
                         input::ICON.px(&theme),
@@ -1018,11 +1107,11 @@ fn thinking_hint(level: &str) -> String {
     }
 }
 
-/// Icon chip in the thinking picker rows — sized like sidebar session chips
-/// so HugeIcons glyphs read clearly (some levels use small artwork in the
-/// 24×24 viewBox, e.g. minimal’s dot). The glyph inside is a picker-row icon
-/// (`context_menu::ICON`).
-const THINKING_CHIP: f32 = 28.;
+/// Leading tile shared by the model and thinking rows — sized like sidebar
+/// session chips so HugeIcons glyphs read clearly (some levels use small
+/// artwork in the 24×24 viewBox, e.g. minimal's dot). The glyph inside is a
+/// picker-row icon (`context_menu::ICON`).
+const LEADING_TILE: f32 = 28.;
 
 fn trailing_check(selected: bool, theme: Theme) -> impl IntoElement + use<> {
     div()
@@ -1043,35 +1132,13 @@ fn trailing_check(selected: bool, theme: Theme) -> impl IntoElement + use<> {
         })
 }
 
-fn thinking_chip(level: &str, selected: bool, theme: Theme) -> impl IntoElement + use<> {
-    let (path, color) = thinking_icon(level, &theme);
-    let is_off = level.eq_ignore_ascii_case("off");
+/// The one neutral tile both pickers lead every row with: a 28px raised square
+/// with an 8px corner. It stays neutral in every state — selection is carried
+/// by the row's own fill and the trailing accent check, so the tile never adds
+/// a second ember mark to the same row (the One Accent Rule).
+fn leading_tile(theme: Theme, glyph: AnyElement) -> impl IntoElement + use<> {
     div()
-        .size(px(THINKING_CHIP))
-        .flex_none()
-        .rounded(Radius::Large.px(&theme))
-        .bg(if selected && !is_off {
-            theme.accent.opacity(0.14)
-        } else {
-            theme.bg_raised
-        })
-        .border_1()
-        .border_color(if selected && !is_off {
-            theme.accent.opacity(0.35)
-        } else {
-            theme.border
-        })
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(icon(path, context_menu::ICON.px(&theme), color))
-}
-
-/// Brand-mark chip leading a model row — the same 28px raised square as the
-/// thinking rows, so both pickers share one leading-mark rhythm.
-fn provider_chip(provider: &str, selected: bool, theme: Theme) -> impl IntoElement + use<> {
-    div()
-        .size(px(THINKING_CHIP))
+        .size(px(LEADING_TILE))
         .flex_none()
         .rounded(Radius::Large.px(&theme))
         .bg(theme.bg_raised)
@@ -1080,22 +1147,33 @@ fn provider_chip(provider: &str, selected: bool, theme: Theme) -> impl IntoEleme
         .flex()
         .items_center()
         .justify_center()
-        .child(icon_dyn(
-            provider_icon(provider),
-            context_menu::ICON.px(&theme),
-            if selected { theme.text } else { theme.text_2 },
-        ))
+        .child(glyph)
 }
 
-/// Hairline separator between sibling option rows, inset to align with the
-/// row content (a picker entry's inset plus its padding) rather than the
-/// popover edge.
-fn separator(theme: Theme) -> impl IntoElement + use<> {
-    div()
-        .h(px(SEP_H))
-        .flex_none()
-        .mx(list_item::inset(&theme) + list_item::padding_x(&theme))
-        .bg(theme.border)
+fn thinking_chip(level: &str, theme: Theme) -> impl IntoElement + use<> {
+    let (path, color) = thinking_icon(level, &theme);
+    leading_tile(
+        theme,
+        icon(path, context_menu::ICON.px(&theme), color).into_any_element(),
+    )
+}
+
+/// Brand-mark tile leading a model row — the same raised square as the
+/// thinking rows, so both pickers share one leading-mark rhythm.
+fn provider_chip(provider: &str, selected: bool, theme: Theme) -> impl IntoElement + use<> {
+    leading_tile(
+        theme,
+        icon_dyn(
+            provider_icon(provider),
+            context_menu::ICON.px(&theme),
+            provider_mark_color(
+                provider,
+                &theme,
+                if selected { theme.text } else { theme.text_2 },
+            ),
+        )
+        .into_any_element(),
+    )
 }
 
 /// A scope chip in the picker's top row: optional leading glyph, label, and
@@ -1251,25 +1329,36 @@ fn empty_state(kind: PickerKind, theme: Theme) -> impl IntoElement + use<> {
     )
 }
 
-/// Footer: the live option count on the left, a quiet keyboard legend on the
-/// right (the palette names its keys once, so the pickers do too).
-fn footer(count_label: String, theme: Theme) -> impl IntoElement + use<> {
+/// Footer: the live option count on the left (it yields first when the popover
+/// is narrow), a quiet keyboard legend on the right (the palette names its
+/// keys once, so the pickers do too). Each legend token is `flex_none` and
+/// nowrap: a wrapped legend would double the footer's height and push the
+/// list's last row under the fold, so the count absorbs any slack instead.
+fn footer(count_label: String, theme: Theme) -> gpui::Div {
+    let key = |label: String| div().flex_none().whitespace_nowrap().child(label);
     div()
+        .debug_selector(|| "picker-footer".to_string())
         .flex_none()
         .px(picker::search_padding_x(&theme))
         .py(DynamicSpacing::Base06.px(&theme))
         .flex()
         .items_center()
-        .gap(DynamicSpacing::Base12.px(&theme))
+        .gap(DynamicSpacing::Base08.px(&theme))
         .border_t_1()
         .border_color(theme.border)
         .text_size(TextSize::Small.px(&theme))
         .text_color(theme.text_3)
-        .child(count_label)
-        .child(div().flex_1())
-        .child(tr!("model_selector.navigate"))
-        .child(tr!("model_selector.select"))
-        .child(tr!("model_selector.esc_close"))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .whitespace_nowrap()
+                .child(count_label),
+        )
+        .child(key(tr!("model_selector.navigate")))
+        .child(key(tr!("model_selector.select")))
+        .child(key(tr!("model_selector.esc_close")))
 }
 
 fn label_column<P: IntoElement, S: IntoElement>(
@@ -1334,12 +1423,18 @@ fn render_row(
         provider,
         count,
         favorites,
+        recents,
     } = row
     {
-        // The Favorites section leads the model list; render it with the star
-        // glyph and the same uppercase/metrics register as a provider header.
-        return if *favorites {
-            group_header("FAVORITES", Some("icons/star.svg"), *count, theme).into_any_element()
+        // The pinned Recents/Favorites sections lead the model list; render
+        // each with its glyph and the same uppercase/metrics register as a
+        // provider header.
+        return if *recents {
+            let label = tr!("model_selector.recents").to_uppercase();
+            group_header(&label, Some("icons/clock.svg"), *count, theme).into_any_element()
+        } else if *favorites {
+            let label = tr!("model_selector.favorites").to_uppercase();
+            group_header(&label, Some("icons/star.svg"), *count, theme).into_any_element()
         } else {
             group_header(
                 &provider_display_name(provider).to_uppercase(),
@@ -1413,7 +1508,7 @@ fn render_row(
 
     match row {
         Row::Level { level, .. } => row_shell(div())
-            .child(thinking_chip(level, selected, theme))
+            .child(thinking_chip(level, theme))
             .child(label_column(
                 thinking_display(level),
                 thinking_hint(level),
@@ -1501,7 +1596,7 @@ mod tests {
             m.header_h,
             f32::from(list::sub_header_height(&theme) + list::sub_header_padding_bottom(&theme))
         );
-        assert_eq!(m.row_gap, f32::from(DynamicSpacing::Base06.px(&theme)));
+        assert_eq!(m.row_gap, f32::from(DynamicSpacing::Base01.px(&theme)));
     }
 
     #[test]
@@ -1534,30 +1629,29 @@ mod tests {
             provider: "openai".into(),
             count: 2,
             favorites: false,
+            recents: false,
         }];
         rows.extend(model_rows(5));
         let m = metrics();
-        // Two hairlines sit between the three leading children.
+        // A header, then two model rows before index 3, each followed by one
+        // gap.
         let top = ModelSelector::row_top(&rows, 3, &m);
-        assert_eq!(top, m.header_h + 2. * m.row_h + 5. * m.row_gap + 2. * SEP_H);
+        assert_eq!(top, m.header_h + 2. * m.row_h + 3. * m.row_gap);
     }
 
     #[test]
-    fn separators_add_breathing_room_between_rows() {
+    fn rows_share_one_tight_rhythm() {
         let rows = model_rows(3);
         let m = metrics();
-        assert_eq!(
-            ModelSelector::row_top(&rows, 1, &m),
-            m.row_h + SEP_H + 2. * m.row_gap
-        );
+        assert_eq!(ModelSelector::row_top(&rows, 1, &m), m.row_h + m.row_gap);
         assert_eq!(
             ModelSelector::row_top(&rows, 2, &m),
-            2. * m.row_h + 2. * SEP_H + 4. * m.row_gap
+            2. * m.row_h + 2. * m.row_gap
         );
-        // Content height counts the two interleaved hairlines and four gaps.
+        // Content height counts the two gaps between the three rows.
         assert_eq!(
             ModelSelector::content_height(&rows, &m),
-            3. * m.row_h + 2. * SEP_H + 4. * m.row_gap
+            3. * m.row_h + 2. * m.row_gap
         );
     }
 
@@ -1584,6 +1678,10 @@ mod tests {
         Favorites::default()
     }
 
+    fn no_recents() -> Recents {
+        Recents::default()
+    }
+
     #[test]
     fn models_group_by_provider_with_headers() {
         let models = vec![
@@ -1600,6 +1698,7 @@ mod tests {
             Some(2),
             &Scope::All,
             &favs,
+            &no_recents(),
             "",
         );
         assert_eq!(providers(&rows), vec!["openai", "anthropic"]);
@@ -1626,6 +1725,7 @@ mod tests {
             None,
             &Scope::Provider("openai".into()),
             &favs,
+            &no_recents(),
             "",
         );
         // The chip states the provider, so no header repeats it, and only
@@ -1651,6 +1751,7 @@ mod tests {
             None,
             &Scope::All,
             &favs,
+            &no_recents(),
             "",
         );
         // Favorites header first, then its model, then the provider groups.
@@ -1688,11 +1789,161 @@ mod tests {
             None,
             &Scope::Favorites,
             &favs,
+            &no_recents(),
             "",
         );
         assert!(providers(&rows).is_empty());
         assert_eq!(rows.len(), 1);
         assert!(matches!(rows[0], Row::Model { model_ix: 1, .. }));
+    }
+
+    #[test]
+    fn recents_pin_a_section_above_favorites() {
+        let models = vec![
+            entry("a", "A", "openai", None),
+            entry("b", "B", "anthropic", None),
+            entry("c", "C", "google", None),
+        ];
+        let favs = Favorites::from_pairs(&[("google", "c")]);
+        let recents = Recents::from_pairs(&[("anthropic", "b")]);
+        let rows = ModelSelector::rows_for(
+            PickerKind::Model,
+            &models,
+            &[],
+            "low",
+            None,
+            &Scope::All,
+            &favs,
+            &recents,
+            "",
+        );
+        // Recents lead, then favorites, then the provider groups.
+        assert!(matches!(rows[0], Row::Header { recents: true, .. }));
+        assert!(matches!(rows[1], Row::Model { model_ix: 1, .. }));
+        assert!(matches!(rows[2], Row::Header { favorites: true, .. }));
+        assert!(matches!(rows[3], Row::Model { model_ix: 2, .. }));
+        // Neither pinned model repeats under its provider group.
+        let model_ixs: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Model { model_ix, .. } => Some(*model_ix),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(model_ixs, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn a_model_that_is_both_recent_and_favorite_pins_once() {
+        let models = vec![
+            entry("a", "A", "openai", None),
+            entry("b", "B", "anthropic", None),
+        ];
+        let favs = Favorites::from_pairs(&[("openai", "a")]);
+        let recents = Recents::from_pairs(&[("openai", "a")]);
+        let rows = ModelSelector::rows_for(
+            PickerKind::Model,
+            &models,
+            &[],
+            "low",
+            None,
+            &Scope::All,
+            &favs,
+            &recents,
+            "",
+        );
+        // Recent wins: a Recents pinned header only, no Favorites pinned
+        // header, and the model appears once (provider headers are ignored).
+        let pinned_headers: Vec<(bool, bool)> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Header {
+                    favorites, recents, ..
+                } if *recents || *favorites => Some((*recents, *favorites)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pinned_headers, vec![(true, false)]);
+        let model_ixs: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Model { model_ix, .. } => Some(*model_ix),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(model_ixs, vec![0, 1]);
+    }
+
+    #[test]
+    fn recents_scope_lists_most_recent_first() {
+        let models = vec![
+            entry("a", "A", "openai", None),
+            entry("b", "B", "anthropic", None),
+            entry("c", "C", "google", None),
+        ];
+        let favs = no_favorites();
+        let recents = Recents::from_pairs(&[("google", "c"), ("openai", "a")]);
+        let rows = ModelSelector::rows_for(
+            PickerKind::Model,
+            &models,
+            &[],
+            "low",
+            None,
+            &Scope::Recents,
+            &favs,
+            &recents,
+            "",
+        );
+        // Flat, MRU order (c then a), never catalog order, and no headers.
+        assert!(providers(&rows).is_empty());
+        let model_ixs: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Model { model_ix, .. } => Some(*model_ix),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(model_ixs, vec![2, 0]);
+    }
+
+    #[test]
+    fn provider_scope_pins_its_own_recents() {
+        let models = vec![
+            entry("a", "A", "openai", None),
+            entry("b", "B", "openai", None),
+            entry("c", "C", "anthropic", None),
+        ];
+        let favs = no_favorites();
+        let recents = Recents::from_pairs(&[("anthropic", "c"), ("openai", "b")]);
+        let rows = ModelSelector::rows_for(
+            PickerKind::Model,
+            &models,
+            &[],
+            "low",
+            None,
+            &Scope::Provider("openai".into()),
+            &favs,
+            &recents,
+            "",
+        );
+        // The provider's own recent (b) pins at the top; the other provider's
+        // recent (c) is out of scope and never appears.
+        assert!(matches!(
+            rows[0],
+            Row::Header {
+                recents: true,
+                count: 1,
+                ..
+            }
+        ));
+        let model_ixs: Vec<usize> = rows
+            .iter()
+            .filter_map(|row| match row {
+                Row::Model { model_ix, .. } => Some(*model_ix),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(model_ixs, vec![1, 0]);
     }
 
     #[test]
@@ -1710,6 +1961,7 @@ mod tests {
             None,
             &Scope::All,
             &favs,
+            &no_recents(),
             "alpha",
         );
         assert_eq!(providers(&rows), vec!["openai"]);
@@ -2080,6 +2332,94 @@ mod tests {
             cx.update(|_, cx| selector.read(cx).highlighted),
             1,
             "↑ with the real keymap"
+        );
+    }
+
+    /// A thinking selector with the built-in levels, muted callbacks, focused.
+    fn open_thinking_selector(cx: &mut gpui::VisualTestContext) -> Entity<ModelSelector> {
+        cx.update(|window, cx| {
+            let levels = [
+                "off", "minimal", "low", "medium", "high", "xhigh", "max", "auto",
+            ]
+            .iter()
+            .map(|level| level.to_string())
+            .collect::<Vec<_>>();
+            let selector = cx.new(|cx| {
+                ModelSelector::new(
+                    PickerKind::Thinking,
+                    Vec::new(),
+                    levels,
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                    "low".into(),
+                    Box::new(|_, _, _, _| {}),
+                    Box::new(|_, _, _| {}),
+                    Box::new(|_, _, _| {}),
+                    cx,
+                )
+            });
+            window.focus(&selector.read(cx).focus_handle(cx));
+            selector
+        })
+    }
+
+    /// The popover's authored size and rhythm: each picker keeps its fixed
+    /// width, option rows stay at the two-line picker token, consecutive rows
+    /// sit one `Base01` gap apart (no hairline between them), and the footer
+    /// stays a single line — a wrapped legend would double the footer and push
+    /// the last row under the fold.
+    #[gpui::test]
+    fn popover_width_rhythm_and_footer_are_stable(cx: &mut gpui::TestAppContext) {
+        use crate::theme::ThemeId;
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+        let theme = Theme::for_id(ThemeId::Orbit);
+        let metrics = ListMetrics::new(&theme);
+        let line = f32::from(BufferLineHeight::Comfortable.resolve(TextSize::Small.px(&theme)));
+
+        let cx = cx.add_empty_window();
+        let model = open_test_selector(cx);
+        let _ = cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(900.), px(900.)),
+            |_, _| model.clone(),
+        );
+        let model_surface = cx.debug_bounds("picker-surface").expect("model surface");
+        assert_eq!(model_surface.size.width, px(MODEL_POPOVER_W));
+        let model_footer = cx.debug_bounds("picker-footer").expect("model footer");
+        assert!(
+            f32::from(model_footer.size.height) < line + metrics.row_gap + 16.,
+            "model footer stayed one line: {:?}",
+            model_footer.size.height
+        );
+        let row_1 = cx.debug_bounds("picker-row-1").expect("first model row");
+        let row_2 = cx.debug_bounds("picker-row-2").expect("second model row");
+        assert_eq!(row_1.size.height, px(metrics.row_h));
+        assert_eq!(
+            f32::from(row_2.top()) - f32::from(row_1.top()),
+            metrics.row_h + metrics.row_gap
+        );
+
+        let thinking = open_thinking_selector(cx);
+        let _ = cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(900.), px(900.)),
+            |_, _| thinking.clone(),
+        );
+        let thinking_surface = cx.debug_bounds("picker-surface").expect("thinking surface");
+        assert_eq!(thinking_surface.size.width, px(THINKING_POPOVER_W));
+        let thinking_footer = cx.debug_bounds("picker-footer").expect("thinking footer");
+        assert!(
+            f32::from(thinking_footer.size.height) < line + metrics.row_gap + 16.,
+            "thinking footer stayed one line: {:?}",
+            thinking_footer.size.height
+        );
+        let level_0 = cx.debug_bounds("picker-row-0").expect("first level row");
+        let level_1 = cx.debug_bounds("picker-row-1").expect("second level row");
+        assert_eq!(level_0.size.height, px(metrics.row_h));
+        assert_eq!(
+            f32::from(level_1.top()) - f32::from(level_0.top()),
+            metrics.row_h + metrics.row_gap
         );
     }
 }

@@ -102,12 +102,6 @@ impl OrbitApp {
                 UpdaterEvent::StatusChanged(status) => {
                     self.updater_status = status;
                     self.reset_updater_pill_animation();
-                    if status == UpdateStatus::Available {
-                        crate::analytics::track(
-                            cx,
-                            orbit_analytics::AnalyticsEvent::UpdateAvailable,
-                        );
-                    }
                 }
                 UpdaterEvent::UpToDate => {
                     self.updater_status = UpdateStatus::Idle;
@@ -129,7 +123,6 @@ impl OrbitApp {
                 UpdaterEvent::QuitAndInstall => {
                     // The helper has the staged build and is waiting for this
                     // process to finish its normal quit handlers.
-                    crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::UpdateInstalled);
                     cx.quit();
                     return;
                 }

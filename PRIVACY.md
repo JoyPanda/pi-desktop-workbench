@@ -1,64 +1,50 @@
 # Orbit Privacy
 
-Orbit is local-first. Your source code, projects, terminal, and AI
-conversations are yours; analytics is a small, optional stream of product usage
-information used to improve the app.
+Orbit is local-first. Your source code, projects, terminal, AI conversations,
+and usage history stay on your machine.
 
-## Anonymous usage analytics
+**Orbit collects no telemetry.** There is no analytics client, no installation
+or session identifier, no usage reporting, and no third-party tracking SDK in
+the app. Nothing about how you use Orbit is sent anywhere.
 
-Orbit can send a limited set of anonymous usage information to a self-hosted
-analytics server (`telemetry.rajeshwar.tech`). This is **on by default in
-release builds and off in development builds**, and you can turn it off at any
-time in **Settings → Privacy → Anonymous Usage Analytics**.
+## What leaves your machine
 
-When enabled, Orbit may send:
+Orbit talks to the network only for things you asked for:
 
-* a **pseudonymous installation identifier** — a random UUID generated on first
-  run, stored locally in `~/.orbit-pi/analytics.json`;
-* a **session identifier** — a new random UUID for each launch;
-* the app version, operating system, CPU architecture, and interface locale;
-* a small set of feature-usage events, such as: the app started/closed, a
-  project was added/opened/removed, the terminal was opened, an agent run
-  started/finished/failed, an MCP server connected/disconnected/failed, the
-  command palette or settings opened, the theme or a setting changed, and an
-  update was available or installed.
+* **Update checks** — the app fetches its own signed release feed to see whether
+  a newer version exists, and to download it if you accept.
+* **GitHub metadata** — author avatars and repository data shown in the Git and
+  GitHub panels.
+* **Model providers** — prompts, context, and tool output are sent to whichever
+  provider your `pi` agent is configured to use, exactly as the `pi` CLI does on
+  its own. That traffic is governed by the provider's policy, not Orbit's.
 
-Event details are limited to coarse values (for example, a failure *category*
-such as `provider`, or a theme `mode` such as `dark`). No free-form text is
-sent.
+None of these carry a telemetry identifier, and Orbit adds no tracking data to
+them.
 
-### The installation identifier is pseudonymous
+## What Orbit stores locally
 
-The installation identifier is a random number. It is not derived from your
-email, username, account, hostname, MAC address, CPU serial, disk serial, or any
-hardware identifier. Because it is stable across launches it can be linked to
-one installation over time, so it is best described as **pseudonymous** rather
-than legally anonymous.
+Orbit keeps its own settings and state under `~/.orbit-pi/`, and reads session
+data that `pi` writes. This never leaves your machine except through the
+provider calls above:
 
-Resetting it (not exposed in the UI today) generates a new identifier and a new
-session and discards anything queued.
+* workspace list, marks, and sort preferences;
+* theme, appearance, and interface preferences, including your favorite
+  and recently used models;
+* window, terminal, and layout state;
+* session-retention policy.
 
-## What Orbit does not intentionally collect
+There is no `analytics.json`, no pseudonymous identifier, and no queue of
+events.
 
-* source code, file names, file contents, or project/repository names or paths;
-* terminal commands or terminal output;
-* AI prompts or responses, or conversation contents;
-* API keys, access tokens, passwords, MCP credentials, or auth cookies;
-* environment variables;
-* clipboard contents;
-* IP address as an analytics property, exact location, or private URLs;
-* machine hostname, MAC address, serial numbers, or disk identifiers.
+## Session retention
 
-## No blocking, no dark patterns
-
-Telemetry never blocks the app, never shows an error when the network is down,
-and never delays quitting for more than a short best-effort flush. Turning it
-off stops collection immediately and clears anything already queued. Orbit works
-exactly the same with analytics disabled.
-
-Analytics data is sent over HTTPS only; TLS verification is never disabled.
+Session retention is the only privacy control in **Settings → Privacy**. It
+lets you archive or delete old `pi` sessions on a schedule you choose, entirely
+on your machine. Orbit never uploads them.
 
 ## Source of truth
 
-The implementation and every event are documented in
-[`docs/analytics.md`](docs/analytics.md) and the `crates/orbit-analytics` crate.
+The absence of telemetry is enforced structurally: there is no
+`crates/orbit-analytics` crate and no `crate::analytics` module. If a
+telemetry path is ever reconsidered, this document must change first.

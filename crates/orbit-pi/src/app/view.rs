@@ -2171,7 +2171,7 @@ impl OrbitApp {
                     .child(icon_dyn(
                         provider_icon(&self.model_provider),
                         ButtonSize::Default.icon_size().px(&theme),
-                        theme.text_3,
+                        provider_mark_color(&self.model_provider, &theme, theme.text_3),
                     ))
                     .child(
                         div()
@@ -2590,19 +2590,26 @@ impl OrbitApp {
         cx.notify();
 
         cx.spawn(async move |this, cx| {
-            let (deps, host) = cx
+            let (deps, host, pi_install) = cx
                 .background_executor()
                 .spawn(async {
                     // Short pause so the spinner reads as "working" rather than
                     // a flash before the probe returns.
                     std::thread::sleep(Duration::from_millis(250));
-                    (onboarding::check_dependencies(), platform::host())
+                    let deps = onboarding::check_dependencies();
+                    let mut installation = crate::pi_install::detect_from_bin(onboarding::locate("pi"));
+                    installation.version = deps
+                        .iter()
+                        .find(|dep| dep.bin == "pi")
+                        .and_then(|dep| dep.version.clone());
+                    (deps, platform::host(), installation)
                 })
                 .await;
             let ready = onboarding::all_required_installed(&deps);
             let _ = this.update(cx, |app, cx| {
                 app.deps = deps;
                 app.host = host;
+                app.pi_install = pi_install;
                 app.refreshing = false;
                 if ready && app.client.is_none() {
                     let workspace = app
@@ -2708,6 +2715,12 @@ impl OrbitApp {
                                 }),
                             ))
                             .child(self.render_host_facts(cx))
+                            // An npm-managed pi cannot update in place; the
+                            // official installer migrates it. The click is the
+                            // confirmation before it removes the npm package.
+                            .when(self.pi_install.kind.is_npm(), |col| {
+                                col.child(self.render_pi_migration(cx))
+                            })
                             .child(
                                 div()
                                     .flex()
@@ -2806,7 +2819,10 @@ impl OrbitApp {
     /// with an empty sidebar.
     pub(super) fn render_host_facts(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let theme = *theme::get(cx);
-        let facts = onboarding::host_facts(&self.host);
+        let mut facts = onboarding::host_facts(&self.host);
+        // The pi install rows follow the OS and store paths: how pi arrived,
+        // where it resolves, and its version.
+        facts.extend(onboarding::pi_install_facts(&self.pi_install));
         div()
             .w_full()
             // A panel that hugs its rows: the setup page centres its column, so
@@ -2852,6 +2868,59 @@ impl OrbitApp {
                             .child(note)
                     }))
             }))
+    }
+
+    /// The npm → official-install migration panel. Shown only when pi was
+    /// installed with npm; the button is the explicit confirmation before the
+    /// official installer removes the npm package. User data is untouched.
+    pub(super) fn render_pi_migration(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
+        let theme = *theme::get(cx);
+        let migrating = self.pi_migrating;
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .px(px(14.))
+            .py(px(12.))
+            .rounded(Radius::XLarge.px(&theme))
+            .bg(theme.bg_raised)
+            .border_1()
+            .border_color(theme.border)
+            .child(
+                div()
+                    .text_size(TextSize::Default.px(&theme))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child(tr!("pi_update.migrate_title")),
+            )
+            .child(
+                div()
+                    .text_size(TextSize::Small.px(&theme))
+                    .text_color(theme.text_3)
+                    .child(tr!("pi_update.migrate_note")),
+            )
+            .child(
+                button_frame(div().id("pi-migrate"), &theme, ButtonSize::Medium)
+                    .group(BUTTON_GROUP)
+                    .when(migrating, |b| b.opacity(0.55))
+                    .when(!migrating, |b| {
+                        b.cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .active(|s| s.bg(theme.active))
+                    })
+                    .on_click({
+                        let this = cx.entity();
+                        move |_, _window, cx| {
+                            this.update(cx, |app, cx| app.migrate_pi_install(cx));
+                        }
+                    })
+                    .child(div().text_color(theme.text_2).child(if migrating {
+                        tr!("pi_update.migrating")
+                    } else {
+                        tr!("pi_update.migrate")
+                    })),
+            )
     }
 
     /// One dependency row: status dot, name + detail, and either a version

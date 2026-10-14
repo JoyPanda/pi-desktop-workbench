@@ -14,7 +14,7 @@ replace pi, and it uses your existing pi configuration and sessions.
 - Platform: macOS 13+, Windows, Linux
 - Built with: Rust + GPUI — a native app, no Electron or web view
 - License: Apache-2.0; free, no account, no subscription
-- Data: local-first; anonymous, opt-out product analytics only
+- Data: local-first; no telemetry, no analytics, no account
 - Interface: keyboard-first, native theming and fonts, integrated terminal
 
 ## Features

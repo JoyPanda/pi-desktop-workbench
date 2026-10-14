@@ -2998,26 +2998,6 @@ pub fn set_ui_prefs(cx: &mut App, ui: UiPrefs) {
     if previous == ui {
         return;
     }
-    // Which preference moved, for coarse product telemetry. Values are never
-    // sent, only the setting's name.
-    let setting = if previous.language != ui.language {
-        orbit_analytics::SettingId::Language
-    } else if previous.ui_font_size != ui.ui_font_size
-        || previous.terminal_font_size != ui.terminal_font_size
-        || previous.editor_font_size != ui.editor_font_size
-    {
-        orbit_analytics::SettingId::FontSize
-    } else if previous.spacing_density != ui.spacing_density {
-        orbit_analytics::SettingId::Spacing
-    } else if previous.reduce_motion != ui.reduce_motion {
-        orbit_analytics::SettingId::ReduceMotion
-    } else {
-        orbit_analytics::SettingId::Appearance
-    };
-    crate::analytics::track(
-        cx,
-        orbit_analytics::AnalyticsEvent::SettingsChanged { setting },
-    );
     // Adopt the new locale before the theme global changes so the repaint
     // driven by that change already reads the right strings, then rebuild
     // the native menu bar (which only GPUI can refresh).

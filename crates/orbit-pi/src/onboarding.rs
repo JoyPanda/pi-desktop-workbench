@@ -124,6 +124,53 @@ pub fn host_facts(host: &crate::platform::Host) -> Vec<HostFact> {
     ]
 }
 
+/// Rows for the pi CLI install itself: how it was installed, where it
+/// resolves, and which version. The method is the first thing to check when
+/// an update refuses to apply (npm vs. the official managed install vs. a
+/// package manager Orbit must not touch).
+pub fn pi_install_facts(installation: &crate::pi_install::Installation) -> Vec<HostFact> {
+    let method = if !installation.installed() {
+        tr!("onboarding.pi_method_missing")
+    } else {
+        match &installation.kind {
+            crate::pi_install::InstallKind::Managed { .. } => {
+                tr!("onboarding.pi_method_official")
+            }
+            crate::pi_install::InstallKind::Npm { .. } => tr!("onboarding.pi_method_npm"),
+            crate::pi_install::InstallKind::Other => tr!("onboarding.pi_method_other"),
+        }
+    };
+    let path = installation
+        .bin
+        .as_ref()
+        .map(|bin| crate::usage::format::short_path(&bin.to_string_lossy()).replace('\\', "/"))
+        .unwrap_or_else(|| "—".to_string());
+    let version = installation
+        .version
+        .clone()
+        .unwrap_or_else(|| "—".to_string());
+    vec![
+        HostFact {
+            label: tr!("onboarding.pi_install"),
+            value: method,
+            note: None,
+            alert: !installation.installed(),
+        },
+        HostFact {
+            label: tr!("onboarding.pi_path"),
+            value: path,
+            note: None,
+            alert: false,
+        },
+        HostFact {
+            label: tr!("onboarding.pi_version"),
+            value: version,
+            note: None,
+            alert: false,
+        },
+    ]
+}
+
 /// A row for a directory the app expects to exist. A missing one is a
 /// statement, not an error: pi and Orbit both create theirs on first use.
 fn path_fact(label: String, path: PathBuf) -> HostFact {
@@ -168,13 +215,18 @@ fn dependency(
     }
 }
 
-/// The command that installs `bin` on this host. `pi` is always npm — it is a
-/// Node package, and npm arrives with node — while node and git come from
-/// whatever package manager the OS ships: `winget` on Windows 10/11, Homebrew
-/// on macOS (the manager a Mac user with neither already has), and apt on
-/// Linux.
+/// The command that installs `bin` on this host. `pi` uses the project's
+/// official installer on macOS and Linux; Windows has no managed installer,
+/// so it shows pi's documented npm command for the user to run (Orbit never
+/// runs npm itself — no Orbit code path installs or updates the CLI through
+/// npm). `node` and `git` come from whatever package manager the OS ships:
+/// `winget` on Windows 10/11, Homebrew on macOS (the manager a Mac user with
+/// neither already has), and apt on Linux.
 fn install_hint(bin: &str) -> &'static str {
-    const PI: &str = "npm install -g @earendil-works/pi-coding-agent";
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    const PI: &str = crate::pi_install::INSTALL_COMMAND;
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    const PI: &str = "npm install -g --ignore-scripts @earendil-works/pi-coding-agent";
     #[cfg(target_os = "macos")]
     return match bin {
         "pi" => PI,
@@ -302,10 +354,11 @@ mod tests {
     /// they are on — the page used to offer Homebrew on Windows.
     #[test]
     fn install_hints_match_the_host() {
-        assert_eq!(
-            install_hint("pi"),
-            "npm install -g @earendil-works/pi-coding-agent"
-        );
+        // `pi` installs through its official installer on macOS/Linux; Orbit
+        // must never advertise an npm install there.
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        assert_eq!(install_hint("pi"), crate::pi_install::INSTALL_COMMAND);
+        assert!(!install_hint("pi").contains("npm install"), "{}", install_hint("pi"));
         #[cfg(target_os = "macos")]
         {
             assert_eq!(install_hint("node"), "brew install node");
@@ -341,6 +394,36 @@ mod tests {
     /// The setup page reports the platform and the two directories the app
     /// needs to read and write — the paths that decide whether the sidebar
     /// has anything in it.
+    /// The Pi install panel reports the method honestly, including the npm
+    /// case the updater has to migrate and the missing case the setup page
+    /// exists for.
+    #[test]
+    fn pi_install_facts_report_the_method_and_path() {
+        let mut managed = crate::pi_install::Installation::not_installed();
+        managed.bin = Some(PathBuf::from("/Users/me/.pi/agent/bin/pi"));
+        managed.version = Some("1.2.0".into());
+        managed.kind = crate::pi_install::InstallKind::Managed {
+            root: PathBuf::from("/Users/me/.pi/agent/install"),
+        };
+        let facts = pi_install_facts(&managed);
+        assert_eq!(facts.len(), 3);
+        assert_eq!(facts[0].label, "Pi install");
+        assert_eq!(facts[0].value, "official (managed)");
+        assert!(!facts[0].alert);
+        assert_eq!(facts[2].value, "1.2.0");
+
+        let mut npm = crate::pi_install::Installation::not_installed();
+        npm.bin = Some(PathBuf::from("/opt/homebrew/bin/pi"));
+        npm.kind = crate::pi_install::InstallKind::Npm {
+            package_root: PathBuf::from("/opt/homebrew/lib/node_modules/x"),
+        };
+        assert_eq!(pi_install_facts(&npm)[0].value, "npm");
+
+        let missing = pi_install_facts(&crate::pi_install::Installation::not_installed());
+        assert!(missing[0].alert);
+        assert_eq!(missing[1].value, "—");
+    }
+
     #[test]
     fn host_facts_cover_the_platform_and_the_stores() {
         let host = crate::platform::host();

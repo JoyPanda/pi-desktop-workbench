@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The composer's **model** and **thinking-level** pickers now read as one
+  quiet list: option rows sit one hairline-free `Base01` step apart (matching
+  the access/workflow menus) instead of a 6px gap with a hairline between
+  every row, the provider scope row is a touch tighter, and each row's
+  leading provider/reasoning tile stays neutral so ember marks only the
+  selected row's check. A full-height popover is ~36px shorter, and the key
+  legend can no longer wrap into a second line.
+
 ## [0.2.8] - 2026-10-12
 
 ### Added

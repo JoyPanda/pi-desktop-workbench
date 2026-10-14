@@ -29,20 +29,9 @@ pi as a child process, no web, no webview, no Node daemon.
 ## Repo layout
 
 ```
-Cargo.toml              workspace: orbit-analytics, orbit-pi, orbit-rpc
-crates/orbit-analytics/ provider-independent, privacy-first product telemetry
-  src/lib.rs            public API: Analytics trait, AnalyticsEvent, re-exports
-  src/client.rs         AnalyticsClient + queue/session engine + background worker
-  src/config.rs         endpoint/app-key/environment config (HTTPS enforced)
-  src/event.rs          closed AnalyticsEvent enum and its (small) properties
-  src/countly.rs        Countly `/i` request builder + Transport seam + HTTP transport
-  src/identity.rs       pseudonymous installation id + persisted opt-out state
-  src/queue.rs          bounded in-memory batch queue
-  src/privacy.rs        forbidden-key/sensitive-value guard for payloads
-  tests/countly_http.rs mock-server integration test for the request shape
+Cargo.toml              workspace: orbit-pi, orbit-rpc
 crates/orbit-pi/        GPUI app — window, shell, chat, settings
   src/main.rs           bootstrap, assets, keybindings, heartbeat, native menu (localized)
-  src/analytics.rs      the app's only telemetry wiring: GPUI global + `track` helper + lifecycle
   src/commands.rs       command registry (D13): keymap rows, palette metadata, and the shortcut reference
   src/i18n.rs           AppLanguage + locale detection; the `tr!`/`tr_cow!` macros
   locales/              translations: en.yml is the source of truth, one file per locale
@@ -169,37 +158,14 @@ Workspace edition is **2021**. Prefer **Rust 1.94+**. Root `Cargo.lock` is the l
 
 Override the pi binary with `PI_BIN` (default: `pi` on `PATH`).
 
-## Analytics / Telemetry
+## Privacy
 
-Orbit ships privacy-first, opt-out product analytics through the
-`crates/orbit-analytics` crate. The app only ever calls the `Analytics` trait
-(`track`, `start_session`, `end_session`) via the single `crate::analytics`
-module; Countly lives entirely behind that crate's `Transport` seam, so the
-backend can be replaced without touching application code.
-
-* Collected: a pseudonymous random-UUID installation id, a per-launch session
-  id, app version, OS, architecture, locale, and a small closed set of feature
-  events (`app_started`, `project_*`, `agent_*`, `mcp_*`, `terminal_*`,
-  `settings_opened`, `theme_changed`, `update_*`, …). Event properties are
-  built explicitly from `AnalyticsEvent`; application state is never
-  serialized wholesale.
-* Never collected: source code, project contents/paths/names, terminal
-  commands or output, prompts or responses, credentials, environment
-  variables, IP-as-property, hardware identifiers. See `PRIVACY.md`.
-* Lifecycle: `analytics::init` starts the session and queues `app_started`;
-  `on_app_quit` queues `app_closed` and does a bounded best-effort flush. All
-  network I/O runs on a dedicated worker thread, so the GPUI thread never
-  blocks.
-* Opt-out: Settings → Privacy → Anonymous Usage Analytics. Disabling stops
-  collection immediately and clears the queue. The choice persists in
-  `~/.orbit-pi/analytics.json`.
-* Configuration: `ORBIT_ANALYTICS_APP_KEY` (required to send),
-  `ORBIT_ANALYTICS_ENDPOINT` (default `https://telemetry.rajeshwar.tech`),
-  `ORBIT_ANALYTICS_ENVIRONMENT`, `ORBIT_ANALYTICS_DISABLED`. Development and
-  staging default to off; nothing is sent without an app key.
-
-Full developer documentation, including the Countly setup and how to test
-locally, lives in [`docs/analytics.md`](docs/analytics.md).
+Orbit collects no telemetry. There is no analytics crate, no installation
+identifier, and no network reporting of product usage; the app talks to the
+network only for things the user asked for — update checks, GitHub metadata
+for the UI, and the model providers the agent is configured to call. Do not
+reintroduce an analytics path. See [`PRIVACY.md`](PRIVACY.md) for what leaves
+the machine.
 
 ## Localization (i18n)
 
@@ -541,7 +507,7 @@ Orbit communicates with pi using newline-delimited JSON over stdio.
 - ✅ Sessions: list, open, switch, new, **clone** (⌘P), delete, cross-workspace, over an Orbit-owned project list (remove a workspace from the sidebar without deleting pi's sessions). ⬜ rewind (`fork`) needs entry-id plumbing; rename lives in the session-details popover and stays active-session-only.
 - ✅ Catalog: `get_available_models`, thinking levels, plus a **Models** settings page.
 - ✅ Workbench readers: skills, plugins, usage history, on-disk model/provider CRUD.
-- ✅ Settings persistence to `~/.orbit-pi/` (`theme`, `ui.json`, `fonts.json`, `favorites.json`, `notifications.json`, `layout.json`). ⬜ scoped-models file I/O.
+- ✅ Settings persistence to `~/.orbit-pi/` (`theme`, `ui.json`, `fonts.json`, `favorites.json`, `recent-models.json`, `notifications.json`, `layout.json`). ⬜ scoped-models file I/O.
 
 ### P3 — Core chat (bulk done)
 - ✅ Virtualized transcript, stick-to-latest. ⬜ stream veil (Waku `md/veil.rs`).

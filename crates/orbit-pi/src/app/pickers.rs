@@ -219,6 +219,9 @@ impl OrbitApp {
         let this = cx.weak_entity();
         let on_select_model = Box::new(
             move |id: &str, provider: &str, window: &mut Window, cx: &mut App| {
+                // A user pick is what "recently used" means — the default push
+                // for a fresh session is not recorded.
+                crate::recent_models::record(provider, id);
                 this.update(cx, |app, cx| {
                     app.set_model(id.to_string(), provider.to_string(), cx);
                     app.close_model_selector(window, cx);
@@ -308,7 +311,6 @@ impl OrbitApp {
         self.workspace_picker = None;
         self.session_menu = None;
         self.workspace_menu = None;
-        crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::CommandPaletteOpened);
 
         // Model and thinking choices are fixed for the duration of a turn, so
         // the palette hides those two commands while a run is in flight.

@@ -225,6 +225,94 @@ fn max_h_collapses_uniform_list_in_zero_height_context(cx: &mut gpui::TestAppCon
     );
 }
 
+// ── worktrees page "Advanced" dropdown anchoring ──────────────────────
+
+/// The Worktrees page's "Advanced" menu drops below its button, right-aligned,
+/// rather than opening upward into the window chrome. The old `Local` +
+/// `snap_to_window` anchor could not flip, so in this top toolbar the
+/// off-screen "above" position made the snap slide the menu down over its own
+/// button.
+#[gpui::test]
+fn worktree_advanced_menu_opens_below_its_button(cx: &mut gpui::TestAppContext) {
+    use crate::theme::{Theme, ThemeId};
+
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    let cx = cx.add_empty_window();
+    let app = cx.update(|_, cx| cx.new(OrbitApp::new));
+    let viewport = cx.update(|window, _| window.viewport_size());
+    cx.update(|_, cx| {
+        app.update(cx, |app, _cx| {
+            for dependency in &mut app.deps {
+                dependency.installed = true;
+            }
+            app.worktrees_open = true;
+            app.worktree_advanced_open = true;
+        });
+    });
+    // The page settles over a frame (workspace discovery, then a refresh).
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+
+    let button = cx
+        .debug_bounds("worktrees-advanced")
+        .expect("the advanced button laid out");
+    let popup = cx
+        .debug_bounds("worktrees-advanced-popup")
+        .expect("the advanced menu laid out");
+
+    assert!(
+        popup.top() >= button.bottom(),
+        "the menu must open below its button: button {button:?}, popup {popup:?}"
+    );
+    assert_eq!(
+        popup.right(),
+        button.right(),
+        "the menu right-aligns to its button"
+    );
+}
+
+/// A second click on the "Advanced" button closes the menu. The click's
+/// mouse-down already dismissed it (via `on_mouse_down_out`), so without the
+/// gesture guard the mouse-up would toggle it straight back open and the menu
+/// could never be closed from its own button.
+#[gpui::test]
+fn worktree_advanced_button_click_toggles_the_menu_closed(cx: &mut gpui::TestAppContext) {
+    use crate::theme::{Theme, ThemeId};
+
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    let app = cx.update(|cx| cx.new(OrbitApp::new));
+
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            // The first click opens it.
+            app.toggle_worktree_advanced(cx);
+            assert!(
+                app.worktree_advanced_open,
+                "the first click opens the menu"
+            );
+
+            // A click outside the menu (the button sits outside the occluded
+            // popup) dismisses it on mouse-down and stamps the gesture...
+            app.worktree_advanced_open = false;
+            app.menu_dismissed_at = Some(std::time::Instant::now());
+            // ...so the same click's mouse-up must not reopen it.
+            app.toggle_worktree_advanced(cx);
+            assert!(
+                !app.worktree_advanced_open,
+                "the dismissing click must not toggle the menu back open"
+            );
+
+            // A later, deliberate click opens it again.
+            app.menu_dismissed_at = None;
+            app.toggle_worktree_advanced(cx);
+            assert!(
+                app.worktree_advanced_open,
+                "a later click reopens the menu"
+            );
+        });
+    });
+}
+
 // ── context menus on Zed's tokens ─────────────────────────────────────────
 
 /// A context menu built exactly like the sidebar's: the shared shell and

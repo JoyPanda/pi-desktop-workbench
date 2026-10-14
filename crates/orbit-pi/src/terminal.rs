@@ -1623,7 +1623,6 @@ impl TerminalPanel {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
         self.terminal = Some(cx.new(|cx| TerminalView::new(directory, cx)));
-        crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::TerminalSessionCreated);
     }
 
     /// Mirror the app's "is this panel actually on screen" state into the

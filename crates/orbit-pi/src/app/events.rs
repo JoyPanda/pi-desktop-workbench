@@ -13,8 +13,9 @@ struct ParkedDrain {
 }
 
 impl OrbitApp {
-    /// Heartbeat (~90ms): drain protocol events into the UI.
-    pub(crate) fn tick(&mut self, cx: &mut Context<Self>) {
+    /// Heartbeat (~90ms): drain protocol events into the UI. Returns whether a
+    /// run is in flight so the caller can repaint faster while tokens stream.
+    pub(crate) fn tick(&mut self, cx: &mut Context<Self>) -> bool {
         // Let a lapsed status message disappear from the status bar.
         if self
             .status_at
@@ -117,7 +118,7 @@ impl OrbitApp {
         }
         let events = {
             let Some(client) = self.client.as_ref() else {
-                return;
+                return self.is_active();
             };
             client.drain_events()
         };
@@ -134,7 +135,7 @@ impl OrbitApp {
             if self.busy || self.transcript.is_streaming() || copy_pending {
                 cx.notify();
             }
-            return;
+            return self.is_active();
         }
 
         let mut refresh_sessions = false;
@@ -142,8 +143,6 @@ impl OrbitApp {
             match event {
                 Event::AgentStart => {
                     self.busy = true;
-                    self.analytics_agent_failed = false;
-                    crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::AgentStarted);
                 }
                 // An extension dialog blocks the run until the client answers.
                 // Render it natively (select / confirm / input / editor); the
@@ -253,12 +252,6 @@ impl OrbitApp {
                 }
                 Event::AgentSettled => {
                     self.busy = false;
-                    if !self.analytics_agent_failed {
-                        crate::analytics::track(
-                            cx,
-                            orbit_analytics::AnalyticsEvent::AgentCompleted,
-                        );
-                    }
                     self.retrying = false;
                     self.retry_detail = None;
                     self.pending_follow_up = None;
@@ -310,7 +303,6 @@ impl OrbitApp {
                     self.refresh_context_stats();
                 }
                 Event::ProcessExited => {
-                    let was_busy = self.busy;
                     self.busy = false;
                     self.retrying = false;
                     self.retry_detail = None;
@@ -326,15 +318,6 @@ impl OrbitApp {
                     self.runtime.exited = true;
                     self.auth.on_disconnect();
                     self.set_error(tr!("events.process_exited"));
-                    if was_busy && !self.analytics_agent_failed {
-                        self.analytics_agent_failed = true;
-                        crate::analytics::track(
-                            cx,
-                            orbit_analytics::AnalyticsEvent::AgentFailed {
-                                reason: orbit_analytics::AgentFailure::ProcessExited,
-                            },
-                        );
-                    }
                 }
                 Event::MessageEnd { value } => {
                     // A failed LLM call ends the assistant message with
@@ -343,15 +326,6 @@ impl OrbitApp {
                     // transcript renders the same text inline.
                     if let Some(error) = transcript::message_error(value) {
                         self.set_error(tr!("events.agent_error", error = error));
-                        if !self.analytics_agent_failed {
-                            self.analytics_agent_failed = true;
-                            crate::analytics::track(
-                                cx,
-                                orbit_analytics::AnalyticsEvent::AgentFailed {
-                                    reason: orbit_analytics::AgentFailure::Provider,
-                                },
-                            );
-                        }
                     } else if self.error.as_deref().is_some_and(|error| {
                         error.starts_with(tr!("events.agent_error_prefix").as_str())
                     }) {
@@ -404,6 +378,14 @@ impl OrbitApp {
         // (model/thinking labels, catalogs, status) — always redraw a frame
         // in which events were processed so those changes become visible.
         cx.notify();
+        self.is_active()
+    }
+
+    /// True while a run is in flight. The heartbeat polls fast (instead of the
+    /// idle ~90 ms cadence) when this holds, so streamed tokens land smoothly
+    /// rather than in visible batches, and drops back the moment it settles.
+    fn is_active(&self) -> bool {
+        self.busy || self.transcript.is_streaming() || self.retrying || self.is_compacting
     }
 
     /// Drain background (parked) sessions. Their runs continue in their own

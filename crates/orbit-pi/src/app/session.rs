@@ -655,7 +655,6 @@ impl OrbitApp {
         self.workflow_mode = WorkflowMode::default();
         self.add_workspace(cwd.clone(), cx);
         self.set_current_workspace(cwd.clone());
-        crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::ProjectOpened);
 
         match self.extensions.spawn(&cwd, true, &self.mcp.secret_env()) {
             Ok(client) => {
@@ -859,7 +858,6 @@ impl OrbitApp {
         // Opening a session keeps its folder in Orbit's own sidebar list.
         self.add_workspace(session.cwd.clone(), cx);
         self.set_current_workspace(session.cwd.clone());
-        crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::ProjectOpened);
         self.current_session_path = Some(session.path.clone());
         if push {
             self.session_history.truncate(self.history_index + 1);
@@ -1590,7 +1588,7 @@ impl OrbitApp {
                 .child(icon_dyn(
                     provider_icon(&report.provider),
                     IconSize::XSmall.px(&theme),
-                    theme.text_3,
+                    provider_mark_color(&report.provider, &theme, theme.text_3),
                 ))
                 .child(
                     div()
@@ -2326,12 +2324,8 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let opening = !self.terminal_panel.read(cx).is_open();
         self.terminal_panel
             .update(cx, |panel, cx| panel.toggle(window, cx));
-        if opening {
-            crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::TerminalOpened);
-        }
         cx.notify();
     }
 
@@ -2798,7 +2792,7 @@ fn quota_provider_card(
         .child(icon_dyn(
             provider_icon(&report.provider),
             IconSize::Small.px(&theme),
-            theme.text_3,
+            provider_mark_color(&report.provider, &theme, theme.text_3),
         ))
         .child(
             div()

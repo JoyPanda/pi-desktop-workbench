@@ -25,7 +25,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "Where does my data go? Does Orbit send telemetry?",
-    a: "Orbit is local-first: your code and sessions stay on your machine. Anonymous, provider-independent product analytics are documented in the privacy policy and can be turned off.",
+    a: "Orbit is local-first: your code and sessions stay on your machine. The app collects no telemetry — no analytics client, no installation identifier, and no usage reporting.",
   },
   {
     q: "Can I run multiple pi sessions at once?",

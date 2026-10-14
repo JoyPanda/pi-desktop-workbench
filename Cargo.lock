@@ -4109,17 +4109,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
-name = "orbit-analytics"
-version = "0.2.4"
-dependencies = [
- "serde",
- "serde_json",
- "url",
- "uuid",
- "zed-reqwest",
-]
-
-[[package]]
 name = "orbit-pi"
 version = "0.2.8"
 dependencies = [
@@ -4145,7 +4134,6 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-user-notifications",
- "orbit-analytics",
  "orbit-rpc",
  "raw-window-handle",
  "rfd",

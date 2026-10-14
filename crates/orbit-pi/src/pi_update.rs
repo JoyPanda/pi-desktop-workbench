@@ -1,18 +1,15 @@
-//! Background pi self-update: the launch check against pi's own release
-//! endpoint and the delegated `pi update self`.
+//! Background pi update check: the launch probe against pi's own release
+//! endpoint, plus the version comparison and failure formatting that drive
+//! the update.
 //!
-//! Orbit never patches pi's files itself. The check reads the same endpoint
-//! pi's startup notice reads (`pi.dev/api/latest-version`), and the install
-//! is pi's own updater — so install-method detection (npm / pnpm / bun,
-//! managed builds), registry configuration, and write locations all stay
-//! pi's truth. Everything here blocks; the app calls it from the background
-//! executor.
+//! Orbit never patches pi's files itself and never installs or updates the
+//! CLI through npm. The check reads the same endpoint pi's startup notice
+//! reads (`pi.dev/api/latest-version`); [`crate::pi_install`] owns how the
+//! release is applied — `pi update` for the official managed install, a
+//! migration for an npm install, or a reported refusal for anything else.
+//! Everything here blocks; the app calls it from the background executor.
 
-use std::path::Path;
-use std::process::{Command, Output};
 use std::time::Duration;
-
-use crate::onboarding;
 
 /// pi's release endpoint — the one pi's own version check reads.
 const LATEST_VERSION_URL: &str = "https://pi.dev/api/latest-version";
@@ -36,29 +33,6 @@ pub fn latest_version() -> Option<String> {
     let body: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
     let version = body.get("version")?.as_str()?.trim();
     (!version.is_empty()).then(|| version.to_string())
-}
-
-/// The installed pi's version, straight from `pi --version`.
-pub fn installed_version() -> Option<String> {
-    onboarding::version_of(Path::new(&orbit_rpc::pi_binary()))
-}
-
-/// Run pi's own updater. `--no-approve` keeps the run from loading
-/// project-local files; the update itself (self target, install method,
-/// registry) is pi's. Blocks until the updater exits.
-pub fn run_self_update() -> std::io::Result<Output> {
-    let bin = orbit_rpc::pi_binary();
-    let mut command = Command::new(&bin);
-    // pi's updater shells out to the package manager that owns it; a bundled
-    // `.app` launches with a minimal PATH that usually lacks `node`, so use
-    // the same augmented PATH as RPC session spawns.
-    command.env("PATH", orbit_rpc::augmented_path(Path::new(&bin).parent()));
-    command
-        // The update run needs no startup notice of its own.
-        .env("PI_SKIP_VERSION_CHECK", "1")
-        .args(["update", "self", "--no-approve"]);
-    orbit_rpc::hide_console(&mut command);
-    command.output()
 }
 
 /// Semver-ish ordering for dotted release numbers: `0.10.0` is newer than
@@ -169,21 +143,6 @@ mod tests {
     fn strip_ansi_keeps_plain_text() {
         assert_eq!(strip_ansi("plain"), "plain");
         assert_eq!(strip_ansi("\x1b[32mgreen\x1b[39m"), "green");
-    }
-
-    #[test]
-    fn installed_version_reads_this_machines_pi_when_present() {
-        // Skips cleanly where pi isn't installed.
-        let Some(version) = installed_version() else {
-            return;
-        };
-        assert!(
-            version
-                .split('.')
-                .next()
-                .is_some_and(|major| major.parse::<u64>().is_ok()),
-            "unexpected pi version {version:?}"
-        );
     }
 
     /// Manual: `cargo test -p orbit-pi live_latest_version -- --ignored`.

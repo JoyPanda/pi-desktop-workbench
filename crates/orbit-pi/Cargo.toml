@@ -39,9 +39,6 @@ rust-i18n = "4.2"
 # Native open/folder dialogs (NSOpenPanel on macOS) for folder selection
 rfd = "0.15"
 orbit-rpc = { path = "../orbit-rpc" }
-# Privacy-first, provider-independent product analytics. The app only sees the
-# `Analytics` trait; Countly lives behind the crate's transport seam.
-orbit-analytics = { path = "../orbit-analytics" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 unicode-segmentation = "1"

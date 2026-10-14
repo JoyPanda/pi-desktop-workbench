@@ -1125,24 +1125,28 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
         rail_hint_shown_at.set(Some(Instant::now()));
     }
 
-    // One prompt/response preview pair per user turn (rail hover cards).
-    let turn_snippets: Vec<(String, String)> = {
-        let messages = messages.borrow();
-        user_turns
-            .iter()
-            .map(|&ix| {
-                let prompt = snippet(&messages[ix].text(), 100);
-                let response = messages
-                    .get(ix + 1..)
-                    .unwrap_or(&[])
-                    .iter()
-                    .take_while(|message| !message.user)
-                    .find(|message| !message.text().trim().is_empty())
-                    .map(|message| snippet(&message.text(), 240))
-                    .unwrap_or_default();
-                (prompt, response)
-            })
-            .collect()
+    // The rail's hover card is the only consumer of the preview text, and it
+    // shows one turn at a time. Snapshot just the turn under the cursor: doing
+    // this for every turn materialized the whole conversation on every repaint
+    // and made long sessions crawl while a run streamed.
+    let hover_info: Option<(String, String)> = if show_rail {
+        hovered_turn.get().and_then(|ix| {
+            let messages = messages.borrow();
+            // The hovered index is persistent panel state and can outlive a
+            // transcript swap (session switch), so never index unguarded.
+            let prompt = snippet(&messages.get(ix)?.text(), 100);
+            let response = messages
+                .get(ix + 1..)
+                .unwrap_or(&[])
+                .iter()
+                .take_while(|message| !message.user)
+                .find(|message| !message.text().trim().is_empty())
+                .map(|message| snippet(&message.text(), 240))
+                .unwrap_or_default();
+            Some((prompt, response))
+        })
+    } else {
+        None
     };
 
     // Devicons resolve once per frame: every file row in the list shares the
@@ -1153,16 +1157,25 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
         // The rate's clock: prefer the turn's request start (`turn_start`),
         // the same basis as pi's `durationMs`; fall back to the stream start
         // when an older pi build never emitted one.
-        let live_clock = turn_started
+        let rate_clock = turn_started
             .get()
             .or_else(|| stream_started.get())
             .map(|started| started.elapsed());
-        let live_elapsed = if live { live_clock } else { None };
+        // The "Working for…" clock measures the whole turn, so it must not
+        // share the rate's clock: `turn_start` re-arms on every provider
+        // request inside an agentic turn (once per tool-call step), which
+        // restarted the timer mid-run (#59). `stream_started` is armed once
+        // per turn and matches the settled `worked_for` duration.
+        let live_elapsed = if live {
+            stream_started.get().map(|started| started.elapsed())
+        } else {
+            None
+        };
         // Tokens/sec for the streaming row: the provider's cumulative
         // output (or a chars/4 estimate) over the turn's request clock.
         let live_tps = if live {
             messages.borrow().get(ix).and_then(|message| {
-                streaming_tps(message, live_generation_clock(message, live_clock))
+                streaming_tps(message, live_generation_clock(message, rate_clock))
             })
         } else {
             None
@@ -1319,7 +1332,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
         .child(events)
         .when(show_rail, |shell| {
             shell.child(render_navigation_rail(
-                turn_snippets,
+                hover_info,
                 user_turns,
                 active_turn,
                 hovered_turn.clone(),
@@ -1346,7 +1359,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
 /// full-opacity tick while idle.
 #[allow(clippy::too_many_arguments)]
 fn render_navigation_rail(
-    snippets: Vec<(String, String)>,
+    hover_info: Option<(String, String)>,
     user_turns: Vec<usize>,
     active_turn: Option<usize>,
     hovered: Rc<Cell<Option<usize>>>,
@@ -1391,15 +1404,18 @@ fn render_navigation_rail(
     let emphasized_turn = hovered.get();
     let emphasized_pos =
         emphasized_turn.and_then(|ix| user_turns.iter().position(|candidate| *candidate == ix));
-    let hover_info =
-        emphasized_pos.map(|pos| (pos, snippets[pos].0.clone(), snippets[pos].1.clone()));
+    // The card's position comes from the hovered tick; its text was snapshotted
+    // by the caller for that one turn only.
+    let hover_info = match (emphasized_pos, hover_info) {
+        (Some(pos), Some((prompt, response))) => Some((pos, prompt, response)),
+        _ => None,
+    };
 
-    let ticks: Vec<(usize, String, f32, Hsla)> = user_turns
+    let ticks: Vec<(usize, f32, Hsla)> = user_turns
         .iter()
         .copied()
-        .zip(snippets.iter().cloned())
         .enumerate()
-        .map(|(turn_pos, (user_ix, (prompt, _response)))| {
+        .map(|(turn_pos, user_ix)| {
             let distance = emphasized_pos.map(|pos| pos.abs_diff(turn_pos));
             let scale = distance
                 .and_then(|d| NAVIGATION_RAIL_EMPHASIS_SCALE.get(d))
@@ -1412,7 +1428,7 @@ fn render_navigation_rail(
             } else {
                 theme.text_3.opacity(NAVIGATION_RAIL_INACTIVE_OPACITY)
             };
-            (user_ix, prompt, width, color)
+            (user_ix, width, color)
         })
         .collect();
 
@@ -1440,7 +1456,7 @@ fn render_navigation_rail(
                 .children(
                     ticks
                         .into_iter()
-                        .map(move |(user_ix, _prompt, width, color)| {
+                        .map(move |(user_ix, width, color)| {
                             let scroller = scroller.clone();
                             let hover_state = hovered.clone();
                             let tick_hint_dismissed = tick_hint_dismissed.clone();

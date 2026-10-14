@@ -159,32 +159,7 @@ impl OrbitApp {
     }
 
     fn on_mcp_probe(&mut self, probe: McpProbe, cx: &mut Context<Self>) {
-        let before: Vec<(String, McpServerStatus)> = self
-            .mcp
-            .servers()
-            .iter()
-            .map(|server| (server.name.clone(), self.mcp.runtime(&server.name).status))
-            .collect();
         self.mcp.apply_probe(probe);
-        for (name, previous) in &before {
-            let current = self.mcp.runtime(name).status;
-            if current == *previous {
-                continue;
-            }
-            let event = match current {
-                McpServerStatus::Connected => Some(orbit_analytics::AnalyticsEvent::McpConnected),
-                McpServerStatus::Failed => {
-                    Some(orbit_analytics::AnalyticsEvent::McpConnectionFailed)
-                }
-                McpServerStatus::Disconnected if *previous == McpServerStatus::Connected => {
-                    Some(orbit_analytics::AnalyticsEvent::McpDisconnected)
-                }
-                _ => None,
-            };
-            if let Some(event) = event {
-                crate::analytics::track(cx, event);
-            }
-        }
         // A "Test connection" click toasts its own server's outcome once the
         // shared probe lands. A server removed before the probe finished has
         // no result to report.

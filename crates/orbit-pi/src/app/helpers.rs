@@ -953,6 +953,23 @@ pub(crate) fn file_badge(path: &str, theme: Theme) -> AnyElement {
         .into_any_element()
 }
 
+/// Ink for a provider's brand mark: the provider's identity color when it has
+/// one, otherwise the surface's existing neutral (`fallback`). Resolved per
+/// theme like [`file_badge`], so a mark stays legible on both canvases.
+pub(crate) fn provider_mark_color(provider: &str, theme: &Theme, fallback: Hsla) -> Hsla {
+    match crate::providers::provider_brand(provider) {
+        Some((dark, light)) => {
+            let hex = if theme.mode == ThemeMode::Dark {
+                dark
+            } else {
+                light
+            };
+            gpui::rgb(hex).into()
+        }
+        None => fallback,
+    }
+}
+
 /// A Runtime detail value in the UI text color.
 pub(crate) fn runtime_text(theme: Theme, text: String) -> AnyElement {
     div()

@@ -372,8 +372,8 @@ const SETTINGS_SEARCH_INDEX: &[(SettingsSection, &str, &str)] = &[
     ),
     (
         SettingsSection::Privacy,
-        "settings.anonymous_analytics",
-        "telemetry analytics usage anonymous privacy opt out data collection personal",
+        "settings.privacy",
+        "privacy session retention cleanup local data",
     ),
     (
         SettingsSection::About,
@@ -1082,6 +1082,7 @@ impl OrbitApp {
 
         let needle = self.models_filter.read(cx).text().trim().to_lowercase();
         let favorites = crate::favorites::all();
+        let provider_filter = self.models_provider_filter.as_deref();
         let total = self.available_models.len();
         let favorite_count = self
             .available_models
@@ -1091,8 +1092,18 @@ impl OrbitApp {
         let shown = self
             .available_models
             .iter()
-            .filter(|model| model_visible(model, &needle, self.models_favorites_only, &favorites))
+            .filter(|model| {
+                model_visible(
+                    model,
+                    &needle,
+                    self.models_favorites_only,
+                    &favorites,
+                    provider_filter,
+                )
+            })
             .count();
+        let filtered =
+            self.models_favorites_only || !needle.is_empty() || provider_filter.is_some();
 
         // A filter chip in the toolbar's button language: `bg_raised` + a
         // hairline when off, the standard `active` fill when on — never an
@@ -1141,12 +1152,55 @@ impl OrbitApp {
                 .child(tr!("settings.favorites")),
         );
 
+        // Refresh pi's provider/model catalog (`pi update --models`) and
+        // reload it. The catalog is pi's own data, so this is the one control
+        // that fetches new providers/models rather than filtering what we have.
+        let update_button = button_frame(div().id("models-update"), &theme, ButtonSize::Large)
+            .group(BUTTON_GROUP)
+            .border_1()
+            .border_color(theme.border)
+            .raised(theme.bg_raised, &theme)
+            .cursor_pointer()
+            .when(self.models_refreshing, |button| button.opacity(0.6))
+            .hover(|style| style.raised(theme.bg_hover, &theme))
+            .active(|style| style.raised(theme.active, &theme))
+            .on_mouse_up(MouseButton::Left, {
+                let this = this.clone();
+                move |_, _, cx| {
+                    this.update(cx, |app, cx| app.models_refresh(cx));
+                }
+            })
+            .child(refresh_glyph(
+                "models-update-spin",
+                ButtonSize::Large.icon_size().px(&theme),
+                self.models_refreshing,
+                theme.text_2,
+                theme,
+            ))
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_2)
+                    .child(tr!("settings.models_update")),
+            );
+
+        // Provider filter: a dropdown instead of a badge per provider, so the
+        // control scales to any catalog. Hidden when there is nothing to choose.
+        let providers = self.model_providers();
+        let provider_select = (providers.len() > 1)
+            .then(|| self.model_provider_select(&providers, theme, this.clone(), cx));
+
         div()
             .w_full()
             .flex()
             .flex_col()
             .gap(DynamicSpacing::Base12.px(&theme))
+            // Search leads, like Providers and Plugins — the filter belongs
+            // with the list it narrows.
             .child(search)
+            // Status and actions, matching Providers: a live count fills the
+            // left, the 32px controls sit flush right. The provider dropdown
+            // shares their height so the row reads on one baseline.
             .child(
                 div()
                     .w_full()
@@ -1159,22 +1213,208 @@ impl OrbitApp {
                             .min_w_0()
                             .text_size(TextSize::Small.px(&theme))
                             .text_color(theme.text_3)
-                            .child(model_count_label(
-                                total,
-                                shown,
-                                favorite_count,
-                                self.models_favorites_only || !needle.is_empty(),
-                            )),
+                            .child(model_count_label(total, shown, favorite_count, filtered)),
                     )
+                    .children(provider_select)
+                    .child(update_button)
                     .child(favorites_button),
             )
             .into_any_element()
+    }
+
+    /// The active model as a settings-style row: label on the left, selector
+    /// flush right, on a raised hairline board. Owns the page's "current
+    /// selection" so the grid below stays purely a catalog.
+    fn active_model_row(
+        &self,
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let control = self.active_model_select(theme, this, cx);
+        div()
+            .w_full()
+            .rounded(Radius::Large.px(&theme))
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.bg_raised)
+            .overflow_hidden()
+            .child(self.setting_row(
+                theme,
+                &tr!("settings.active_model"),
+                Some(&tr!("settings.active_model_description")),
+                None,
+                Some(control),
+            ))
+            .into_any_element()
+    }
+
+    /// The catalog's providers in first-appearance order (the grid's group
+    /// order), for the scope chips.
+    fn model_providers(&self) -> Vec<String> {
+        let mut providers: Vec<String> = Vec::new();
+        for model in &self.available_models {
+            if !providers.contains(&model.provider) {
+                providers.push(model.provider.clone());
+            }
+        }
+        providers
+    }
+
+    /// The provider filter dropdown: `All providers` plus every provider in
+    /// the catalog, as a 32px select matching the toolbar's action buttons. A
+    /// dropdown scales to any number of providers where a badge per provider
+    /// would wrap into a wall.
+    fn model_provider_select(
+        &self,
+        providers: &[String],
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let mut options = vec![tr!("settings.all_providers")];
+        options.extend(
+            providers
+                .iter()
+                .map(|provider| crate::providers::provider_display_name(provider)),
+        );
+        let selected = self
+            .models_provider_filter
+            .as_ref()
+            .and_then(|current| providers.iter().position(|provider| provider == current))
+            .map(|ix| ix + 1)
+            .unwrap_or(0);
+        self.select_control_sized(
+            "models-provider-select",
+            SettingsSelect::ModelProvider,
+            ButtonSize::Large,
+            options[selected].clone(),
+            options,
+            selected,
+            theme,
+            this,
+            cx,
+        )
+    }
+
+    /// The active-model selector: a dropdown over the reported catalog that
+    /// sets the session's model directly, so the Models page can both browse
+    /// and switch.
+    pub(super) fn active_model_select(
+        &self,
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        if self.available_models.is_empty() {
+            return button_frame(
+                div().id("active-model-select"),
+                &theme,
+                SELECT_CHIP_SIZE,
+            )
+            .border_1()
+            .border_color(theme.border)
+            .raised(theme.bg_raised, &theme)
+            .text_color(theme.text_3)
+            .child(tr!("settings.no_models_reported"))
+            .into_any_element();
+        }
+        let options: Vec<String> = self
+            .available_models
+            .iter()
+            .map(|model| {
+                format!(
+                    "{} · {}",
+                    crate::providers::provider_display_name(&model.provider),
+                    model.name
+                )
+            })
+            .collect();
+        let selected = self
+            .available_models
+            .iter()
+            .position(|model| model.id == self.model_id && model.provider == self.model_provider)
+            .unwrap_or(0);
+        self.select_control(
+            "active-model-select",
+            SettingsSelect::ActiveModel,
+            options[selected].clone(),
+            options,
+            selected,
+            theme,
+            this,
+            cx,
+        )
     }
 
     /// Flip the Models page's favorites-only filter.
     pub(super) fn toggle_models_favorites_only(&mut self, cx: &mut Context<Self>) {
         self.models_favorites_only = !self.models_favorites_only;
         cx.notify();
+    }
+
+    /// Update the provider/model catalog: run pi's documented `pi update
+    /// --models`, then restart the agent so it loads the refreshed catalog and
+    /// re-query. Refused mid-run, like every other restart.
+    pub(super) fn models_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.models_refreshing {
+            return;
+        }
+        // A live run still holds the process; swapping pi's catalog files under
+        // it and restarting would kill the turn.
+        if self.busy || self.transcript.is_streaming() {
+            self.toast_warning(tr!("settings.finish_turn_before_restart"));
+            cx.notify();
+            return;
+        }
+        self.models_refreshing = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async { crate::pi_install::run_model_catalog_refresh() })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.models_refreshing = false;
+                match result {
+                    Ok(output) if output.status.success() => {
+                        // pi keeps the catalog it loaded at startup, so reload
+                        // it by restarting and resuming the active session.
+                        app.restart_pi_for_catalog(cx);
+                        app.toast_success(tr!("settings.models_updated"));
+                    }
+                    Ok(output) => {
+                        let detail =
+                            crate::pi_update::failure_detail(&output.stdout, &output.stderr);
+                        app.toast_error(tr!("settings.models_update_failed", detail = detail));
+                    }
+                    Err(err) => {
+                        app.toast_error(tr!(
+                            "settings.models_update_failed",
+                            detail = err.to_string()
+                        ));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Restart the agent so a catalog refreshed on disk is loaded, resuming the
+    /// active session when one exists. Mirrors the credential-reload restart.
+    fn restart_pi_for_catalog(&mut self, cx: &mut Context<Self>) {
+        let resume = self
+            .current_session_path
+            .clone()
+            .and_then(|path| self.sessions.iter().find(|s| s.path == path).cloned());
+        self.drop_client();
+        self.current_session_path = None;
+        if let Some(session) = resume {
+            self.switch_to_session(session, false, cx);
+        } else {
+            self.runtime_start(cx);
+        }
     }
 
     /// The Models page: the catalog grouped by provider — a hairline header
@@ -1197,6 +1437,7 @@ impl OrbitApp {
         let needle = self.models_filter.read(cx).text().trim().to_lowercase();
         let favorites = crate::favorites::all();
         let favorites_only = self.models_favorites_only;
+        let provider_filter = self.models_provider_filter.as_deref();
 
         // Group in catalog order: a stable provider order with its models.
         let mut providers: Vec<String> = Vec::new();
@@ -1206,14 +1447,23 @@ impl OrbitApp {
             }
         }
 
-        let mut sections: Vec<AnyElement> = Vec::new();
+        // The active-selection row leads: a page-level "current model"
+        // control, then the browsable catalog groups.
+        let mut sections: Vec<AnyElement> =
+            vec![self.active_model_row(theme, this.clone(), cx)];
         for provider in providers {
             let models: Vec<&ModelEntry> = self
                 .available_models
                 .iter()
                 .filter(|model| {
                     model.provider == provider
-                        && model_visible(model, &needle, favorites_only, &favorites)
+                        && model_visible(
+                            model,
+                            &needle,
+                            favorites_only,
+                            &favorites,
+                            provider_filter,
+                        )
                 })
                 .collect();
             if models.is_empty() {
@@ -1248,7 +1498,7 @@ impl OrbitApp {
                             .child(icon_dyn(
                                 provider_icon(&provider),
                                 IconSize::Small.px(&theme),
-                                theme.text_3,
+                                provider_mark_color(&provider, &theme, theme.text_3),
                             ))
                             .child(
                                 div()
@@ -2926,11 +3176,15 @@ impl OrbitApp {
             .child(icon_dyn(
                 provider_icon(&view.id),
                 IconSize::Custom(30. / 16.).px(&theme),
-                if view.active || view.connected() {
-                    theme.text
-                } else {
-                    theme.text_2
-                },
+                provider_mark_color(
+                    &view.id,
+                    &theme,
+                    if view.active || view.connected() {
+                        theme.text
+                    } else {
+                        theme.text_2
+                    },
+                ),
             ));
 
         let status_pill = div()
@@ -5322,53 +5576,14 @@ impl OrbitApp {
             .into_any_element()
     }
 
-    /// Settings → Privacy: the single anonymous-usage-analytics switch plus a
-    /// plain-language disclosure of exactly what is and is never collected.
-    /// Disabling takes effect immediately and clears anything queued.
+    /// Settings → Privacy: local-only controls such as session retention.
     pub(super) fn privacy_rows(
         &self,
         theme: Theme,
         this: Entity<OrbitApp>,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
-        let enabled = crate::analytics::is_enabled(cx);
         vec![
-            self.settings_section(
-                theme,
-                &tr!("settings.anonymous_analytics"),
-                vec![
-                    self.setting_row(
-                        theme,
-                        &tr!("settings.anonymous_analytics"),
-                        Some(&tr!("settings.anonymous_analytics_description")),
-                        None,
-                        Some(self.settings_toggle(
-                            "analytics-toggle",
-                            enabled,
-                            theme,
-                            this.clone(),
-                            Self::toggle_analytics,
-                        )),
-                    ),
-                    // A read-only disclosure: the two halves of what the toggle
-                    // above actually means, so the privacy promise is visible
-                    // in the app rather than only in PRIVACY.md.
-                    self.setting_row(
-                        theme,
-                        &tr!("settings.analytics_collected_title"),
-                        Some(&tr!("settings.analytics_collected_body")),
-                        None,
-                        None,
-                    ),
-                    self.setting_row(
-                        theme,
-                        &tr!("settings.analytics_never_title"),
-                        Some(&tr!("settings.analytics_never_body")),
-                        None,
-                        None,
-                    ),
-                ],
-            ),
             self.settings_section(
                 theme,
                 &tr!("settings.session_retention"),
@@ -5490,20 +5705,6 @@ impl OrbitApp {
     pub(super) fn toggle_session_retention(&mut self, cx: &mut Context<Self>) {
         self.retention.enabled = !self.retention.enabled;
         self.retention.persist();
-        cx.notify();
-    }
-
-    /// Flip the analytics opt-out. The client stops collecting and clears its
-    /// queue the moment this runs.
-    pub(super) fn toggle_analytics(&mut self, cx: &mut Context<Self>) {
-        let enabled = !crate::analytics::is_enabled(cx);
-        crate::analytics::set_enabled(cx, enabled);
-        crate::analytics::track(
-            cx,
-            orbit_analytics::AnalyticsEvent::SettingsChanged {
-                setting: orbit_analytics::SettingId::Analytics,
-            },
-        );
         cx.notify();
     }
 
@@ -6472,6 +6673,8 @@ impl OrbitApp {
             | SettingsSelect::TitleModel
             | SettingsSelect::DefaultModel
             | SettingsSelect::DefaultThinking
+            | SettingsSelect::ActiveModel
+            | SettingsSelect::ModelProvider
             | SettingsSelect::RetentionMode
             | SettingsSelect::RetentionDays => unreachable!(),
         };
@@ -6552,6 +6755,35 @@ impl OrbitApp {
         this: Entity<OrbitApp>,
         cx: &Context<Self>,
     ) -> AnyElement {
+        self.select_control_sized(
+            id,
+            kind,
+            SELECT_CHIP_SIZE,
+            label,
+            options,
+            selected,
+            theme,
+            this,
+            cx,
+        )
+    }
+
+    /// [`select_control`](Self::select_control) at an explicit chip size, so a
+    /// toolbar control can match the 32px action buttons beside it while the
+    /// settings rows keep the 28px chip.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_control_sized(
+        &self,
+        id: &'static str,
+        kind: SettingsSelect,
+        size: ButtonSize,
+        label: String,
+        options: Vec<String>,
+        selected: usize,
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let open = self.settings_select == Some(kind);
         let chip_this = this.clone();
         div()
@@ -6559,12 +6791,12 @@ impl OrbitApp {
             .flex_col()
             .items_end()
             // dropdown anchored below the chip when open
-            .children(self.settings_select_popup(kind, options, selected, theme, &this, cx))
+            .children(self.settings_select_popup(kind, size, options, selected, theme, &this, cx))
             .child(
                 button_frame(
                     div().id(ElementId::Name(id.into())),
                     &theme,
-                    SELECT_CHIP_SIZE,
+                    size,
                 )
                 .border_1()
                 .border_color(if open {
@@ -6615,9 +6847,11 @@ impl OrbitApp {
     }
 
     /// The open dropdown's option list, anchored below its chip.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn settings_select_popup(
         &self,
         kind: SettingsSelect,
+        size: ButtonSize,
         options: Vec<String>,
         selected: usize,
         theme: Theme,
@@ -6801,7 +7035,7 @@ impl OrbitApp {
                         .anchor(Corner::TopRight)
                         .offset(point(
                             px(0.),
-                            SELECT_CHIP_SIZE.height(&theme) + popover::MENU_OFFSET,
+                            size.height(&theme) + popover::MENU_OFFSET,
                         ))
                         .child(deferred(popup)),
                 )
@@ -6955,6 +7189,24 @@ impl OrbitApp {
                 cx.notify();
                 return;
             }
+            SettingsSelect::ActiveModel => {
+                if let Some(model) = self.available_models.get(ix) {
+                    let (id, provider) = (model.id.clone(), model.provider.clone());
+                    self.set_model(id, provider, cx);
+                }
+                return;
+            }
+            SettingsSelect::ModelProvider => {
+                // Index 0 is `All providers`; the rest follow the catalog's
+                // provider order, the same order the dropdown was built from.
+                self.models_provider_filter = if ix == 0 {
+                    None
+                } else {
+                    self.model_providers().get(ix - 1).cloned()
+                };
+                cx.notify();
+                return;
+            }
             SettingsSelect::BackdropCell | SettingsSelect::BackdropFade => {
                 let mut tuning = crate::dither::tuning();
                 match kind {
@@ -7024,6 +7276,8 @@ impl OrbitApp {
             | SettingsSelect::TitleModel
             | SettingsSelect::DefaultModel
             | SettingsSelect::DefaultThinking
+            | SettingsSelect::ActiveModel
+            | SettingsSelect::ModelProvider
             | SettingsSelect::RetentionMode
             | SettingsSelect::RetentionDays => unreachable!(),
         }
@@ -7036,7 +7290,6 @@ impl OrbitApp {
     pub(super) fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.refresh_updater(cx);
         self.settings_open = true;
-        crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::SettingsOpened);
         self.set_settings_section(SettingsSection::General, cx);
     }
 
@@ -7059,7 +7312,6 @@ impl OrbitApp {
     ) {
         self.refresh_updater(cx);
         self.settings_open = true;
-        crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::SettingsOpened);
         self.set_settings_section(SettingsSection::About, cx);
     }
 
@@ -7893,15 +8145,19 @@ fn keycap(label: &str, theme: Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// Whether a catalog model survives the Models page's search + favorites
-/// filter. Shared by the grid and the toolbar's live count so the two can
-/// never disagree.
+/// Whether a catalog model survives the Models page's search, favorites, and
+/// provider filters. Shared by the grid and the toolbar's live count so the
+/// two can never disagree.
 fn model_visible(
     model: &ModelEntry,
     needle: &str,
     favorites_only: bool,
     favorites: &crate::favorites::Favorites,
+    provider: Option<&str>,
 ) -> bool {
+    if provider.is_some_and(|provider| model.provider != provider) {
+        return false;
+    }
     if favorites_only && !favorites.contains(&model.provider, &model.id) {
         return false;
     }
@@ -8010,11 +8266,11 @@ mod model_filter_tests {
         // Callers hand the helper an already-lowercased needle.
         let favorites = Favorites::from_pairs(&[]);
         let model = entry("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5");
-        assert!(model_visible(&model, "", false, &favorites));
-        assert!(model_visible(&model, "sonnet", false, &favorites));
-        assert!(model_visible(&model, "claude-sonnet", false, &favorites));
-        assert!(model_visible(&model, "anthropic", false, &favorites));
-        assert!(!model_visible(&model, "gemini", false, &favorites));
+        assert!(model_visible(&model, "", false, &favorites, None));
+        assert!(model_visible(&model, "sonnet", false, &favorites, None));
+        assert!(model_visible(&model, "claude-sonnet", false, &favorites, None));
+        assert!(model_visible(&model, "anthropic", false, &favorites, None));
+        assert!(!model_visible(&model, "gemini", false, &favorites, None));
     }
 
     #[test]
@@ -8022,10 +8278,27 @@ mod model_filter_tests {
         let favorites = Favorites::from_pairs(&[("openai", "gpt-5")]);
         let starred = entry("openai", "gpt-5", "GPT-5");
         let other = entry("openai", "gpt-5-mini", "GPT-5 mini");
-        assert!(model_visible(&starred, "", true, &favorites));
-        assert!(!model_visible(&other, "", true, &favorites));
+        assert!(model_visible(&starred, "", true, &favorites, None));
+        assert!(!model_visible(&other, "", true, &favorites, None));
         // The search still applies inside the favorites scope.
-        assert!(!model_visible(&starred, "mini", true, &favorites));
+        assert!(!model_visible(&starred, "mini", true, &favorites, None));
+    }
+
+    #[test]
+    fn provider_filter_scopes_the_grid_and_composes_with_search() {
+        let favorites = Favorites::from_pairs(&[]);
+        let opus = entry("anthropic", "claude-opus-4", "Claude Opus 4");
+        let sonnet = entry("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5");
+        let gpt = entry("openai", "gpt-5", "GPT-5");
+
+        // A provider scope admits only that provider's models.
+        assert!(model_visible(&opus, "", false, &favorites, Some("anthropic")));
+        assert!(model_visible(&sonnet, "", false, &favorites, Some("anthropic")));
+        assert!(!model_visible(&gpt, "", false, &favorites, Some("anthropic")));
+        // The search still applies inside the provider scope.
+        assert!(!model_visible(&sonnet, "opus", false, &favorites, Some("anthropic")));
+        // `None` means every provider.
+        assert!(model_visible(&gpt, "", false, &favorites, None));
     }
 
     #[test]

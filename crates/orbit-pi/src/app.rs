@@ -247,9 +247,6 @@ pub struct OrbitApp {
     model_provider: String,
     thinking_label: String,
     busy: bool,
-    /// Whether the current run already reported a failure, so a later
-    /// `agent_settled` does not also log a completion. Analytics-only state.
-    analytics_agent_failed: bool,
     /// Pending steering + follow-up messages reported by pi's `queue_update`
     /// (and echoed by `clear_queue`). While the agent runs, messages sent from
     /// the composer are queued as follow-ups and shown here until delivered.
@@ -625,6 +622,16 @@ pub struct OrbitApp {
     _copy_selection_sub: Subscription,
     /// Onboarding dependency check results (pi, node, git).
     deps: Vec<Dependency>,
+    /// How the installed pi CLI is provided (official managed install, npm, or
+    /// another package manager). Refreshed with the dependency probe and after
+    /// every install/update, so the setup page and the updater agree.
+    pi_install: crate::pi_install::Installation,
+    /// A newer pi exists but this install is npm-managed and must be migrated
+    /// to the official installer first. Holds the available version; cleared
+    /// once migration succeeds. Never acted on without the user's click.
+    pi_migration_required: Option<String>,
+    /// True while the official installer runs on the background executor.
+    pi_migrating: bool,
     /// Whether the setup page is open on request (Settings → About →
     /// Requirements) rather than because something is missing.
     setup_open: bool,
@@ -795,6 +802,13 @@ pub struct OrbitApp {
     /// Models page: show favorited models only (the second filter next to
     /// the search field).
     models_favorites_only: bool,
+    /// Models page: provider scope. `None` shows every provider; `Some(id)`
+    /// narrows the grid to one, mirroring the composer picker's provider
+    /// chips.
+    models_provider_filter: Option<String>,
+    /// True while the Models page's "Update model list" action runs pi's
+    /// catalog refresh and reloads the agent.
+    models_refreshing: bool,
     /// Skills discovered for the current workspace (project + user scope).
     skills: Vec<Skill>,
     /// Installed pi packages (plugins) from user + project settings.
@@ -1265,6 +1279,16 @@ impl OrbitApp {
         // Probe the runtime pieces we need (pi, node, git) so the setup page
         // can show install commands when something is missing.
         let deps = onboarding::check_dependencies();
+        // How pi was installed, derived from the launcher the probe already
+        // resolved — no extra `pi --version` spawn at startup.
+        let pi_install = {
+            let mut installation = crate::pi_install::detect_from_bin(onboarding::locate("pi"));
+            installation.version = deps
+                .iter()
+                .find(|dep| dep.bin == "pi")
+                .and_then(|dep| dep.version.clone());
+            installation
+        };
         let host = platform::host();
 
         // Right side pane: Review (git diff).
@@ -1441,7 +1465,6 @@ impl OrbitApp {
             model_provider: String::new(),
             thinking_label: "…".into(),
             busy: false,
-            analytics_agent_failed: false,
             queue: PendingQueue::default(),
             restore_queue_on_clear: false,
             follow_up_mode: "one-at-a-time".into(),
@@ -1593,6 +1616,9 @@ impl OrbitApp {
             _input_sub: input_sub,
             _copy_selection_sub: copy_selection_sub,
             deps,
+            pi_install,
+            pi_migration_required: None,
+            pi_migrating: false,
             setup_open: false,
             host,
             refreshing: false,
@@ -1656,6 +1682,8 @@ impl OrbitApp {
             models_filter: models_filter.clone(),
             _models_filter_sub: models_filter_sub,
             models_favorites_only: false,
+            models_provider_filter: None,
+            models_refreshing: false,
             skills: Vec::new(),
             plugins: Vec::new(),
             plugins_error: None,
@@ -1922,7 +1950,7 @@ impl OrbitApp {
     /// Add `cwd` to Orbit's project list if it isn't already there. Called
     /// whenever the user picks a folder to work in — starting a task there,
     /// browsing for one, or opening one of its sessions. Never writes to pi.
-    pub(super) fn add_workspace(&mut self, cwd: PathBuf, cx: &App) {
+    pub(super) fn add_workspace(&mut self, cwd: PathBuf, _cx: &App) {
         let cwd = sessions::canonical_workspace_path(&cwd);
         if self.workspaces.iter().any(|w| w == &cwd) {
             return;
@@ -1931,7 +1959,6 @@ impl OrbitApp {
             .insert(cwd.clone(), SystemTime::now());
         self.workspaces.push(cwd);
         self.persist_workspace_prefs();
-        crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::ProjectCreated);
     }
 
     /// Write the sidebar's project list, each project's added-at stamp, the
@@ -1964,7 +1991,7 @@ impl OrbitApp {
     /// the same folder (`/tmp` vs `/private/tmp`, or a legacy duplicate written
     /// before paths were canonicalized) is dropped with it, so one click removes
     /// the folder entirely instead of leaving a second empty heading behind.
-    pub(super) fn remove_workspace(&mut self, cwd: &Path, cx: &App) {
+    pub(super) fn remove_workspace(&mut self, cwd: &Path, _cx: &App) {
         if drop_workspace(&mut self.workspaces, cwd) {
             // Drop every removed entry's stamp and mark, not just the one that
             // matched by path.
@@ -1972,7 +1999,6 @@ impl OrbitApp {
             self.workspace_added_at.retain(|w, _| remaining.contains(w));
             self.workspace_marks.retain(|w, _| remaining.contains(w));
             self.persist_workspace_prefs();
-            crate::analytics::track(cx, orbit_analytics::AnalyticsEvent::ProjectDeleted);
         }
     }
 
@@ -2859,6 +2885,10 @@ enum SettingsSelect {
     DefaultModel,
     /// The default model's thinking level (Settings → Agent).
     DefaultThinking,
+    /// The session's active model (Settings → Models).
+    ActiveModel,
+    /// The Models page's provider scope filter.
+    ModelProvider,
     /// The session-retention action and threshold (Settings → Privacy).
     RetentionMode,
     RetentionDays,
@@ -2934,8 +2964,8 @@ pub(crate) use crate::theme::tokens::RaisedExt;
 pub(crate) use helpers::{
     button_frame, context_menu_entry, context_menu_separator, context_menu_surface, empty_state,
     file_badge, file_glyph, icon, icon_button_frame, icon_dyn, input_field_frame, menu_header,
-    nerd_font_family, picker_entry, picker_search_frame, picker_surface, press, refresh_glyph,
-    spinner, EmptyFill, TipExt, BUTTON_GROUP, PRESS_DIM,
+    nerd_font_family, picker_entry, picker_search_frame, picker_surface, press,
+    provider_mark_color, refresh_glyph, spinner, EmptyFill, TipExt, BUTTON_GROUP, PRESS_DIM,
 };
 use sidebar::sessions_with_placeholder;
 

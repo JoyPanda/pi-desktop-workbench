@@ -122,7 +122,6 @@ Orbit spawns the `pi` CLI as a child process per open session and speaks its RPC
 
 ```
 crates/orbit-pi/      The GPUI app — window, transcript, markdown, workbench
-crates/orbit-analytics/  Privacy-first, provider-independent product telemetry
 crates/orbit-rpc/     pi CLI RPC client (process lifecycle + JSONL protocol)
 contrib/              Bundled pi extensions (access guard, auth/quota bridges)
 scripts/make-dmg.sh   Build a signed .app + DMG (arm64 / universal)
@@ -131,7 +130,7 @@ marketing/            Next.js landing page
 PRODUCT.md            Product definition, capabilities, constraints
 INTENT.md             Architecture decisions + phase plan
 AGENT.md              Conventions for agents and humans working on this repo
-PRIVACY.md            What anonymous usage analytics does and does not send
+PRIVACY.md            What Orbit does and does not send
 ```
 
 ## Roadmap
@@ -177,4 +176,4 @@ issue before starting.
 
 ---
 
-Setup, checks, and commit conventions live in [CONTRIBUTING.md](CONTRIBUTING.md). Orbit is licensed under [Apache-2.0](LICENSE); report vulnerabilities per [SECURITY.md](SECURITY.md). Anonymous usage analytics is documented in [PRIVACY.md](PRIVACY.md).
+Setup, checks, and commit conventions live in [CONTRIBUTING.md](CONTRIBUTING.md). Orbit is licensed under [Apache-2.0](LICENSE); report vulnerabilities per [SECURITY.md](SECURITY.md). Data handling is documented in [PRIVACY.md](PRIVACY.md).

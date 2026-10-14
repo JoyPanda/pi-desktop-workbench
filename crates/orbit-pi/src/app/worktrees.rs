@@ -598,6 +598,21 @@ impl OrbitApp {
         cx.notify();
     }
 
+    /// Toggle the toolbar "Advanced" menu. The click's mouse-down dismisses an
+    /// open menu (`on_mouse_down_out`); without the gesture guard the same
+    /// click's mouse-up would toggle it straight back open, so a second click
+    /// never closed it.
+    pub(super) fn toggle_worktree_advanced(&mut self, cx: &mut Context<Self>) {
+        const GESTURE: Duration = Duration::from_millis(200);
+        if let Some(dismissed) = self.menu_dismissed_at.take() {
+            if dismissed.elapsed() < GESTURE {
+                return;
+            }
+        }
+        self.worktree_advanced_open = !self.worktree_advanced_open;
+        cx.notify();
+    }
+
     /// Open the rename dialog with the current name prefilled. The Git
     /// branch is never renamed — only the directory.
     pub(super) fn start_rename_worktree(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -1179,16 +1194,24 @@ impl OrbitApp {
                     .right(px(0.))
                     .size(px(0.))
                     .child(
+                        // Anchor to the button's top-right (via a zero-size
+                        // point) and drop the menu `MENU_OFFSET` below it,
+                        // right-aligned — the same pattern as Settings' select
+                        // and the Git "…" menu. `Window` mode (not `Local` +
+                        // `snap_to_window`) is deliberate: that combo cannot
+                        // flip, so in this top toolbar the off-screen "open
+                        // above" position made the snap slide the menu down
+                        // over its own button.
                         anchored()
-                            .position_mode(AnchoredPositionMode::Local)
-                            .anchor(Corner::BottomRight)
+                            .position_mode(AnchoredPositionMode::Window)
+                            .anchor(Corner::TopRight)
                             .offset(point(
                                 px(0.),
-                                -(ButtonSize::Medium.height(&theme) + popover::MENU_OFFSET),
+                                ButtonSize::Medium.height(&theme) + popover::MENU_OFFSET,
                             ))
-                            .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                             .child(deferred(
                                 picker_surface(div(), &theme)
+                                    .debug_selector(|| "worktrees-advanced-popup".to_string())
                                     .w(px(240.))
                                     .py(picker::list_padding_y(&theme))
                                     .occlude()
@@ -1197,6 +1220,12 @@ impl OrbitApp {
                                         move |_, _, cx| {
                                             this.update(cx, |app, cx| {
                                                 app.worktree_advanced_open = false;
+                                                // Stamp the dismissal so the
+                                                // button's mouse-up (the same
+                                                // click) cannot toggle it back
+                                                // open.
+                                                app.menu_dismissed_at =
+                                                    Some(Instant::now());
                                                 cx.notify();
                                             });
                                         }
@@ -1224,6 +1253,7 @@ impl OrbitApp {
         control = control.child(
             press(
                 button_frame(div().id("worktrees-advanced"), &theme, ButtonSize::Medium)
+                    .debug_selector(|| "worktrees-advanced".to_string())
                     .border_1()
                     .border_color(theme.border)
                     .raised(
@@ -1251,8 +1281,7 @@ impl OrbitApp {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                    this.worktree_advanced_open = !this.worktree_advanced_open;
-                    cx.notify();
+                    this.toggle_worktree_advanced(cx);
                 }),
             ),
         );
