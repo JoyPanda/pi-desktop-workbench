@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.9] - 2026-10-14
+
 ### Changed
 
 - The composer's **model** and **thinking-level** pickers now read as one
@@ -966,7 +968,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In-transcript find (⌘F) and a full-window image lightbox.
 - Native macOS app bundle, Developer-ID signed and notarizable.
 
-[Unreleased]: https://github.com/imrj05/orbit/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/imrj05/orbit/compare/v0.2.9...HEAD
 [0.0.1]: https://github.com/imrj05/orbit/releases/tag/v0.0.1
 [0.0.2]: https://github.com/imrj05/orbit/releases/tag/v0.0.2
 [0.0.3]: https://github.com/imrj05/orbit/releases/tag/v0.0.3
@@ -995,3 +997,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.2.6]: https://github.com/imrj05/orbit/releases/tag/v0.2.6
 [0.2.7]: https://github.com/imrj05/orbit/releases/tag/v0.2.7
 [0.2.8]: https://github.com/imrj05/orbit/releases/tag/v0.2.8
+[0.2.9]: https://github.com/imrj05/orbit/releases/tag/v0.2.9

@@ -1,6 +1,6 @@
 [package]
 name = "orbit-pi"
-version = "0.2.8"
+version = "0.2.9"
 description = "Native GPUI workbench for the pi coding agent"
 edition.workspace = true
 license.workspace = true
