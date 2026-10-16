@@ -1,6 +1,6 @@
 {
   "name": "orbit-quota-bridge",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "private": true,
   "type": "module",
   "description": "Orbit's provider-quota bridge: a pi extension loaded with --extension that appends normalized quota snapshots as custom session entries.",
