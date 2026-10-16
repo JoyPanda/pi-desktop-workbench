@@ -2672,18 +2672,25 @@ impl OrbitApp {
         }
     }
 
-    /// The status bar's "Work in" chip, or `None` when there is no
-    /// repository.
+    /// The status bar's "Work in" chip: the active location when it is a linked
+    /// worktree, `None` at the repository's main checkout ("Local" is the
+    /// default) and `None` when there is no repository at all.
     pub(super) fn work_in_chip(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let label = self.work_in_label()?;
+        // "Local" is the default — the repository's main checkout — and the
+        // default earns no pixels, the same rule the access chip follows. The
+        // chip appears in a linked worktree, where it names a non-default
+        // location and is the way back out. Nothing is lost by hiding it at the
+        // main checkout: the Worktrees page creates and switches worktrees, and
+        // it sits in the top bar's "…" menu with the other surfaces.
+        if self.work_in_is_local() {
+            return None;
+        }
         let theme = *theme::get(cx);
-        let local = self.work_in_is_local();
         let open = self.work_in_menu_open;
-        let icon_path = if local {
-            "icons/monitor.svg"
-        } else {
-            "icons/branch.svg"
-        };
+        // Only reachable from a linked worktree, so the mark is the branch
+        // glyph rather than the monitor the main checkout used to show.
+        let icon_path = "icons/branch.svg";
         Some(
             div()
                 .flex()

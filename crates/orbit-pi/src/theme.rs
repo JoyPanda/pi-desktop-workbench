@@ -37,7 +37,9 @@ pub enum ThemeId {
     OrbitPaper,
     OrbitContrast,
     OrbitDarker,
-    OrbitMinimal,
+    /// Graphite canvas, cool ink, and an electric-blue accent. Formerly
+    /// `OrbitMinimal`; renamed so "minimal" names the interface, never a hue.
+    OrbitCobalt,
     /// Ported Zed community themes (all dark).
     Vague,
     Batsignal,
@@ -91,7 +93,7 @@ impl ThemeId {
         Self::OrbitPaper,
         Self::OrbitContrast,
         Self::OrbitDarker,
-        Self::OrbitMinimal,
+        Self::OrbitCobalt,
         Self::Vague,
         Self::Batsignal,
         Self::Ashwood,
@@ -132,6 +134,25 @@ impl ThemeId {
         Self::TokyoNightLight,
     ];
 
+    /// The curated palettes Settings → Appearance offers before the user asks
+    /// for the whole catalog: Orbit's own family, dark then light. The
+    /// ported/curated editor themes stay in [`Self::ALL`] behind "All themes…";
+    /// a 44-row dropdown is a catalog to search, not a choice to make.
+    pub const FEATURED: [ThemeId; 6] = [
+        Self::Orbit,
+        Self::OrbitDarker,
+        Self::OrbitCobalt,
+        Self::OrbitLight,
+        Self::OrbitPaper,
+        Self::OrbitContrast,
+    ];
+
+    /// Whether this palette is in the curated set the theme dropdown shows
+    /// first. See [`Self::FEATURED`].
+    pub fn featured(self) -> bool {
+        Self::FEATURED.contains(&self)
+    }
+
     /// Persisted key; also accepts legacy theme names (mapped to Orbit).
     pub fn as_str(self) -> &'static str {
         match self {
@@ -140,7 +161,7 @@ impl ThemeId {
             Self::OrbitPaper => "orbit-paper",
             Self::OrbitContrast => "orbit-contrast",
             Self::OrbitDarker => "orbit-darker",
-            Self::OrbitMinimal => "orbit-minimal",
+            Self::OrbitCobalt => "orbit-cobalt",
             Self::Vague => "vague",
             Self::Batsignal => "batsignal-dark",
             Self::Ashwood => "ashwood",
@@ -200,8 +221,9 @@ impl ThemeId {
             "orbit-paper" => Some(Self::OrbitPaper),
             "orbit-contrast" | "orbit-high-contrast" => Some(Self::OrbitContrast),
             "orbit-darker" => Some(Self::OrbitDarker),
-            // Codex-inspired minimal dark; aliases name its origin.
-            "orbit-minimal" | "codex" | "codex-dark" => Some(Self::OrbitMinimal),
+            // Graphite-and-blue dark. `orbit-minimal` is the pre-rename key,
+            // and the rest name the palette's origin; all three still load.
+            "orbit-cobalt" | "orbit-minimal" | "codex" | "codex-dark" => Some(Self::OrbitCobalt),
             // Ported Zed community themes (aliases included).
             "vague" => Some(Self::Vague),
             "batsignal-dark" | "batsignal" => Some(Self::Batsignal),
@@ -257,7 +279,7 @@ impl ThemeId {
             Self::OrbitPaper => "Orbit Paper",
             Self::OrbitContrast => "Orbit Contrast",
             Self::OrbitDarker => "Orbit Darker",
-            Self::OrbitMinimal => "Orbit Minimal",
+            Self::OrbitCobalt => "Orbit Cobalt",
             Self::Vague => "Vague",
             Self::Batsignal => "Batsignal (Dark)",
             Self::Ashwood => "Ashwood",
@@ -314,7 +336,7 @@ impl ThemeId {
             | Self::AyuLight => ThemeMode::Light,
             Self::Orbit
             | Self::OrbitDarker
-            | Self::OrbitMinimal
+            | Self::OrbitCobalt
             | Self::Vague
             | Self::Batsignal
             | Self::Ashwood
@@ -928,10 +950,10 @@ const ORBIT_DARKER: Palette = Palette {
     trough: 0x1B1B1B,
 };
 
-/// Orbit Minimal (codex-inspired): a deep graphite canvas with cool-gray ink
-/// and an electric-blue interaction accent — the Codex desktop app's grammar,
-/// mapped onto Orbit's semantic roles.
-const ORBIT_MINIMAL: Palette = Palette {
+/// Orbit Cobalt (formerly "Orbit Minimal", codex-inspired): a deep graphite
+/// canvas with cool-gray ink and an electric-blue interaction accent — the
+/// Codex desktop app's grammar, mapped onto Orbit's semantic roles.
+const ORBIT_COBALT: Palette = Palette {
     bg_main: 0x181818,
     bg_sidebar: 0x121212,
     bg_raised: 0x1E1E1E,
@@ -2721,7 +2743,7 @@ fn palette(id: ThemeId) -> Palette {
         ThemeId::OrbitPaper => ORBIT_PAPER,
         ThemeId::OrbitContrast => ORBIT_CONTRAST,
         ThemeId::OrbitDarker => ORBIT_DARKER,
-        ThemeId::OrbitMinimal => ORBIT_MINIMAL,
+        ThemeId::OrbitCobalt => ORBIT_COBALT,
         ThemeId::Vague => VAGUE,
         ThemeId::Batsignal => BATSIGNAL,
         ThemeId::Ashwood => ASHWOOD,
@@ -3037,10 +3059,12 @@ mod tests {
         assert_eq!(ThemeId::parse("orbit-darker"), Some(ThemeId::OrbitDarker));
         assert_eq!(ThemeId::OrbitDarker.as_str(), "orbit-darker");
         assert_eq!(ThemeId::OrbitDarker.appearance(), ThemeMode::Dark);
-        assert_eq!(ThemeId::parse("orbit-minimal"), Some(ThemeId::OrbitMinimal));
-        assert_eq!(ThemeId::parse("codex"), Some(ThemeId::OrbitMinimal));
-        assert_eq!(ThemeId::OrbitMinimal.as_str(), "orbit-minimal");
-        assert_eq!(ThemeId::OrbitMinimal.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeId::parse("orbit-cobalt"), Some(ThemeId::OrbitCobalt));
+        // The pre-rename key and the palette's origin still load.
+        assert_eq!(ThemeId::parse("orbit-minimal"), Some(ThemeId::OrbitCobalt));
+        assert_eq!(ThemeId::parse("codex"), Some(ThemeId::OrbitCobalt));
+        assert_eq!(ThemeId::OrbitCobalt.as_str(), "orbit-cobalt");
+        assert_eq!(ThemeId::OrbitCobalt.appearance(), ThemeMode::Dark);
         assert_eq!(
             ThemeId::parse("catppuccin-latte"),
             Some(ThemeId::CatppuccinLatte)
@@ -3352,14 +3376,14 @@ mod tests {
         assert_eq!(ThemeId::OrbitPaper.appearance(), ThemeMode::Light);
         assert_eq!(ThemeId::OrbitContrast.appearance(), ThemeMode::Light);
         assert_eq!(ThemeId::OrbitDarker.appearance(), ThemeMode::Dark);
-        assert_eq!(ThemeId::OrbitMinimal.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeId::OrbitCobalt.appearance(), ThemeMode::Dark);
         assert_eq!(ThemeId::CatppuccinLatte.appearance(), ThemeMode::Light);
         assert_eq!(ThemeId::Orbit.label(), "Orbit");
         assert_eq!(ThemeId::OrbitLight.label(), "Orbit Light");
         assert_eq!(ThemeId::OrbitPaper.label(), "Orbit Paper");
         assert_eq!(ThemeId::OrbitContrast.label(), "Orbit Contrast");
         assert_eq!(ThemeId::OrbitDarker.label(), "Orbit Darker");
-        assert_eq!(ThemeId::OrbitMinimal.label(), "Orbit Minimal");
+        assert_eq!(ThemeId::OrbitCobalt.label(), "Orbit Cobalt");
         assert_eq!(ThemeId::CatppuccinLatte.label(), "Catppuccin Latte");
     }
 

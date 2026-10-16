@@ -112,7 +112,7 @@ rationed: selection, focus, the caret, the active series. Everything else is ink
 canvas at three weights of emphasis.
 
 The system is monochrome-by-default with semantic color reserved for state, so a
-screenshot in any of the forty-three palettes still reads as Orbit. Depth is delivered by
+screenshot in any of the forty-four palettes still reads as Orbit. Depth is delivered by
 hairlines and tonal steps rather than shadows; shadows exist only for surfaces that
 genuinely float above the page (composer, popovers, modals).
 
@@ -123,7 +123,9 @@ genuinely float above the page (composer, popovers, modals).
 - Density with air: 28–34px controls, 6–10px padding, 44px page headers. The
   Appearance panel exposes this as UI, Terminal/Editor font sizes (px), and
   Spacing Density (a global multiplier through `theme.space`).
-- Forty-two palettes, one grammar: every color is read from `theme::get(cx)`, never hardcoded.
+- Forty-four palettes, one grammar: every color is read from `theme::get(cx)`, never
+  hardcoded. Appearance offers Orbit's own six first and keeps the rest of the catalog
+  behind one disclosure, so the common choice is never made inside a 44-row list.
 
 ## Colors
 
@@ -174,7 +176,7 @@ The composer paints two inline token roles. They are read as content — sibling
   a command. Chroma-less palettes (Ashwood, Mono) stay monochrome and split the two by
   ink instead of hue.
 
-Both are derived in `Theme`, so all forty-three palettes stay legible without per-palette tuning.
+Both are derived in `Theme`, so all forty-four palettes stay legible without per-palette tuning.
 
 ## Typography
 
@@ -197,6 +199,21 @@ statically instanced, subset TTFs at the 400–700 weights it offers, under
 is Latin + punctuation + box-drawing + powerline), so a picked face never
 depends on the OS. The bundled IBM Plex Sans and Lilex faces stay in the list
 under their own names (their gpui aliases are `.ZedSans` / `.ZedMono`).
+
+**The Palette Catalog.** `ThemeId::ALL` ships forty-four palettes; `ThemeId::FEATURED`
+is the six that are Orbit's own — Orbit, Orbit Darker, Orbit Cobalt, Orbit Light, Orbit
+Paper, Orbit Contrast — dark first. Settings → Appearance → **Theme** is a single
+control, not one row per appearance mode: it shows and edits the palette currently in
+effect, and a palette outside the curated set is appended to the short list rather than
+hidden, so the checkmark always has a row to sit on. The rest of the catalog is one
+disclosure away. `theme_options(mode, all, configured)` is the single ordering the
+dropdown paints and a click resolves, and revealing appends after the curated block so
+rows never reorder under the pointer.
+
+**Orbit Cobalt.** The graphite-and-blue dark palette shipped as "Orbit Minimal" and is
+renamed for what it is: a hue. Minimal is a property of the interface, never of a
+palette. The persisted key `orbit-cobalt` still accepts `orbit-minimal`, `codex`, and
+`codex-dark`, so a saved preference survives the rename.
 
 ### Hierarchy
 - **Title** (500, 15px): page titles in a 44px header row.
@@ -391,6 +408,12 @@ The command palette is a first-class navigation surface.
 - Destructive commands require explicit confirmation.
 - Commands must operate on the same underlying action handlers as buttons and menus;
   keyboard and pointer interactions must not create separate behavior paths.
+- A chordless command is registered with `command(…)`, which puts it in the palette and
+  in no keymap. That is the intended shape for a chip's keyboard path, not a gap.
+- Every command draws an icon, and GPUI resolves it through the embedded asset source, so
+  a path the source cannot find fails when the row is drawn. `every_command_icon_is_embedded`
+  holds the whole registry against the assets that ship — add the missing icon rather than
+  softening the reference.
 
 ### Context Menus
 
@@ -425,10 +448,40 @@ The sidebar is quiet infrastructure.
 - Supported range: 200–320px.
 - Collapse/hide the sidebar before forcing the workspace to become cramped.
 - Sidebar sections use whitespace and labels rather than excessive containers.
+- A project group header carries a session count only when it is non-zero. A project
+  with nothing in it already says so by having no rows under it.
+- A session row's title line is its anchor and is always there; the first-message
+  preview appears only when it says something the title does not
+  (`preview_adds_information`). pi titles a session from that message, so the title is
+  normally the same sentence cut short and the preview is the rest of it — a second line
+  the eye reads and learns nothing from. Rows are therefore one or two lines tall, and the
+  age rides whichever line is last.
 - Active navigation uses `active`, not ember alone.
 - Session state may use semantic indicators, but decorative animation is forbidden except
   for the currently running session treatment already defined above.
 - Sidebar width and collapsed state should persist per workspace/window when practical.
+
+### Status Row
+
+The status row under the composer is a readout, not a toolbar.
+
+- It carries live state only: where the workspace is, which branch it is on, and how much
+  context is left. Anything that restates a control sitting a few pixels above it belongs
+  to that control, not here.
+- **Ahead/behind counts appear only when they are non-zero.** `↑0 ↓0` is a row of arrows
+  that says nothing; a clean branch shows its name alone.
+- **Send hints appear only while a run is in flight.** Idle they restate the send button —
+  a hint the user already acted on is instruction, not information. Running they carry the
+  one thing the button cannot say: which chord steers the live turn and which queues a
+  follow-up.
+- **The MCP chip appears only when a server needs attention.** A fully connected fleet is
+  the steady state, and the steady state earns no pixels. Its label names the counts, so
+  colour is never the only signal.
+- **The "Work in" chip appears only in a linked worktree.** At the repository's main
+  checkout the location is "Local" — the default — so the chip stays away. In a worktree it
+  names a non-default location and is the way back. See `the_work_in_chip_is_absent_at_the_main_checkout`.
+- Workspace and branch chips yield before the row can crowd; the context indicator holds
+  the right edge.
 
 ### Context Panes
 
@@ -472,6 +525,13 @@ Minimum expectations:
 - Diff navigation.
 - Menu dismissal with Escape.
 - Standard text editing shortcuts.
+
+Every control on the composer row is a `div` with a mouse handler, not a tab stop, so its
+only routes are its chord and the command palette. A chip whose command has neither is a
+setting a keyboard-only user cannot change at all — `composer_controls_are_reachable_without_a_pointer`
+enforces this for the agent controls (model, thinking, workflow mode, access mode).
+When a chord is not available, a palette-only command is the whole fix: `command()`
+registers no keymap row, so nothing has to be invented to give a chip a keyboard path.
 
 Do not invent custom shortcuts where standard macOS or Windows behavior already exists.
 
@@ -615,8 +675,22 @@ The composer is a primary work surface.
 - Commands and file mentions remain content tokens.
 - Primary submit/stop controls remain discoverable.
 - Model, thinking effort, access mode, and workflow mode should be available without
-  turning the composer into a control dashboard.
-- Advanced controls belong behind contextual disclosure when they are not needed.
+  turning the composer into a control dashboard. Four chips is the ceiling at rest, and
+  each one carries a rule for when it is not on the row at all:
+  - **Access mode** shows its name only when it is *not* `AccessMode::default()` (Full
+    access). At the default the chip keeps the glyph alone and names the mode on hover:
+    the label is the warning, and the default is not a warning. The rule reads the mode
+    and never the open picker, so opening a picker cannot resize the row.
+  - **Thinking effort** is absent unless the active model reports a ladder with a choice
+    in it. `can_choose_thinking` (`available_thinking_levels.len() > 1`) is the single
+    predicate behind the chip, the ⌘T shortcut, and the palette entry, so the three can
+    never disagree about whether the picker has options.
+  - **Workflow mode** and **model** stay on the row in every state; both are the live
+    state of the run.
+  - **Steer** appears only while a run is in flight with something to send.
+- Advanced controls belong behind contextual disclosure when they are not needed. A
+  control that disappears keeps a keyboard or palette path — add that path before hiding
+  the control, not after.
 
 ## Explorer and File UX
 
@@ -868,7 +942,7 @@ performance, and visual restraint make long agent sessions feel natural.
 
 ### Do:
 - **Do** read every color, size, and radius from `theme::get(cx)`; add a role to
-  `Palette` when a new semantic need appears so all forty-three palettes stay legible.
+  `Palette` when a new semantic need appears so all forty-four palettes stay legible.
 - **Do** use hairlines and whitespace to separate sections; reserve rounded bordered
   surfaces for objects that are conceptually singular (composer, metric board, popover).
 - **Do** keep controls at 28px (compact) / 34px (primary) so a 900px-tall window shows
@@ -887,3 +961,10 @@ performance, and visual restraint make long agent sessions feel natural.
   (hover, expand, selection, chart re-scale).
 - **Don't** show a metric the underlying data cannot support — no invented latency,
   cost, or retry counts.
+- **Don't** ship a chip that appears in every state "just in case". Give it a rule for
+  when it is absent, and make that rule read the state the chip describes rather than a
+  neighbouring control's open state.
+- **Don't** give a control a permanent row for its own default. The access chip drops its
+  label at Full access, the "Work in" chip is absent at the main checkout, and the MCP
+  chip is absent while every server is connected — the default needs no announcement, and
+  the row it frees is paid back on every frame.

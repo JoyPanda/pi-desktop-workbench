@@ -329,7 +329,7 @@ impl OrbitApp {
             terminal_visible: self.terminal_panel.read(cx).is_open(),
             project_panel_visible: self.project_panel.read(cx).is_open(),
             can_choose_model: !self.available_models.is_empty() && !running,
-            can_choose_thinking: !self.available_thinking_levels.is_empty() && !running,
+            can_choose_thinking: self.can_choose_thinking() && !running,
             mcp_servers: self
                 .mcp
                 .servers()
@@ -457,6 +457,13 @@ impl OrbitApp {
             CommandId::DeleteSession => self.arm_active_session_delete(window, cx),
             CommandId::ChooseModel => self.toggle_picker(PickerKind::Model, window, cx),
             CommandId::ChooseThinking => self.toggle_picker(PickerKind::Thinking, window, cx),
+            // The guard policy has no chord, so the palette is its keyboard
+            // path; the composer chip is the pointer one. Opening the menu
+            // moves focus to it, so ↑/↓/Enter/Escape take over from here.
+            CommandId::ChooseAccess => self.toggle_access_menu(window, cx),
+            // Same shape: the scope chip is the pointer path, the palette the
+            // keyboard one.
+            CommandId::ChooseWorkflowMode => self.toggle_workflow_menu(window, cx),
             CommandId::AbortRun => self.on_abort(&crate::AbortRun, window, cx),
             CommandId::ToggleCommandPalette => {
                 self.on_toggle_command_palette(&crate::ToggleCommandPalette, window, cx)

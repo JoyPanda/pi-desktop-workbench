@@ -57,7 +57,8 @@ fn placeholder_prepends_missing_current_session() {
 fn placeholder_falls_back_to_the_first_message_as_title() {
     // pi has not named the session yet and no explicit rename exists: the
     // first prompt becomes the title, and the same message fills the preview
-    // line so the row keeps its two-line shape.
+    // field. Both carry the data; the row paints one line, because a preview
+    // that only continues the title is not worth a second one.
     let fresh = PathBuf::from("/store/new.jsonl");
     let rows = sessions_with_placeholder(
         &[],

@@ -16,11 +16,25 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=ORBIT_UPDATE_PUBLIC_KEY");
     track_locales();
+    track_assets();
 
     let key = public_key();
     println!("cargo:rustc-env=ORBIT_UPDATE_PUBLIC_KEY={key}");
 
     embed_windows_resources();
+}
+
+/// Make an added or edited asset rebuild the binary.
+///
+/// `include_dir!` reads `assets/` at compile time, and Cargo has no idea the
+/// directory is an input: without this, dropping in a new icon and rebuilding
+/// silently keeps the old set, so a path that resolves in a fresh clone does not
+/// resolve here (and the reverse). One directory-level dependency covers
+/// `dev-assets/` too — it is `include_dir!`-ed the same way on debug macOS
+/// builds.
+fn track_assets() {
+    println!("cargo:rerun-if-changed=assets");
+    println!("cargo:rerun-if-changed=dev-assets");
 }
 
 /// Make translation edits rebuild the binary.

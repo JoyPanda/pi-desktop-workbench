@@ -391,6 +391,10 @@ pub struct OrbitApp {
     /// index, so it survives filtering. `<Enter>` picks it; the list keeps
     /// it in view.
     settings_select_highlight: Option<usize>,
+    /// Theme dropdown only: whether the user asked for the whole palette
+    /// catalog instead of the curated set. Reset when Settings opens, so every
+    /// visit starts from the short list.
+    settings_themes_expanded: bool,
     /// Scroll handle for the settings dropdown's option list.
     settings_select_scroll: UniformListScrollHandle,
     /// Settings → Report a bug: the issue title.
@@ -1521,6 +1525,7 @@ impl OrbitApp {
             settings_search: settings_search.clone(),
             _settings_search_sub: settings_search_sub,
             settings_select_highlight: None,
+            settings_themes_expanded: false,
             settings_select_scroll: UniformListScrollHandle::new(),
             bug_report_title,
             bug_report_what,
@@ -2957,6 +2962,8 @@ mod sidepane_full_width_tests;
 mod titlebar_layout_tests;
 #[cfg(test)]
 mod worktree_howto_tests;
+#[cfg(test)]
+mod worktree_chip_tests;
 
 // `icon` and friends are part of the crate-wide UI kit; keep their original
 // `crate::app::…` paths stable for the other modules that import them.

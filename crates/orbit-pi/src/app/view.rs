@@ -1477,7 +1477,7 @@ impl OrbitApp {
             .when(!compact, |row| row.child(self.workflow_chip(cx)))
             .child(div().flex_1())
             .child(self.model_chip(compact, cx))
-            .child(self.thinking_chip(cx))
+            .children(self.thinking_chip(cx))
             .children(self.steer_button(cx))
             .child(self.send_button(cx))
     }
@@ -1487,6 +1487,17 @@ impl OrbitApp {
     /// hovered/open, matching the model chip.
     pub(super) fn access_chip(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let theme = *theme::get(cx);
+        // Full access is the default, so its name is not news: the chip keeps the
+        // glyph alone and names the mode on hover instead. A tightened mode
+        // (Supervised, Auto-accept edits) is a deliberate departure from the
+        // default, so that one keeps its label — there the label is the warning,
+        // and it should be readable without hovering.
+        //
+        // The rule reads the mode only, never the open menu: a chip that grew a
+        // label on click would shove the workflow chip sideways under the
+        // pointer, and the open picker already names the active mode.
+        let label = self.access_mode.label();
+        let terse = self.access_mode == AccessMode::default();
         div()
             .flex()
             .flex_col()
@@ -1494,11 +1505,13 @@ impl OrbitApp {
             .children(self.access_popup(cx))
             .child(
                 button_frame(div().id("access-chip"), &theme, ButtonSize::Default)
+                    .debug_selector(|| "access-chip".to_string())
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.overlay))
                     .when(self.access_menu_open, |chip| {
                         chip.bg(theme.active).text_color(theme.active_fg)
                     })
+                    .tip(label.clone())
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(Self::on_access_trigger_click),
@@ -1508,21 +1521,24 @@ impl OrbitApp {
                         ButtonSize::Default.icon_size().px(&theme),
                         theme.text_3,
                     ))
-                    .child(
-                        div()
-                            .text_color(if self.access_menu_open {
-                                theme.active_fg
-                            } else {
-                                theme.text_2
-                            })
-                            .child(self.access_mode.label()),
-                    )
-                    .child(Self::chip_caret(
-                        self.access_menu_open,
-                        theme.active_fg,
-                        "access-caret-turn",
-                        cx,
-                    )),
+                    .when(!terse, |chip| {
+                        chip.child(
+                            div()
+                                .debug_selector(|| "access-chip-label".to_string())
+                                .text_color(if self.access_menu_open {
+                                    theme.active_fg
+                                } else {
+                                    theme.text_2
+                                })
+                                .child(label),
+                        )
+                        .child(Self::chip_caret(
+                            self.access_menu_open,
+                            theme.active_fg,
+                            "access-caret-turn",
+                            cx,
+                        ))
+                    }),
             )
     }
 
@@ -2191,49 +2207,62 @@ impl OrbitApp {
 
     /// The thinking-level chip: level icon + reasoning level + caret. Ghost
     /// style, same hierarchy as the model chip.
-    pub(super) fn thinking_chip(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
+    ///
+    /// Absent when the active model offers nothing to pick. pi reports `["off"]`
+    /// for a model without reasoning, and an empty list before the levels have
+    /// arrived, so a chip there would advertise a setting that cannot move. It
+    /// appears with the first real ladder, and ⌘T plus the palette's Choose
+    /// Thinking Level keep the picker reachable whenever it has options.
+    pub(super) fn thinking_chip(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        if !self.can_choose_thinking() {
+            return None;
+        }
         let theme = *theme::get(cx);
         // A run in flight dims the chip and swallows clicks until it settles.
         let disabled = self.is_running();
         let open = !disabled && self.picker_is_open(PickerKind::Thinking);
-        div()
-            .flex()
-            .flex_col()
-            .items_start()
-            .children(self.chip_popup(PickerKind::Thinking))
-            .child(
-                button_frame(div().id("thinking-chip"), &theme, ButtonSize::Default)
-                    .when(!disabled, |chip| {
-                        chip.cursor_pointer()
-                            .hover(|s| s.bg(theme.overlay))
-                            .when(open, |chip| chip.bg(theme.active))
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(Self::on_thinking_trigger_click),
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .items_start()
+                .children(self.chip_popup(PickerKind::Thinking))
+                .child(
+                    button_frame(div().id("thinking-chip"), &theme, ButtonSize::Default)
+                        .debug_selector(|| "thinking-chip".to_string())
+                        .when(!disabled, |chip| {
+                            chip.cursor_pointer()
+                                .hover(|s| s.bg(theme.overlay))
+                                .when(open, |chip| chip.bg(theme.active))
+                                .on_mouse_up(
+                                    MouseButton::Left,
+                                    cx.listener(Self::on_thinking_trigger_click),
+                                )
+                        })
+                        .when(disabled, |chip| chip.cursor_not_allowed().opacity(0.5))
+                        .tip(commands::tooltip(CommandId::ChooseThinking, false))
+                        .child({
+                            let (path, _) = thinking_icon(&self.thinking_label, &theme);
+                            icon(
+                                path,
+                                ButtonSize::Default.icon_size().px(&theme),
+                                theme.text_3,
                             )
-                    })
-                    .when(disabled, |chip| chip.cursor_not_allowed().opacity(0.5))
-                    .tip(commands::tooltip(CommandId::ChooseThinking, false))
-                    .child({
-                        let (path, _) = thinking_icon(&self.thinking_label, &theme);
-                        icon(
-                            path,
-                            ButtonSize::Default.icon_size().px(&theme),
-                            theme.text_3,
+                        })
+                        .child(
+                            div()
+                                .text_color(if open { theme.active_fg } else { theme.text_2 })
+                                .child(thinking_display(&self.thinking_label)),
                         )
-                    })
-                    .child(
-                        div()
-                            .text_color(if open { theme.active_fg } else { theme.text_2 })
-                            .child(thinking_display(&self.thinking_label)),
-                    )
-                    .child(Self::chip_caret(
-                        open,
-                        theme.active_fg,
-                        "thinking-caret-turn",
-                        cx,
-                    )),
-            )
+                        .child(Self::chip_caret(
+                            open,
+                            theme.active_fg,
+                            "thinking-caret-turn",
+                            cx,
+                        )),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The new-task backdrop layer: the configured dithered image, or the
@@ -3108,14 +3137,23 @@ impl OrbitApp {
                                         theme.text_3,
                                     ))
                                     .child(branch.name.clone())
-                                    .children(branch.ahead_behind.map(|(ahead, behind)| {
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(DynamicSpacing::Base06.px(&theme))
-                                            .child(format!("↑{ahead}"))
-                                            .child(format!("↓{behind}"))
-                                    })),
+                                    .children(
+                                        branch
+                                            .ahead_behind
+                                            // `↑0 ↓0` is a row of arrows that
+                                            // says nothing; the counts appear
+                                            // when there is something to push
+                                            // or pull.
+                                            .filter(|(ahead, behind)| *ahead > 0 || *behind > 0)
+                                            .map(|(ahead, behind)| {
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap(DynamicSpacing::Base06.px(&theme))
+                                                    .child(format!("↑{ahead}"))
+                                                    .child(format!("↓{behind}"))
+                                            }),
+                                    ),
                             )
                             .children(self.branch_picker_popup()),
                     )
@@ -3139,7 +3177,12 @@ impl OrbitApp {
                             .child(self.status.clone())
                     }),
             )
-            .child(self.composer_send_hints(cx))
+            // While a run is in flight the hints carry the one thing that is
+            // not obvious from the composer: which chord steers the live turn
+            // and which queues a follow-up. Idle they only restate the send
+            // button a few pixels above, so they stay out of the chrome until
+            // there is something to teach.
+            .children(self.is_running().then(|| self.composer_send_hints(cx)))
             .child(
                 div()
                     .debug_selector(|| "composer-context-indicator".to_string())
@@ -3381,10 +3424,11 @@ impl OrbitApp {
 
     /// The top bar's overflow menu: one "…" control holding the surfaces that
     /// no longer earn a permanent chip — Session details, Explorer, the
-    /// Terminal, and the Git page. It keeps the bar to the controls that carry
-    /// live state (quota, open-in, Review, this), with the rest one click away
-    /// and still on their shortcuts. Session details' popover is mounted here
-    /// so it keeps its top-right anchor now that its info chip is gone.
+    /// Terminal, the Git page, and Worktrees. It keeps the bar to the controls
+    /// that carry live state (quota, open-in, Review, this), with the rest one
+    /// click away and still on their shortcuts. Session details' popover is
+    /// mounted here so it keeps its top-right anchor now that its info chip is
+    /// gone.
     pub(super) fn render_header_more(
         &self,
         theme: Theme,
@@ -3484,6 +3528,22 @@ impl OrbitApp {
                     } else {
                         this.open_git(cx);
                     }
+                }),
+            ))
+            // Worktrees is a surface, not live state, so it belongs here rather
+            // than in the status row — which is why the "Work in" chip can stay
+            // out of the way at the main checkout. The row keeps the registry's
+            // icon and title, so the menu and the palette cannot drift.
+            .child(header_menu_row(
+                "header-more-worktrees",
+                "icons/branch.svg",
+                commands::title(CommandId::OpenWorktrees, false),
+                commands::spec(CommandId::OpenWorktrees).shortcut(),
+                self.worktrees_open,
+                theme,
+                cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                    this.header_more_open = false;
+                    this.on_open_worktrees(&crate::OpenWorktrees, window, cx);
                 }),
             ));
         Some(

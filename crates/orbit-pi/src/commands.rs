@@ -37,6 +37,14 @@ pub enum CommandId {
     FocusComposer,
     ChooseModel,
     ChooseThinking,
+    /// Palette-only: the composer chip is the pointer path to the guard policy,
+    /// and this is the keyboard one. It deliberately has no chord — see
+    /// [`action_binding`].
+    ChooseAccess,
+    /// Palette-only, same reason as [`Self::ChooseAccess`]: the workflow chip is
+    /// a plain div with a mouse handler, so without this the session's scope
+    /// could not be changed from the keyboard at all.
+    ChooseWorkflowMode,
     AbortRun,
     // Navigation
     ToggleCommandPalette,
@@ -336,6 +344,25 @@ pub static COMMANDS: &[CommandSpec] = &[
             "choose change select thinking level reasoning effort",
         ),
         shortcuts::CHOOSE_THINKING,
+    ),
+    // No chord, deliberately: the three agent-control chips spend the
+    // available ones (⌘⇧M, ⌘⇧T), and a guard policy that decides whether the
+    // agent may run a command without asking is worth reaching from the
+    // keyboard anyway. Palette-only is enough, and the chip stays the pointer
+    // path — including when it is showing its glyph alone at the default.
+    command(
+        CommandId::ChooseAccess,
+        Agent,
+        "icons/lock.svg",
+        "command_palette.choose_access",
+        "access mode permission supervised auto accept edits full access guard approve tools",
+    ),
+    command(
+        CommandId::ChooseWorkflowMode,
+        Agent,
+        "icons/task.svg",
+        "command_palette.choose_workflow_mode",
+        "workflow mode plan build ask scope read only changes",
     ),
     with_chord(
         command(
@@ -1087,6 +1114,8 @@ fn action_binding(binding: &Binding) -> Option<KeyBinding> {
         | CommandId::CopySessionId
         | CommandId::DeleteSession
         | CommandId::FocusComposer
+        | CommandId::ChooseAccess
+        | CommandId::ChooseWorkflowMode
         | CommandId::ToggleSidePanel
         | CommandId::OpenMcpSettings
         | CommandId::OpenWorktrees
@@ -1105,6 +1134,48 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// Every control on the composer row is a plain `div` with a mouse handler,
+    /// so a chip whose command has neither a chord nor a palette row is a
+    /// setting a keyboard-only user cannot change at all. PRODUCT.md promises
+    /// every primary workflow is possible without a mouse, and the guard policy
+    /// is the one that decides whether the agent may run a command unasked.
+    #[test]
+    fn composer_controls_are_reachable_without_a_pointer() {
+        for id in [
+            CommandId::ChooseModel,
+            CommandId::ChooseThinking,
+            CommandId::ChooseWorkflowMode,
+            CommandId::ChooseAccess,
+        ] {
+            let spec = spec(id);
+            assert!(
+                spec.chord.is_some() || spec.palette,
+                "{id:?} has a composer chip but no chord and no palette row"
+            );
+        }
+    }
+
+    /// GPUI resolves an icon path through the embedded asset source, and a path
+    /// it cannot find is a failure the first time the row is drawn — not a
+    /// missing picture. A typo here costs a user their palette, so the whole
+    /// registry is checked against the assets that actually ship.
+    #[test]
+    fn every_command_icon_is_embedded() {
+        for spec in COMMANDS {
+            let bytes = <crate::assets::Assets as gpui::AssetSource>::load(
+                &crate::assets::Assets,
+                spec.icon,
+            )
+            .expect("asset source reads");
+            assert!(
+                bytes.is_some(),
+                "command {:?} points at a missing icon: {}",
+                spec.id,
+                spec.icon
+            );
+        }
+    }
 
     #[test]
     fn every_binding_has_a_spec() {

@@ -266,13 +266,8 @@ const SETTINGS_SEARCH_INDEX: &[(SettingsSection, &str, &str)] = &[
     ),
     (
         SettingsSection::Appearance,
-        "settings.light_theme",
-        "theme light palette color",
-    ),
-    (
-        SettingsSection::Appearance,
-        "settings.dark_theme",
-        "theme dark palette color",
+        "settings.theme",
+        "theme palette color light dark editor",
     ),
     (
         SettingsSection::Appearance,
@@ -5903,18 +5898,17 @@ impl OrbitApp {
             None,
             Some(self.appearance_mode_control(theme, this.clone(), cx)),
         ));
-        for (mode, label) in [
-            (ThemeMode::Light, tr!("settings.light_theme")),
-            (ThemeMode::Dark, tr!("settings.dark_theme")),
-        ] {
-            theme_rows.push(self.setting_row(
-                theme,
-                &label,
-                None,
-                None,
-                Some(self.theme_select(mode, theme, this.clone(), cx)),
-            ));
-        }
+        // One Theme control, not one per appearance mode. It shows and edits
+        // the palette currently in effect, so the pair of rows that made the
+        // user pick a mode before picking a colour is gone: flip Appearance to
+        // edit the other mode's palette, and each is remembered separately.
+        theme_rows.push(self.setting_row(
+            theme,
+            &tr!("settings.theme"),
+            None,
+            None,
+            Some(self.theme_select(theme.mode, theme, this.clone(), cx)),
+        ));
         theme_rows.push(self.setting_row(
             theme,
             &tr!("settings.background_image"),
@@ -6588,7 +6582,21 @@ impl OrbitApp {
             .into_any_element()
     }
 
-    /// Each appearance remembers its own choice and lists only matching palettes.
+    /// The palettes the Theme dropdown lists, in the order it paints them:
+    /// the curated catalog (plus the palette in effect) when collapsed, the
+    /// whole catalog when the user asked for all of them. The disclosure row
+    /// is not part of this list — its index is `theme_catalog(..).len()`.
+    ///
+    /// Both the label builder and the click handler read this, so a row index
+    /// always resolves to the palette it painted.
+    pub(super) fn theme_catalog(&self, mode: ThemeMode, cx: &Context<Self>) -> Vec<theme::ThemeId> {
+        let configured = theme::appearance_prefs(cx).theme(mode);
+        theme::theme_options(mode, self.settings_themes_expanded, configured)
+    }
+
+    /// Appearance → Theme. `mode` is the resolved appearance, so the row shows
+    /// and edits the palette currently in effect and each mode's choice is
+    /// remembered separately.
     pub(super) fn theme_select(
         &self,
         mode: ThemeMode,
@@ -6596,17 +6604,25 @@ impl OrbitApp {
         this: Entity<OrbitApp>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let all: Vec<_> = theme::themes_for(mode).collect();
+        let catalog = self.theme_catalog(mode, cx);
         let configured = theme::appearance_prefs(cx).theme(mode);
-        let selected = all.iter().position(|id| *id == configured).unwrap_or(0);
+        let selected = catalog.iter().position(|id| *id == configured).unwrap_or(0);
+        // The trailing row reveals the rest of the catalog, or folds it back
+        // away. It is a disclosure, not a palette, so it carries no value.
+        let mut options: Vec<String> = catalog.iter().map(|id| id.label().to_string()).collect();
+        options.push(
+            if self.settings_themes_expanded {
+                tr!("settings.fewer_themes")
+            } else {
+                tr!("settings.all_themes")
+            }
+            .to_string(),
+        );
         self.select_control(
-            match mode {
-                ThemeMode::Light => "light-theme-select",
-                ThemeMode::Dark => "dark-theme-select",
-            },
+            "theme-select",
             SettingsSelect::Theme(mode),
             configured.label().to_string(),
-            all.iter().map(|id| id.label().to_string()).collect(),
+            options,
             selected,
             theme,
             this,
@@ -6943,8 +6959,9 @@ impl OrbitApp {
                                     })
                                     .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                                         this.update(cx, |app, cx| {
-                                            app.apply_settings_select(kind, orig_ix, cx);
-                                            app.settings_select = None;
+                                            if app.apply_settings_select(kind, orig_ix, cx) {
+                                                app.settings_select = None;
+                                            }
                                             cx.notify();
                                         });
                                     }),
@@ -7079,8 +7096,11 @@ impl OrbitApp {
         let Some(ix) = ix else {
             return;
         };
-        self.apply_settings_select(kind, ix, cx);
-        self.settings_select = None;
+        // A disclosure row ("All themes…") only reshapes the list, so the
+        // dropdown stays open on what it just revealed.
+        if self.apply_settings_select(kind, ix, cx) {
+            self.settings_select = None;
+        }
         cx.notify();
     }
 
@@ -7102,18 +7122,38 @@ impl OrbitApp {
         kind: SettingsSelect,
         ix: usize,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         match kind {
             SettingsSelect::Theme(mode) => {
-                let Some(id) = theme::themes_for(mode).nth(ix) else {
-                    return;
+                let catalog = self.theme_catalog(mode, cx);
+                // The row after the last palette is the disclosure: it reveals
+                // the rest of the catalog instead of choosing, so the dropdown
+                // stays open on the longer list the user just asked for.
+                if ix >= catalog.len() {
+                    self.settings_themes_expanded = !self.settings_themes_expanded;
+                    // Put the cursor back on the palette in effect. Left where it
+                    // was, it would land on the first newly-revealed theme and
+                    // wash that row as if it had been chosen.
+                    let expanded = self.theme_catalog(mode, cx);
+                    let configured = theme::appearance_prefs(cx).theme(mode);
+                    let cursor = expanded
+                        .iter()
+                        .position(|id| *id == configured)
+                        .unwrap_or(0);
+                    self.settings_select_highlight = Some(cursor);
+                    self.settings_select_scroll
+                        .scroll_to_item(cursor, ScrollStrategy::Center);
+                    return false;
+                }
+                let Some(id) = catalog.get(ix).copied() else {
+                    return true;
                 };
                 let mut prefs = theme::appearance_prefs(cx);
                 prefs.set_theme(mode, id);
                 if let Err(error) = theme::set_appearance_prefs(cx, prefs) {
                     self.toast_error(tr!("settings.appearance_save_failed", error = error));
                 }
-                return;
+                return true;
             }
             SettingsSelect::UiFontFamily | SettingsSelect::CodeFontFamily => {
                 use crate::theme::{CODE_FONTS, UI_FONTS};
@@ -7123,7 +7163,7 @@ impl OrbitApp {
                     _ => unreachable!(),
                 };
                 let Some(choice) = choices.get(ix) else {
-                    return;
+                    return true;
                 };
                 let mut prefs = theme::font_prefs();
                 match kind {
@@ -7132,7 +7172,7 @@ impl OrbitApp {
                     _ => unreachable!(),
                 }
                 theme::set_font_prefs(prefs);
-                return;
+                return true;
             }
             SettingsSelect::TitleModel => {
                 let model = if ix == 0 {
@@ -7148,7 +7188,7 @@ impl OrbitApp {
                 self.auto_title.model = model;
                 self.auto_title.persist();
                 cx.notify();
-                return;
+                return true;
             }
             SettingsSelect::DefaultModel => {
                 let model = if ix == 0 {
@@ -7173,7 +7213,7 @@ impl OrbitApp {
                 };
                 self.set_default_model(slot);
                 cx.notify();
-                return;
+                return true;
             }
             SettingsSelect::DefaultThinking => {
                 let level = if ix == 0 {
@@ -7187,14 +7227,14 @@ impl OrbitApp {
                 slot.thinking = level;
                 self.set_default_model(slot);
                 cx.notify();
-                return;
+                return true;
             }
             SettingsSelect::ActiveModel => {
                 if let Some(model) = self.available_models.get(ix) {
                     let (id, provider) = (model.id.clone(), model.provider.clone());
                     self.set_model(id, provider, cx);
                 }
-                return;
+                return true;
             }
             SettingsSelect::ModelProvider => {
                 // Index 0 is `All providers`; the rest follow the catalog's
@@ -7205,7 +7245,7 @@ impl OrbitApp {
                     self.model_providers().get(ix - 1).cloned()
                 };
                 cx.notify();
-                return;
+                return true;
             }
             SettingsSelect::BackdropCell | SettingsSelect::BackdropFade => {
                 let mut tuning = crate::dither::tuning();
@@ -7229,7 +7269,7 @@ impl OrbitApp {
                 // this frame's preview and the next new-task paint both hit a
                 // warm cache instead of stalling on the first draw.
                 crate::dither::background();
-                return;
+                return true;
             }
             SettingsSelect::RetentionMode => {
                 self.retention.mode = match ix {
@@ -7238,7 +7278,7 @@ impl OrbitApp {
                 };
                 self.retention.persist();
                 cx.notify();
-                return;
+                return true;
             }
             SettingsSelect::RetentionDays => {
                 if let Some(days) = crate::session_retention::DAY_PRESETS.get(ix) {
@@ -7246,7 +7286,7 @@ impl OrbitApp {
                     self.retention.persist();
                 }
                 cx.notify();
-                return;
+                return true;
             }
             _ => {}
         }
@@ -7282,6 +7322,7 @@ impl OrbitApp {
             | SettingsSelect::RetentionDays => unreachable!(),
         }
         theme::set_ui_prefs(cx, ui);
+        true
     }
 }
 
@@ -7290,6 +7331,9 @@ impl OrbitApp {
     pub(super) fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.refresh_updater(cx);
         self.settings_open = true;
+        // Every visit starts from the curated theme list, never from the
+        // expanded catalog a previous visit left behind.
+        self.settings_themes_expanded = false;
         self.set_settings_section(SettingsSection::General, cx);
     }
 
@@ -8243,6 +8287,80 @@ mod settings_select_tests {
     fn stepping_an_empty_list_stays_put() {
         assert_eq!(stepped_visible_position(&[], Some(0), 1), None);
         assert_eq!(stepped_visible_position(&[], None, -1), None);
+    }
+}
+
+/// The Theme dropdown's option list is the single ordering both the label
+/// builder and the click resolver read, so a row index always resolves to the
+/// palette it painted — and the disclosure row is the only index past the last
+/// palette. Preferences are set in memory here; the real setter writes the
+/// user's `~/.orbit-pi/theme` and has no business running from a test.
+#[cfg(test)]
+mod theme_catalog_tests {
+    use super::*;
+
+    fn test_app(cx: &mut gpui::TestAppContext) -> Entity<OrbitApp> {
+        cx.update(|cx| {
+            cx.set_global(Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::AppearancePrefs::default());
+            cx.new(OrbitApp::new)
+        })
+    }
+
+    fn choose_dark_theme(cx: &mut gpui::TestAppContext, id: theme::ThemeId) {
+        cx.update(|cx| {
+            let mut prefs = theme::appearance_prefs(cx);
+            prefs.set_theme(ThemeMode::Dark, id);
+            cx.set_global(prefs);
+        });
+    }
+
+    #[gpui::test]
+    fn collapsed_catalog_is_the_curated_set(cx: &mut gpui::TestAppContext) {
+        let app = test_app(cx);
+        let cx = cx.add_empty_window();
+        choose_dark_theme(cx, theme::ThemeId::Orbit);
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let catalog = app.theme_catalog(ThemeMode::Dark, cx);
+                assert_eq!(catalog, theme::ThemeId::FEATURED[..3].to_vec());
+                // The disclosure row sits at `catalog.len()`, one past the
+                // last palette, so every palette index stays a palette.
+                assert_eq!(catalog.len(), 3);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn an_unfeatured_choice_is_appended_not_hidden(cx: &mut gpui::TestAppContext) {
+        let app = test_app(cx);
+        let cx = cx.add_empty_window();
+        choose_dark_theme(cx, theme::ThemeId::Dracula);
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let catalog = app.theme_catalog(ThemeMode::Dark, cx);
+                assert_eq!(catalog.len(), 4);
+                assert_eq!(catalog.last(), Some(&theme::ThemeId::Dracula));
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn asking_for_all_themes_appends_without_reordering(cx: &mut gpui::TestAppContext) {
+        let app = test_app(cx);
+        let cx = cx.add_empty_window();
+        choose_dark_theme(cx, theme::ThemeId::Orbit);
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                let short = app.theme_catalog(ThemeMode::Dark, cx);
+                app.settings_themes_expanded = true;
+                let all = app.theme_catalog(ThemeMode::Dark, cx);
+                assert!(all.len() > short.len());
+                assert_eq!(all[..short.len()], short[..]);
+                assert!(all.contains(&theme::ThemeId::Dracula));
+                assert!(all.iter().all(|id| id.appearance() == ThemeMode::Dark));
+            });
+        });
     }
 }
 

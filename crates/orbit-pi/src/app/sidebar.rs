@@ -128,6 +128,43 @@ pub(crate) fn sessions_with_placeholder(
     rows
 }
 
+/// Whether a session row's second line says anything its title does not.
+///
+/// pi titles a session from its first message, so on most rows the title *is*
+/// that message cut short and the preview is the same sentence carried on — a
+/// second line the eye reads and learns nothing from. The preview earns its
+/// place only when it diverges, which is the case this keeps: a session pi named
+/// itself ("Fix login bug") over the message it came from.
+///
+/// Compared on words rather than bytes, so the `…` a capped title ends with, its
+/// collapsed whitespace, or its trailing punctuation cannot make one sentence
+/// look like two.
+pub(crate) fn preview_adds_information(title: &str, preview: &str) -> bool {
+    let preview_words: Vec<&str> = preview.split_whitespace().collect();
+    if preview_words.is_empty() {
+        return false;
+    }
+    let title_words: Vec<&str> = title.split_whitespace().collect();
+    // A session with no title yet has nothing to repeat, so anything it has is
+    // news; only a real prefix means the preview is the title continued.
+    title_words.is_empty() || !continues_the_title(&title_words, &preview_words)
+}
+
+/// Whether `preview` picks up exactly where `title` left off. `cap_chars` cuts
+/// on the character, not the word, so the title's last word is often a fragment
+/// of the preview's — that fragment, and the `…` that marks it, belong to the cap
+/// rather than to the sentence.
+fn continues_the_title(title: &[&str], preview: &[&str]) -> bool {
+    let Some((last, head)) = title.split_last() else {
+        return false;
+    };
+    if preview.len() < title.len() || head.iter().zip(preview).any(|(a, b)| a != b) {
+        return false;
+    }
+    let last = last.trim_end_matches(['…', '.']);
+    last.is_empty() || preview[title.len() - 1].starts_with(last)
+}
+
 /// Build the grouped sidebar session list from Orbit's own project list. A
 /// workspace appears because the user added it, not because pi happens to
 /// have sessions there; sessions in unlisted folders are omitted entirely
@@ -687,14 +724,18 @@ pub(crate) fn render_side_row(
                         )
                         // Session count, pinned to the header's right edge.
                         // Small, muted metadata — legible beside the parent row
-                        // without competing with the name.
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_3)
-                                .child(format!("{count}")),
-                        ),
+                        // without competing with the name. A project with
+                        // nothing in it says so by having no rows under it;
+                        // a `0` here would only be a number doing no work.
+                        .when(*count > 0, |header| {
+                            header.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(TextSize::Small.px(&theme))
+                                    .text_color(theme.text_3)
+                                    .child(format!("{count}")),
+                            )
+                        }),
                 )
                 .into_any_element()
         }
@@ -847,9 +888,10 @@ pub(crate) fn render_side_row(
             // Indented under its workspace group so the list reads as a
             // tree. The open session takes the `active` fill with `active_fg`
             // ink — the same selected-destination grammar as the nav rows;
-            // row actions are revealed on hover. A unique first-message
-            // preview adds a second line; a title that already is the prompt
-            // stays one line.
+            // row actions are revealed on hover. A first-message preview adds
+            // a second line only when it says something the title does not
+            // ([`preview_adds_information`]); a title that is already the
+            // prompt stays one line.
             // Outer item carries the inter-row spacing (padding) and the click
             // handler; the inner card holds the background/hover so the gap
             // between cards stays clear. Padding (not margin) is used because
@@ -911,12 +953,14 @@ pub(crate) fn render_side_row(
                     card.hover(|s| s.bg(theme.bg_hover))
                 });
             // Text column: title + actions, then the first-message preview
-            // with the age. Every row with a message keeps the same two-line
-            // shape — even when the title repeats it — so the list scans
-            // evenly. Only a row without a message (a just-named session pi
-            // has not flushed) keeps the age on the title line.
+            // with the age. The title line is the row's anchor and is always
+            // there; the preview is an expansion on it, so a row whose preview
+            // is just the title continued drops to one line rather than
+            // spending a second line re-reading the same sentence. Rows are
+            // therefore one or two lines tall, and the age rides whichever
+            // line is last.
             let age = sessions::relative_time(session.modified);
-            let show_preview = !session.first_message.trim().is_empty();
+            let show_preview = preview_adds_information(&session.title, &session.first_message);
             // Flat list has no workspace headers — name the workspace on the
             // row instead. The glyph is the row's own status (open on the
             // active session, sync while running, archive when archived),
@@ -2703,5 +2747,58 @@ mod tests {
         assert_eq!(clamp_cursor(0, 0), None);
         assert_eq!(clamp_cursor(3, 2), Some(1));
         assert_eq!(clamp_cursor(1, 5), Some(1));
+    }
+
+    /// The row keeps its second line only when the preview diverges from the
+    /// title. pi's auto-title is the first message, so the repeat is the common
+    /// case, not the edge.
+    #[test]
+    fn a_preview_that_only_continues_the_title_is_not_worth_a_line() {
+        // pi's title is the message cut short: same sentence, nothing added.
+        assert!(!preview_adds_information(
+            "can you update the screenshot of the",
+            "can you update the screenshot of the app on the marketing page",
+        ));
+        // The placeholder case: title and preview are the same string.
+        assert!(!preview_adds_information(
+            "Explain the project structure.",
+            "Explain the project structure.",
+        ));
+        // A capped title ends with an ellipsis and the preview does not; that
+        // difference alone must not buy a second line.
+        assert!(!preview_adds_information(
+            "Fixing the OAuth redirect loop…",
+            "Fixing the OAuth redirect loop in the callback handler",
+        ));
+        // `cap_chars` cuts mid-word, so the title's last word is a fragment of
+        // the preview's. The fragment is the cap's, not the sentence's.
+        assert!(!preview_adds_information(
+            "can you update the screenshot of the ap…",
+            "can you update the screenshot of the app on the marketing page",
+        ));
+        // Collapsed whitespace and a newline are formatting, not content.
+        assert!(!preview_adds_information(
+            "Tidy the release notes",
+            "Tidy the   release\nnotes before tagging",
+        ));
+    }
+
+    #[test]
+    fn a_preview_that_says_something_new_keeps_its_line() {
+        // pi named the session itself: the message is new information.
+        assert!(preview_adds_information(
+            "Fix login bug",
+            "the oauth redirect is looping",
+        ));
+        // Sharing an opening word is not repeating a sentence.
+        assert!(preview_adds_information(
+            "Fix the login flow",
+            "The oauth redirect is looping in production",
+        ));
+        // No preview at all is nothing to show.
+        assert!(!preview_adds_information("Fix login bug", "   "));
+        assert!(!preview_adds_information("Fix login bug", ""));
+        // A session with no title yet has nothing to repeat.
+        assert!(preview_adds_information("", "anything at all"));
     }
 }

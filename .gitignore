@@ -32,3 +32,8 @@ orbit-update.pem
 *.pfx
 # Orbit worktrees (local only)
 .wt/
+
+# Design-tool state: critique archives and run snapshots are generated locally
+# and are specific to one machine's review history, like the editor directories
+# above. `git add -f` one if a particular archive is worth keeping.
+.impeccable/

@@ -136,11 +136,32 @@ impl AppearancePrefs {
     }
 }
 
-/// Both dropdowns use this ordering for rendering and applying their selection.
+/// Every palette of `mode` in [`ThemeId::ALL`] order: the full catalog, used
+/// by the partition test and by [`theme_options`] when the user asks for all
+/// themes.
 pub fn themes_for(mode: ThemeMode) -> impl Iterator<Item = ThemeId> {
     ThemeId::ALL
         .into_iter()
         .filter(move |id| id.appearance() == mode)
+}
+
+/// The palettes a theme dropdown offers for `mode`, in the order it paints
+/// them. Collapsed, that is the curated [`ThemeId::FEATURED`] set plus the
+/// palette actually in effect, so the checkmark always has a row to sit on and
+/// a saved editor theme is never invisible. Expanded appends the rest of the
+/// catalog after the curated block, so revealing never reorders the rows the
+/// user is already reading.
+///
+/// The `configured` palette is only appended when it belongs to `mode`; a
+/// caller passing the other mode's palette gets the curated set unchanged.
+pub fn theme_options(mode: ThemeMode, all: bool, configured: ThemeId) -> Vec<ThemeId> {
+    let mut options: Vec<ThemeId> = themes_for(mode).filter(|id| id.featured()).collect();
+    if all {
+        options.extend(themes_for(mode).filter(|id| !id.featured()));
+    } else if configured.appearance() == mode && !options.contains(&configured) {
+        options.push(configured);
+    }
+    options
 }
 
 pub fn appearance_prefs(cx: &App) -> AppearancePrefs {
@@ -345,6 +366,49 @@ mod tests {
         );
         assert_eq!(light.len() + dark.len(), ThemeId::ALL.len());
         assert!(dark.iter().all(|id| id.appearance() == ThemeMode::Dark));
+    }
+
+    #[test]
+    fn theme_options_keep_the_configured_palette_visible() {
+        // `FEATURED` is dark-first, so each mode is one contiguous slice of it.
+        let dark = theme_options(ThemeMode::Dark, false, ThemeId::Orbit);
+        assert_eq!(dark, ThemeId::FEATURED[..3].to_vec());
+        let light = theme_options(ThemeMode::Light, false, ThemeId::OrbitLight);
+        assert_eq!(light, ThemeId::FEATURED[3..].to_vec());
+        assert!(light.iter().all(|id| id.appearance() == ThemeMode::Light));
+    }
+
+    #[test]
+    fn theme_options_append_an_unfeatured_choice_instead_of_hiding_it() {
+        let collapsed = theme_options(ThemeMode::Dark, false, ThemeId::Dracula);
+        assert_eq!(collapsed.last(), Some(&ThemeId::Dracula));
+        assert_eq!(collapsed.len(), ThemeId::FEATURED.len() / 2 + 1);
+        // The other mode's palette never leaks into this list.
+        let other = theme_options(ThemeMode::Dark, false, ThemeId::NordLight);
+        assert!(!other.contains(&ThemeId::NordLight));
+    }
+
+    #[test]
+    fn theme_options_reach_every_theme_without_reordering_the_curated_block() {
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            let curated = theme_options(mode, false, ThemeId::Orbit);
+            let all = theme_options(mode, true, ThemeId::Orbit);
+            // Revealing more only ever appends: the first `curated.len()`
+            // rows are the same palettes in the same order.
+            assert_eq!(all[..curated.len()], curated[..]);
+            let mut catalog: Vec<_> = themes_for(mode).collect();
+            catalog.sort_by_key(|id| !id.featured());
+            assert_eq!(all, catalog);
+            assert!(all.iter().all(|id| id.appearance() == mode));
+        }
+    }
+
+    #[test]
+    fn every_curated_palette_loads() {
+        for id in ThemeId::FEATURED {
+            assert!(id.featured());
+            assert_eq!(ThemeId::parse(id.as_str()), Some(id));
+        }
     }
 
     #[gpui::test]

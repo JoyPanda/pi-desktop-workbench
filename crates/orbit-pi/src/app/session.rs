@@ -42,6 +42,16 @@ impl OrbitApp {
         self.busy || self.transcript.is_streaming()
     }
 
+    /// Whether the active model offers a thinking level to pick. pi answers
+    /// `["off"]` for a model without reasoning, and the list is empty until
+    /// `get_available_thinking_levels` replies, so neither case has a choice to
+    /// offer — one rule, read by the composer chip and the command palette
+    /// alike, so the chip and its shortcut can never disagree about whether the
+    /// picker has options.
+    pub(super) fn can_choose_thinking(&self) -> bool {
+        self.available_thinking_levels.len() > 1
+    }
+
     /// Whether New Task can reuse the active process in place with
     /// `new_session`: only when no turn is in flight and the process is
     /// alive. A run in flight must be parked so `new_session` cannot abort
