@@ -1865,7 +1865,7 @@ impl OrbitApp {
     /// notifications. Registered from `main` after the window exists;
     /// `observe_window_activation` invokes the callback once at
     /// registration, so the field starts truthful.
-    pub(super) fn watch_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn watch_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.window_active = window.is_window_active();
         self._window_activation = Some(cx.observe_window_activation(window, |app, window, _| {
             app.window_active = window.is_window_active();

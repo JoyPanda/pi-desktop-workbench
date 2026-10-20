@@ -70,6 +70,7 @@ mod http;
 mod i18n;
 mod issue_message;
 mod layout;
+mod main_window;
 mod mcp;
 mod mentions;
 mod message_scroller;
@@ -110,13 +111,7 @@ mod workspace_picker;
 mod worktree;
 mod worktree_setup;
 
-use std::time::Duration;
-
-use app::OrbitApp;
-use gpui::{
-    actions, prelude::*, px, size, App, Application, AsyncWindowContext, Bounds, Entity, Focusable,
-    KeyBinding, Menu, MenuItem, SystemMenuType, Timer, WindowBounds, WindowOptions,
-};
+use gpui::{actions, App, Application, KeyBinding, Menu, MenuItem, SystemMenuType};
 
 // Composer-scoped actions (bound in the `Composer` key context).
 actions!(
@@ -628,6 +623,9 @@ fn main() {
     if let Some(client) = http::avatar_client() {
         application = application.with_http_client(client);
     }
+    // The Dock's reopen request — a windowless app is asked to show one
+    // again — is answered from `main_window` alongside the window itself.
+    main_window::install_reopen_handler(&mut application);
     application.run(|cx: &mut App| {
         // Rename the process before the menu bar is built so macOS labels the
         // application menu "Orbit" instead of the executable (`orbit-pi`).
@@ -652,73 +650,10 @@ fn main() {
         assets::register_bundled_fonts(cx).expect("failed to register bundled fonts");
         app_icon::set_dock_icon();
 
-        // Open maximized: full width of the screen, filling the visible
-        // frame. The computed bounds are the
-        // restore size macOS returns to when the window is un-zoomed,
-        // sized relative to the display so it always fits even on
-        // small/scaled screens.
-        let (w, h) = match cx.primary_display().map(|d| d.bounds().size) {
-            Some(s) => (
-                (f32::from(s.width) * 0.85).min(1440.),
-                (f32::from(s.height) * 0.9).min(920.),
-            ),
-            None => (1240., 840.),
-        };
-        let restore_bounds = Bounds::centered(None, size(px(w), px(h)), cx);
-        let _window = cx
-            .open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Maximized(restore_bounds)),
-                    // Keep the window usable when shrunk: sidebar (min
-                    // 200px) + a readable transcript + the composer.
-                    window_min_size: Some(size(px(960.), px(640.))),
-                    titlebar: Some(platform::titlebar_options()),
-                    app_id: Some("dev.orbit.pi".into()),
-                    focus: true,
-                    ..Default::default()
-                },
-                |window, cx| {
-                    theme::watch_system_appearance(window, cx);
-                    let app: Entity<OrbitApp> = cx.new(OrbitApp::new);
-
-                    // Focus the composer so typing works immediately; track
-                    // window focus so background notifications know whether
-                    // the user is already looking at the transcript.
-                    app.update(cx, |app, cx| {
-                        app.watch_window_activation(window, cx);
-                        let handle = app.input.read(cx).focus_handle(cx);
-                        window.focus(&handle);
-                    });
-
-                    // Heartbeat: drain pi events into the UI. Idle at ~90 ms;
-                    // while a run streams, poll at ~60 Hz so streamed tokens
-                    // land smoothly instead of in visible 90 ms batches.
-                    let heartbeat = app.clone();
-                    window
-                        .spawn(cx, async move |cx: &mut AsyncWindowContext| {
-                            let mut delay = Duration::from_millis(90);
-                            loop {
-                                Timer::after(delay).await;
-                                let active = heartbeat
-                                    .update(cx, |app: &mut OrbitApp, cx| app.tick(cx))
-                                    .unwrap_or(false);
-                                delay = if active {
-                                    Duration::from_millis(16)
-                                } else {
-                                    Duration::from_millis(90)
-                                };
-                            }
-                        })
-                        .detach();
-
-                    // Detect installed editors/terminals for the header
-                    // "open in" control (off-thread; icons load once).
-                    app.update(cx, |app, cx| app.detect_open_in_apps(cx));
-
-                    app
-                },
-            )
-            .unwrap();
+        // `main_window` owns the one window and the shell it renders; the
+        // reopen handler registered above re-opens it from the Dock.
+        cx.set_global(main_window::Shell::default());
+        main_window::open(cx);
 
         // If this launch replaced an older build, tell the waiting helper the
         // new window is up so it can commit the swap instead of rolling back.

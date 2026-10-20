@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS: closing the window no longer strands the app. The Dock icon kept its
+  running dot but a click did nothing — the reopen request macOS sends to a
+  windowless app had no handler, so only a full quit brought a window back.
+  Clicking the Dock icon (or the app's Dock tile) now opens the window again,
+  on the session that was still open — the shell, the pi process behind it,
+  and any stream that kept running while the window was closed all survive the
+  close.
+
 ## [0.2.10] - 2026-10-16
 
 ### Changed
