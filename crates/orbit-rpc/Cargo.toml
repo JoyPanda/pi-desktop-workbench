@@ -1,6 +1,6 @@
 [package]
 name = "orbit-rpc"
-version = "0.2.10"
+version = "0.2.11"
 description = "Rust client for the pi CLI RPC protocol (pi --mode rpc)"
 edition.workspace = true
 license.workspace = true
