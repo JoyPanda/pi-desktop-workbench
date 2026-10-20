@@ -32,8 +32,8 @@ use std::{
 use base64::Engine as _;
 use gpui::{
     anchored, deferred, div, img, linear_color_stop, linear_gradient, list, point, prelude::*, px,
-    radians, relative, svg, uniform_list, AnchoredPositionMode, Animation, AnimationExt,
-    AnyElement, App, ClipboardItem, Context, Corner, CursorStyle, DragMoveEvent, ElementId, Entity,
+    radians, relative, uniform_list, AnchoredPositionMode, Animation, AnimationExt, AnyElement,
+    App, ClipboardItem, Context, Corner, CursorStyle, DragMoveEvent, ElementId, Entity,
     ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla, Image, ImageSource, IntoElement,
     ListAlignment, ListState, MouseButton, MouseDownEvent, MouseUpEvent, ObjectFit,
     PathPromptOptions, Pixels, Point, Render, Resource, ScrollStrategy, SharedString,
@@ -232,6 +232,18 @@ pub struct OrbitApp {
     /// rising edge opens the sessions sidebar, so a maximized review never
     /// strands the reader without a way to switch sessions.
     pane_full_last: bool,
+    /// Whether the new-task backdrop was on screen on the previous frame —
+    /// recorded by `render`, read by `tick`. It is the only surface whose
+    /// dithered field is alive, so the heartbeat only repaints for it here.
+    backdrop_live: bool,
+    /// When the backdrop's field started moving; `None` while it is off
+    /// screen. `tick` derives the phase from it, so the drift is measured in
+    /// wall-clock seconds rather than in heartbeat ticks (whose cadence changes
+    /// with the run state).
+    backdrop_clock: Option<Instant>,
+    /// The field's current phase, in seconds — read by the backdrop and frozen
+    /// by Reduce Motion.
+    backdrop_phase: f32,
     /// Keyboard cursor for the sessions sidebar: an index into the current
     /// sidebar rows. `None` until the sidebar takes keyboard focus (⌘⇧B);
     /// the row it names paints the focused surface in `render_side_row`.
@@ -431,14 +443,16 @@ pub struct OrbitApp {
     notification_auth: notifications::DesktopAuth,
     notification_auth_pending: bool,
     /// Whether this window is frontmost. Notifications are held while it is:
-    /// the transcript itself is the notification then.
+    /// the transcript itself is the notification then. False when no window
+    /// is open at all, so a run that settles then still notifies.
     window_active: bool,
     /// A banner click asked for the window; the next paint brings it forward
     /// (`tick` has no `Window` to activate with).
     activate_window_pending: bool,
-    /// Keeps the window-activation observer alive (registered from `main`
-    /// once the window exists).
-    _window_activation: Option<Subscription>,
+    /// Keeps the window watchers alive (re-registered whenever a window
+    /// opens): the activation observer that gates notifications, and the
+    /// window-closed observer that clears that gate.
+    _window_watchers: Vec<Subscription>,
     /// Visited sessions, oldest first — drives the top-bar back/forward
     /// navigation. `history_index` points at the active entry.
     session_history: Vec<SessionInfo>,
@@ -1460,6 +1474,9 @@ impl OrbitApp {
             sidebar_visible: true,
             sidebar_slide_gen: 0,
             feature_open_last: false,
+            backdrop_live: false,
+            backdrop_clock: None,
+            backdrop_phase: 0.,
             pane_full_last: false,
             sidebar_cursor: None,
             sidebar_focus: cx.focus_handle().tab_stop(true),
@@ -1541,7 +1558,7 @@ impl OrbitApp {
             notification_auth_pending: false,
             window_active: true,
             activate_window_pending: false,
-            _window_activation: None,
+            _window_watchers: Vec::new(),
             session_history: Vec::new(),
             history_index: 0,
             collapsed_workspaces: HashSet::new(),
@@ -1862,14 +1879,22 @@ impl OrbitApp {
     }
 
     /// Track whether the window is frontmost — the gate on background
-    /// notifications. Registered from `main` after the window exists;
+    /// notifications. Registered from `main_window` after the window exists;
     /// `observe_window_activation` invokes the callback once at
     /// registration, so the field starts truthful.
     pub(crate) fn watch_window_activation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.window_active = window.is_window_active();
-        self._window_activation = Some(cx.observe_window_activation(window, |app, window, _| {
+        let activation = cx.observe_window_activation(window, |app, window, _| {
             app.window_active = window.is_window_active();
-        }));
+        });
+        // Closing the window ends the observer above on its last value — and
+        // the window usually was frontmost when the user closed it — which
+        // would keep a run that settles with no window open from notifying.
+        let this = cx.weak_entity();
+        let closed = cx.on_window_closed(move |cx| {
+            this.update(cx, |app, _| app.window_active = false).ok();
+        });
+        self._window_watchers = vec![activation, closed];
     }
 
     /// Sidebar view of the session store: the sessions on disk plus a
@@ -2964,6 +2989,10 @@ mod titlebar_layout_tests;
 mod worktree_howto_tests;
 #[cfg(test)]
 mod worktree_chip_tests;
+#[cfg(test)]
+mod send_progress_tests;
+#[cfg(test)]
+mod window_watch_tests;
 
 // `icon` and friends are part of the crate-wide UI kit; keep their original
 // `crate::app::…` paths stable for the other modules that import them.

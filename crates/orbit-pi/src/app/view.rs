@@ -157,6 +157,10 @@ const TERMINAL_MAIN_RESERVE: f32 = 320.;
 
 impl Render for OrbitApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Cleared here and set again only where the new-task backdrop is drawn,
+        // so a frame that covers it (Settings, a feature page) stops the
+        // heartbeat repainting for a field nobody can see.
+        self.backdrop_live = false;
         // A clicked banner asks for the window; bring it forward on the frame
         // that follows the click (macOS activates the app, but a minimized
         // window would otherwise stay behind).
@@ -850,6 +854,8 @@ impl Render for OrbitApp {
                 // feature page (Files / Git / Usage) opens as a card below it;
                 // the chat fills the column itself.
                 let empty = self.transcript.is_empty();
+                // `new_task_backdrop` sets `backdrop_live` when it actually
+                // paints the field; nothing above needs to guess.
                 // top bar — the window's left controls float over it in the
                 // titlebar overlay, so its leading clears them when the sidebar
                 // is collapsed. The drag spacer between the title and the right
@@ -1127,7 +1133,7 @@ impl Render for OrbitApp {
                     .children(if feature_open || pane_full {
                         None
                     } else {
-                        Self::new_task_backdrop(theme, empty)
+                        self.new_task_backdrop(theme, self.backdrop_phase, empty)
                     })
                     .child(main_top_bar)
                     // The top bar spans the whole main area; the docks and
@@ -1347,6 +1353,10 @@ impl Render for OrbitApp {
             .on_action(cx.listener(Self::on_toggle_project_panel))
             .on_action(cx.listener(Self::on_close_files))
             .on_action(cx.listener(Self::on_toggle_terminal))
+            .on_action(cx.listener(Self::on_new_terminal_tab))
+            .on_action(cx.listener(Self::on_close_terminal_tab))
+            .on_action(cx.listener(Self::on_next_terminal_tab))
+            .on_action(cx.listener(Self::on_prev_terminal_tab))
             .on_action(cx.listener(Self::on_toggle_sidebar_action))
             .on_action(cx.listener(Self::on_focus_sessions))
             .on_action(cx.listener(Self::on_open_session_slot))
@@ -2275,12 +2285,22 @@ impl OrbitApp {
     /// to it ended at the composer's top edge and left the bottom of the
     /// window on a flat slab, at every fade setting including "None". The
     /// chat page deliberately has none.
-    pub(super) fn new_task_backdrop(theme: Theme, empty: bool) -> Option<AnyElement> {
+    pub(super) fn new_task_backdrop(
+        &mut self,
+        theme: Theme,
+        phase: f32,
+        empty: bool,
+    ) -> Option<AnyElement> {
         if !empty {
             return None;
         }
         let backdrop = Self::dither_backdrop(theme);
         let dithered = backdrop.is_some();
+        // Only the procedural field animates: a configured photo is a still,
+        // so the heartbeat must not repaint this page for it. `render` clears
+        // the flag before this runs, so a frame that skips the backdrop leaves
+        // it false.
+        self.backdrop_live = !dithered;
         Some(
             div()
                 .id("new-task-backdrop")
@@ -2290,7 +2310,9 @@ impl OrbitApp {
                 .left_0()
                 .right_0()
                 .bottom_0()
-                .when(!dithered, |layer| layer.child(Self::dot_backdrop(theme)))
+                .when(!dithered, |layer| {
+                    layer.child(crate::backdrop::layer(theme, phase))
+                })
                 .children(backdrop)
                 .into_any_element(),
         )
@@ -2350,27 +2372,10 @@ impl OrbitApp {
         })
     }
 
-    /// Fading dot-grid backdrop for the new-task page, used whenever no
-    /// background image is configured. GPUI tints the SVG alpha mask with a
-    /// theme color, so the art must be explicit circles (patterns/masks do
-    /// not survive the renderer).
+    /// The dithered field at rest, for surfaces that show it as a thumbnail
+    /// (Settings → Appearance's backdrop strip) rather than the live page.
     pub(super) fn dot_backdrop(theme: Theme) -> impl IntoElement + use<> {
-        let dot_color = match theme.mode {
-            ThemeMode::Light => theme.text_3.opacity(0.75),
-            ThemeMode::Dark => theme.text_3.opacity(0.65),
-        };
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .right_0()
-            .bottom_0()
-            .child(
-                svg()
-                    .path("backgrounds/new-task-dots.svg")
-                    .size_full()
-                    .text_color(dot_color),
-            )
+        crate::backdrop::layer(theme, 0.)
     }
 
     /// New-task empty state — minimal onboarding over the backdrop the caller

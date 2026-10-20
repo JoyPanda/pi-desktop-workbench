@@ -60,6 +60,10 @@ pub enum CommandId {
     ToggleSidebar,
     ToggleSidePanel,
     ToggleTerminal,
+    NewTerminalTab,
+    CloseTerminalTab,
+    NextTerminalTab,
+    PrevTerminalTab,
     ToggleProjectPanel,
     // Review pane (context: `ReviewDiffTree`)
     ReviewTreeNext,
@@ -499,6 +503,46 @@ pub static COMMANDS: &[CommandSpec] = &[
         ),
         "command_palette.hide_terminal",
     ),
+    with_chord(
+        command(
+            CommandId::NewTerminalTab,
+            Panels,
+            "icons/plus.svg",
+            "command_palette.new_terminal_tab",
+            "new terminal tab shell console spawn another",
+        ),
+        shortcuts::NEW_TERMINAL_TAB,
+    ),
+    with_chord(
+        command(
+            CommandId::CloseTerminalTab,
+            Panels,
+            "icons/x.svg",
+            "command_palette.close_terminal_tab",
+            "close terminal tab shell console kill",
+        ),
+        shortcuts::CLOSE_TERMINAL_TAB,
+    ),
+    with_chord(
+        command(
+            CommandId::NextTerminalTab,
+            Panels,
+            "icons/arrow-down.svg",
+            "command_palette.next_terminal_tab",
+            "next terminal tab shell console switch cycle",
+        ),
+        shortcuts::NEXT_TERMINAL_TAB,
+    ),
+    with_chord(
+        command(
+            CommandId::PrevTerminalTab,
+            Panels,
+            "icons/arrow-up.svg",
+            "command_palette.prev_terminal_tab",
+            "previous terminal tab shell console switch cycle",
+        ),
+        shortcuts::PREV_TERMINAL_TAB,
+    ),
     with_alt_title(
         with_chord(
             command(
@@ -914,6 +958,28 @@ pub static BINDINGS: &[Binding] = &[
         context: None,
         id: CommandId::ToggleTerminal,
     },
+    // Terminal tabs. Scoped to the `Terminal` key context: these chords belong
+    // to the shell everywhere else.
+    Binding {
+        chord: shortcuts::NEW_TERMINAL_TAB,
+        context: Some("Terminal"),
+        id: CommandId::NewTerminalTab,
+    },
+    Binding {
+        chord: shortcuts::CLOSE_TERMINAL_TAB,
+        context: Some("Terminal"),
+        id: CommandId::CloseTerminalTab,
+    },
+    Binding {
+        chord: shortcuts::NEXT_TERMINAL_TAB,
+        context: Some("Terminal"),
+        id: CommandId::NextTerminalTab,
+    },
+    Binding {
+        chord: shortcuts::PREV_TERMINAL_TAB,
+        context: Some("Terminal"),
+        id: CommandId::PrevTerminalTab,
+    },
     Binding {
         chord: shortcuts::SIDEBAR,
         context: None,
@@ -1047,10 +1113,11 @@ pub fn tooltip(id: CommandId, alternate: bool) -> String {
 /// The typed gpui binding for one row, or `None` for palette-only commands.
 fn action_binding(binding: &Binding) -> Option<KeyBinding> {
     use crate::{
-        AbortRun, CheckForUpdates, CopyLastResponse, FocusSessions, GitTabChanges, GitTabGraph,
-        GitTabHistory, GitTabIssues, GitTabPulls, GitTabStashes, NewSession, NextSession, NextTurn,
-        OpenGit, OpenSessionSlot, OpenSettings, OpenShortcutHelp, PrevSession, PrevTurn, Quit,
-        RefreshSessions, ReviewChanges, ReviewClose, ReviewCollapseAll, ReviewExpandAll,
+        AbortRun, CheckForUpdates, CloseTerminalTab, CopyLastResponse, FocusSessions,
+        GitTabChanges, GitTabGraph, GitTabHistory, GitTabIssues, GitTabPulls, GitTabStashes,
+        NewSession, NewTerminalTab, NextSession, NextTerminalTab, NextTurn, OpenGit,
+        OpenSessionSlot, OpenSettings, OpenShortcutHelp, PrevSession, PrevTerminalTab, PrevTurn,
+        Quit, RefreshSessions, ReviewChanges, ReviewClose, ReviewCollapseAll, ReviewExpandAll,
         ReviewFileNext, ReviewFilePrev, ReviewHunkNext, ReviewHunkPrev, ReviewTreeNext,
         ReviewTreePrev, ReviewTreeToggle, ToggleCommandPalette, ToggleModelMenu,
         ToggleProjectPanel, ToggleSearch, ToggleSidebar, ToggleTerminal, ToggleThinkingMenu,
@@ -1089,6 +1156,10 @@ fn action_binding(binding: &Binding) -> Option<KeyBinding> {
         CommandId::CopyLastResponse => KeyBinding::new(chord, CopyLastResponse, context),
         CommandId::CheckForUpdates => KeyBinding::new(chord, CheckForUpdates, context),
         CommandId::ToggleTerminal => KeyBinding::new(chord, ToggleTerminal, context),
+        CommandId::NewTerminalTab => KeyBinding::new(chord, NewTerminalTab, context),
+        CommandId::CloseTerminalTab => KeyBinding::new(chord, CloseTerminalTab, context),
+        CommandId::NextTerminalTab => KeyBinding::new(chord, NextTerminalTab, context),
+        CommandId::PrevTerminalTab => KeyBinding::new(chord, PrevTerminalTab, context),
         CommandId::ToggleSidebar => KeyBinding::new(chord, ToggleSidebar, context),
         CommandId::ToggleProjectPanel => KeyBinding::new(chord, ToggleProjectPanel, context),
         CommandId::GitTabChanges => KeyBinding::new(chord, GitTabChanges, context),

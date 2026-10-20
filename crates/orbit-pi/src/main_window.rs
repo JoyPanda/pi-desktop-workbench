@@ -13,8 +13,8 @@
 use std::{cell::RefCell, time::Duration};
 
 use gpui::{
-    prelude::*, px, size, App, Application, AsyncWindowContext, Bounds, Entity, Focusable, Global,
-    Timer, WindowBounds, WindowOptions,
+    prelude::*, px, size, App, Application, AsyncApp, Bounds, Entity, Focusable, Global, Timer,
+    WindowBounds, WindowOptions,
 };
 
 use crate::{app::OrbitApp, platform, theme};
@@ -47,24 +47,35 @@ pub fn install_reopen_handler(application: &mut Application) {
     });
 }
 
-/// Open the main window, reusing the parked shell when there is one.
+/// The one [`OrbitApp`], parked in the [`Shell`] global across window closes.
+///
+/// Built on the first open and reused afterwards: the pi process and the
+/// stream it feeds outlive the window that showed them, so a second window
+/// must render the shell that is already there.
+///
+/// `default_global` installs an empty shell on the first open and leaves the
+/// parked one alone on reopen.
+fn shell(cx: &mut App) -> Entity<OrbitApp> {
+    // Clone out and drop the borrow before creating anything that could touch
+    // the global again.
+    if let Some(parked) = cx.default_global::<Shell>().0.borrow().clone() {
+        return parked;
+    }
+    let app = cx.new(OrbitApp::new);
+    // Detect installed editors/terminals for the header "open in" control
+    // (off-thread; icons load once).
+    app.update(cx, |app, cx| app.detect_open_in_apps(cx));
+    cx.default_global::<Shell>()
+        .0
+        .borrow_mut()
+        .replace(app.clone());
+    spawn_heartbeat(cx, &app);
+    app
+}
+
+/// Open the main window, rendering the parked shell when there is one.
 pub fn open(cx: &mut App) {
-    // Clone out and drop the borrow before the arms touch the global again.
-    let parked = cx.global::<Shell>().0.borrow().clone();
-    let app = match parked {
-        // Already running: the same sessions, the same pi process, the same
-        // stream. The window that watched the old window's activation is
-        // gone with it, so the watcher is re-attached below.
-        Some(app) => app,
-        None => {
-            let app = cx.new(OrbitApp::new);
-            // Detect installed editors/terminals for the header "open in"
-            // control (off-thread; icons load once).
-            app.update(cx, |app, cx| app.detect_open_in_apps(cx));
-            cx.global::<Shell>().0.borrow_mut().replace(app.clone());
-            app
-        }
-    };
+    let app = shell(cx);
 
     // Open maximized: full width of the screen, filling the visible
     // frame. The computed bounds are the
@@ -103,29 +114,80 @@ pub fn open(cx: &mut App) {
                     window.focus(&handle);
                 });
 
-                // Heartbeat: drain pi events into the UI. Idle at ~90 ms;
-                // while a run streams, poll at ~60 Hz so streamed tokens
-                // land smoothly instead of in visible 90 ms batches.
-                let heartbeat = app.clone();
-                window
-                    .spawn(cx, async move |cx: &mut AsyncWindowContext| {
-                        let mut delay = Duration::from_millis(90);
-                        loop {
-                            Timer::after(delay).await;
-                            let active = heartbeat
-                                .update(cx, |app: &mut OrbitApp, cx| app.tick(cx))
-                                .unwrap_or(false);
-                            delay = if active {
-                                Duration::from_millis(16)
-                            } else {
-                                Duration::from_millis(90)
-                            };
-                        }
-                    })
-                    .detach();
-
                 app
             },
         )
         .unwrap();
+
+    // Both entries bring the app forward: a Dock click on a windowless app,
+    // or a launch that opened the first window. Neither `focus: true` above
+    // nor macOS's reopen notification activates `NSApp` on its own, so the
+    // window would otherwise stay behind whatever is frontmost.
+    cx.activate(true);
+}
+
+/// Drain pi events into the UI for the life of the app.
+///
+/// Spawned on the [`App`], not on a window: a parked shell keeps its pi
+/// process running with no window open, so the heartbeat still has to drain
+/// its stream, notify a finished run, and reap idle processes. `notify()`
+/// with no window open is a no-op, so the repaint half costs nothing.
+fn spawn_heartbeat(cx: &mut App, app: &Entity<OrbitApp>) {
+    // Idle at ~90 ms; while a run streams, poll at ~60 Hz so streamed tokens
+    // land smoothly instead of in visible 90 ms batches.
+    let heartbeat = app.clone();
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        let mut delay = Duration::from_millis(90);
+        loop {
+            Timer::after(delay).await;
+            // The shell lives in a global until the app quits, so a failure
+            // here means the app is going away and there is nothing to tick.
+            let Ok(active) = heartbeat.update(cx, |app: &mut OrbitApp, cx| app.tick(cx)) else {
+                return;
+            };
+            delay = if active {
+                Duration::from_millis(16)
+            } else {
+                Duration::from_millis(90)
+            };
+        }
+    })
+    .detach();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::{Theme, ThemeId};
+    use gpui::TestAppContext;
+
+    /// Regression for #63: after the window closes the app is still alive, so
+    /// the next window has to render the parked shell — same `OrbitApp`, same
+    /// pi process — instead of building a second one.
+    ///
+    /// `open()` itself cannot run here: the test platform's `zoom()` is
+    /// `unimplemented!()`, so a `WindowBounds::Maximized` window never opens.
+    /// This covers the shell hand-off that `open()` depends on.
+    #[gpui::test]
+    fn reopening_reuses_the_parked_shell(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::for_id(ThemeId::Orbit));
+            let first = shell(cx).entity_id();
+
+            assert_eq!(
+                shell(cx).entity_id(),
+                first,
+                "a second open must reuse the shell, not build another"
+            );
+            assert_eq!(
+                cx.global::<Shell>()
+                    .0
+                    .borrow()
+                    .as_ref()
+                    .map(Entity::entity_id),
+                Some(first),
+                "the shell stays parked for the next window"
+            );
+        });
+    }
 }

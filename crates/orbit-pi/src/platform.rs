@@ -726,6 +726,29 @@ pub mod shortcuts {
     pub const NEW_SESSION: &str = "secondary-n";
     pub const REFRESH: &str = "secondary-r";
     pub const TERMINAL: &str = "secondary-j";
+    /// Terminal tabs, scoped to the `Terminal` key context.
+    ///
+    /// macOS keeps the editor convention: ⌘T opens a tab, ⌘W closes it (not the
+    /// window). Elsewhere `secondary` is Ctrl, and Ctrl+T / Ctrl+W belong to the
+    /// shell — readline's `transpose-chars` and `unix-word-rubout` — so the
+    /// shifted chords carry the tab actions instead.
+    #[cfg(target_os = "macos")]
+    pub const NEW_TERMINAL_TAB: &str = "secondary-t";
+    #[cfg(not(target_os = "macos"))]
+    pub const NEW_TERMINAL_TAB: &str = "secondary-shift-t";
+    #[cfg(target_os = "macos")]
+    pub const CLOSE_TERMINAL_TAB: &str = "secondary-w";
+    #[cfg(not(target_os = "macos"))]
+    pub const CLOSE_TERMINAL_TAB: &str = "secondary-shift-w";
+    /// Step between tabs with the bracket pair, the way macOS's own Terminal
+    /// does (Ctrl+Tab belongs to the shell).
+    ///
+    /// Both backends report shifted punctuation as the shifted symbol with
+    /// `shift` cleared, so the chord that matches a real key press is `}` /
+    /// `{`; `shift-]` / `shift-[` would never fire. [`label`] renders these
+    /// back as ⇧] / ⇧[.
+    pub const NEXT_TERMINAL_TAB: &str = "secondary-}";
+    pub const PREV_TERMINAL_TAB: &str = "secondary-{";
     pub const SIDEBAR: &str = "secondary-b";
     pub const FOCUS_SESSIONS: &str = "secondary-shift-b";
     /// The session-number span; `⌘1…⌘9` bound by `commands::BINDINGS`.
@@ -810,6 +833,11 @@ pub mod shortcuts {
             "end" => "↘".to_string(),
             "backspace" => "⌫".to_string(),
             "delete" => "⌦".to_string(),
+            // The backends deliver shifted punctuation as the shifted symbol
+            // with `shift` cleared, so the bracket-pair chord is `}` / `{`;
+            // render the chord the keyboard actually asks for.
+            "{" => "⇧[".to_string(),
+            "}" => "⇧]".to_string(),
             other if other.chars().count() == 1 => other.to_uppercase(),
             other => other.to_string(),
         }
@@ -830,6 +858,10 @@ pub mod shortcuts {
             "pagedown" => "PgDn".to_string(),
             "backspace" => "Backspace".to_string(),
             "delete" => "Delete".to_string(),
+            // See [`key_label_mac`]: shifted punctuation arrives as the shifted
+            // symbol, so spell the chord the keyboard actually asks for.
+            "{" => "Shift+[".to_string(),
+            "}" => "Shift+]".to_string(),
             other if other.chars().count() == 1 => other.to_uppercase(),
             other => other.to_string(),
         }
@@ -1523,6 +1555,24 @@ mod tests {
                 "⌘⇧↵"
             } else {
                 "Ctrl+Shift+Enter"
+            }
+        );
+        // The tab-cycle chord is the shifted symbol the backends deliver, but
+        // the chip still advertises the shift chord it takes to type it.
+        assert_eq!(
+            shortcuts::label(shortcuts::NEXT_TERMINAL_TAB),
+            if cfg!(target_os = "macos") {
+                "⌘⇧]"
+            } else {
+                "Ctrl+Shift+]"
+            }
+        );
+        assert_eq!(
+            shortcuts::label(shortcuts::PREV_TERMINAL_TAB),
+            if cfg!(target_os = "macos") {
+                "⌘⇧["
+            } else {
+                "Ctrl+Shift+["
             }
         );
     }

@@ -37,9 +37,10 @@ const QUOTA_POPOVER_MAX_H: f32 = 460.;
 const HIDDEN_CARD_DIM: f32 = 0.6;
 
 impl OrbitApp {
-    /// True while a run is in flight (busy flag or a streaming transcript).
+    /// True while a run is in flight: the busy flag, a streaming transcript, or
+    /// a prompt that is still waiting on its first step.
     pub(super) fn is_running(&self) -> bool {
-        self.busy || self.transcript.is_streaming()
+        self.busy || self.transcript.is_streaming() || self.transcript.is_awaiting_reply()
     }
 
     /// Whether the active model offers a thinking level to pick. pi answers
@@ -171,6 +172,15 @@ impl OrbitApp {
             self.add_workspace(cwd, cx);
         }
         self.begin_turn(cx);
+        // The turn is in flight from here, not from pi's `agent_start`: the
+        // composer flips to Stop, the heartbeat polls at 60 Hz, and every
+        // `is_running()` gate agrees, so a slow provider (or a pi that is still
+        // booting) can never look like a dropped keystroke. `agent_start`
+        // re-sets the same flag, and every settle path clears it.
+        self.busy = true;
+        // Same for the transcript: the live "Working for…" row goes up now,
+        // with its clock running from the send.
+        self.transcript.expect_reply();
         // Show the prompt immediately — pi does not echo it back in RPC mode.
         // The decoded previews ride along so the chat window shows what was
         // attached (pi echoes/snapshots carry image blocks for reloads).
@@ -2336,6 +2346,55 @@ impl OrbitApp {
     ) {
         self.terminal_panel
             .update(cx, |panel, cx| panel.toggle(window, cx));
+        cx.notify();
+    }
+
+    /// Open another shell tab in the current workspace (⌘T in the terminal).
+    pub(super) fn on_new_terminal_tab(
+        &mut self,
+        _: &crate::NewTerminalTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal_panel
+            .update(cx, |panel, cx| panel.new_tab(window, cx));
+        cx.notify();
+    }
+
+    /// Close the active terminal tab (⌘W in the terminal). Its shell gets
+    /// SIGHUP; the panel closes when it was the last tab.
+    pub(super) fn on_close_terminal_tab(
+        &mut self,
+        _: &crate::CloseTerminalTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal_panel
+            .update(cx, |panel, cx| panel.close_active_tab(window, cx));
+        cx.notify();
+    }
+
+    /// Cycle terminal tabs (⌘⇧[ / ⌘⇧]). Wraps at the ends and does nothing
+    /// with fewer than two tabs.
+    pub(super) fn on_next_terminal_tab(
+        &mut self,
+        _: &crate::NextTerminalTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal_panel
+            .update(cx, |panel, cx| panel.cycle_tab(1, window, cx));
+        cx.notify();
+    }
+
+    pub(super) fn on_prev_terminal_tab(
+        &mut self,
+        _: &crate::PrevTerminalTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal_panel
+            .update(cx, |panel, cx| panel.cycle_tab(-1, window, cx));
         cx.notify();
     }
 

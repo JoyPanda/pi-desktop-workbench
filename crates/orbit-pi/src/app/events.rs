@@ -33,6 +33,11 @@ impl OrbitApp {
         if self.toasts.expire(Instant::now(), toast_fade) {
             cx.notify();
         }
+        // The new-task page's dithered field is alive: advance its clock and
+        // repaint. Only that page pays for it, and Reduce Motion freezes it.
+        if self.advance_backdrop(theme::reduce_motion(cx)) {
+            cx.notify();
+        }
         // Session retention: once per launch, archive or delete sessions the
         // user's policy marks idle. A no-op until enabled in Settings.
         self.run_session_retention_once(cx);
@@ -379,6 +384,33 @@ impl OrbitApp {
         // in which events were processed so those changes become visible.
         cx.notify();
         self.is_active()
+    }
+
+    /// Step the new-task backdrop's field. Returns whether anything changed and
+    /// the window should repaint.
+    ///
+    /// The phase is wall-clock seconds, not a tick counter: the heartbeat's
+    /// cadence changes with the run state, and the field must not speed up
+    /// while something else streams. The clock only runs while the page is
+    /// actually on screen (`render` records that), so a backdrop nobody can see
+    /// costs nothing. Reduce Motion holds the frame it was showing — a halftone
+    /// is a perfectly good still.
+    fn advance_backdrop(&mut self, reduce_motion: bool) -> bool {
+        if !self.backdrop_live || reduce_motion {
+            self.backdrop_clock = None;
+            return false;
+        }
+        // Resume from the phase already on screen rather than snapping back to
+        // zero: a page the reader returns to keeps the screen it left.
+        if self.backdrop_clock.is_none() {
+            let resumed = Duration::from_secs_f32(self.backdrop_phase);
+            self.backdrop_clock = Some(Instant::now() - resumed);
+        }
+        let clock = self
+            .backdrop_clock
+            .expect("the backdrop clock was armed just above");
+        self.backdrop_phase = clock.elapsed().as_secs_f32();
+        true
     }
 
     /// True while a run is in flight. The heartbeat polls fast (instead of the

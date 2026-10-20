@@ -284,6 +284,30 @@ focus and hover emphasis. Charts and graphs draw with 1.5px strokes; grid lines 
 at low-opacity hairline. No drop-shadowed text, no gradients except the one backdrop
 fade on the new-task page and the raised-button fill (see Buttons).
 
+### New-task backdrop
+
+The new-task page is the one surface with a background treatment, and it has two forms
+under one grammar — ordered dither, the same Bayer pass the photo setting uses:
+
+- **No image configured:** a painted halftone field (`backdrop`) — an 8×8 Bayer screen of
+  four dot sizes over a soft density field, densest in a band behind the composer and
+  calmer — never empty — toward the window's edges through a floored elliptical
+  vignette, so the screen runs edge to edge and its drift is visible to the frame. It is
+  drawn in
+  `text_3` at 55% (dark) / 62% (light), so it is paper texture, never a second content
+  layer, and it works in all forty-four palettes without a per-palette asset.
+- **The monogram is screened into that field.** Where the app mark sits — between the
+  empty-state column and the composer — the same screen takes over its shape: a coverage
+  mask sampled from the shipped `app-icon.png` (never redrawn by hand, so the backdrop
+  cannot drift from the icon), glyphs holding a quiet density at rest while a soft band
+  of light crosses them every twenty seconds, filling each letter with the largest dot in
+  turn. The mark paints one step quieter than the grain around it (`MARK_INK`), and a
+  layer too small to hold it drops it rather than stretching a wordmark into mush.
+- **An image configured:** the dithered photo (`dither`), under the fade below.
+
+Both are the page's floor, not an illustration: nothing on the page depends on them, and
+the chat page has neither.
+
 ## Components
 
 ### Buttons
@@ -571,7 +595,14 @@ Motion communicates state; it does not decorate the interface.
 
 ### Motion Rules
 
-- No decorative looping animation.
+- **One sanctioned loop:** the new-task backdrop's dither field, whose screen drifts so
+  dots cross their Bayer thresholds a few at a time (~2% of the cells a second), and whose
+  light crosses the monogram on a twenty-second pass. It is the page's texture rather
+  than an event, it is drawn behind everything, it never moves a glyph or a box, and
+  Reduce Motion freezes it on the frame it was showing. Every other loop in the product
+  remains the state it reports — the running-session shimmer, a spinner, a streaming
+  transcript.
+- No decorative looping animation beyond that one field.
 - No parallax.
 - No spring-heavy marketing motion.
 - Do not animate large areas when a small state transition is sufficient.

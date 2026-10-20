@@ -217,8 +217,13 @@ fn backdrop_fade_none_paints_no_gradient(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn new_task_backdrop_spans_the_composer_region(cx: &mut gpui::TestAppContext) {
     let cx = cx.add_empty_window();
-    let _ = cx.draw(point(px(0.), px(0.)), size(px(1000.), px(700.)), |_, _| {
+    let app = cx.update(|_, cx| {
+        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.new(OrbitApp::new)
+    });
+    let _ = cx.draw(point(px(0.), px(0.)), size(px(1000.), px(700.)), |_, cx| {
         let theme = Theme::for_id(ThemeId::Orbit);
+        let backdrop = app.update(cx, |app, _| app.new_task_backdrop(theme, 0., true));
         div()
             .size_full()
             .flex()
@@ -232,7 +237,7 @@ fn new_task_backdrop_spans_the_composer_region(cx: &mut gpui::TestAppContext) {
                     .h(px(super::view::TOP_BAR_H))
                     .w_full(),
             )
-            .children(OrbitApp::new_task_backdrop(theme, true))
+            .children(backdrop)
             .child(
                 div()
                     .flex_1()
@@ -272,13 +277,86 @@ fn new_task_backdrop_spans_the_composer_region(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// The field's clock runs only while the new-task page is on screen, and never
+/// under Reduce Motion. Those are the two ways an animated backdrop goes wrong:
+/// repainting a page nobody is looking at, and ignoring the platform's motion
+/// preference.
+#[gpui::test]
+fn the_backdrop_clock_runs_only_on_the_new_task_page(cx: &mut gpui::TestAppContext) {
+    let app = cx.update(|cx| {
+        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.new(OrbitApp::new)
+    });
+    // Not on screen: the heartbeat must not even start the clock.
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.backdrop_live = false;
+            app.tick(cx);
+            assert!(
+                app.backdrop_clock.is_none(),
+                "an off-screen backdrop keeps no clock"
+            );
+            assert_eq!(app.backdrop_phase, 0., "and no phase");
+        })
+    });
+
+    // On screen: the phase follows wall-clock time.
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.backdrop_live = true;
+            app.tick(cx);
+            assert!(app.backdrop_clock.is_some(), "the clock starts");
+        })
+    });
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.tick(cx);
+            assert!(
+                app.backdrop_phase > 0.,
+                "the phase advanced with time: {}",
+                app.backdrop_phase
+            );
+        })
+    });
+
+    // Reduce Motion freezes it on the frame it was showing.
+    let frozen = cx.update(|cx| app.read(cx).backdrop_phase);
+    cx.update(|cx| {
+        let mut theme = Theme::for_id(ThemeId::Orbit);
+        theme.ui.reduce_motion = true;
+        cx.set_global(theme);
+    });
+    std::thread::sleep(std::time::Duration::from_millis(25));
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.tick(cx);
+            assert_eq!(
+                app.backdrop_phase, frozen,
+                "Reduce Motion holds the field still"
+            );
+            assert!(app.backdrop_clock.is_none(), "and drops the clock");
+        })
+    });
+}
+
 /// The chat page deliberately has no backdrop.
-#[test]
-fn new_task_backdrop_is_absent_on_a_session() {
-    assert!(
-        OrbitApp::new_task_backdrop(Theme::for_id(ThemeId::Orbit), false).is_none(),
-        "a session page has no backdrop"
-    );
+#[gpui::test]
+fn new_task_backdrop_is_absent_on_a_session(cx: &mut gpui::TestAppContext) {
+    let cx = cx.add_empty_window();
+    cx.update(|_, cx| {
+        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        let app = cx.new(OrbitApp::new);
+        assert!(
+            app.update(cx, |app, _| app.new_task_backdrop(
+                Theme::for_id(ThemeId::Orbit),
+                0.,
+                false
+            ))
+            .is_none(),
+            "a session page has no backdrop"
+        );
+    });
 }
 
 /// Regression: a provider card's name/id column must get a real width.

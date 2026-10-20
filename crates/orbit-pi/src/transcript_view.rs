@@ -167,6 +167,9 @@ pub(crate) struct TranscriptView {
     pub scroller: MessageScrollerState,
     pub streaming: Rc<Cell<Option<usize>>>,
     pub stream_started: Rc<Cell<Option<Instant>>>,
+    /// A prompt is out and nothing has streamed yet: the tail slot shows the
+    /// live row so the send is acknowledged before the first token.
+    pub awaiting_reply: Rc<Cell<bool>>,
     /// When the current turn's provider request began (`turn_start`). The
     /// live rate divides by this clock, the same basis as pi's settled
     /// `durationMs`, so a bursty stream is not read as the generation.
@@ -1050,6 +1053,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let menu_selection = text_selection.clone();
     let streaming = view.streaming.clone();
     let stream_started = view.stream_started.clone();
+    let awaiting_reply = view.awaiting_reply.clone();
     let turn_started = view.turn_started.clone();
     let expanded_turns = view.expanded_turns.clone();
     let expanded_files = view.expanded_files.clone();
@@ -1190,10 +1194,34 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
         // changed-files summary — pinned after the last message, in the
         // same centered column as every other row.
         if ix >= row_count {
+            let theme = *theme::get(cx);
+            // The prompt is out; the answer has not started. Show the same live
+            // row the streaming turn will wear, so pressing Enter is answered by
+            // the transcript itself and not only by the composer's Stop button.
+            if awaiting_reply.get() && streaming.get().is_none() {
+                let elapsed = stream_started
+                    .get()
+                    .map(|started| started.elapsed())
+                    .unwrap_or_default();
+                return div()
+                    .id(ElementId::NamedInteger("transcript-row".into(), ix as u64))
+                    .w_full()
+                    .flex()
+                    .justify_center()
+                    .px(px(20.))
+                    .pb(px(14.))
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(CONTENT_MAX_WIDTH))
+                            .min_w_0()
+                            .child(render_working_indicator(elapsed, None, None, theme)),
+                    )
+                    .into_any_element();
+            }
             let Some(files) = summary_files.as_ref() else {
                 return div().into_any_element();
             };
-            let theme = *theme::get(cx);
             let card = render_changed_files(
                 files,
                 theme,
@@ -8957,6 +8985,7 @@ mod tests {
             text_selection: state,
             streaming: Rc::new(Cell::new(None)),
             stream_started: Rc::new(Cell::new(None)),
+            awaiting_reply: Rc::new(Cell::new(false)),
             turn_started: Rc::new(Cell::new(None)),
             expanded_turns: Rc::new(RefCell::new(HashSet::new())),
             expanded_files: Rc::new(RefCell::new(HashSet::new())),
@@ -9172,6 +9201,69 @@ mod tests {
             }
             render_transcript(view, cx)
         }
+    }
+
+    /// A prompt whose first token has not arrived yet paints the live row at
+    /// the tail of the transcript. The regression this guards is the send being
+    /// acknowledged by nothing at all until pi produced its first event.
+    #[gpui::test]
+    fn the_pending_reply_row_paints_before_any_token(cx: &mut gpui::TestAppContext) {
+        struct PendingReplyView {
+            messages: Rc<RefCell<Vec<ChatMessage>>>,
+            state: TextSelectionState,
+            scroller: MessageScrollerState,
+        }
+
+        impl gpui::Render for PendingReplyView {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let view = test_view(
+                    self.state.clone(),
+                    self.messages.clone(),
+                    self.scroller.clone(),
+                );
+                // The state `submit_as` arms: the prompt is out, the clock runs.
+                view.awaiting_reply.set(true);
+                view.stream_started.set(Some(Instant::now()));
+                render_transcript(view, cx)
+            }
+        }
+
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+        let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![ChatMessage {
+            user: true,
+            summary: None,
+            steps: vec![Step {
+                text: "run the tests".into(),
+                ..Step::default()
+            }],
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        }]));
+        // One message row + the pending tail slot, which is what
+        // `Transcript::expect_reply` makes the scroller hold.
+        let scroller = MessageScrollerState::new(2);
+        let view = cx.update(|_, cx| {
+            cx.new(|_| PendingReplyView {
+                messages,
+                state,
+                scroller,
+            })
+        });
+        let _ = cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(900.), px(600.)),
+            |_, _| view.clone(),
+        );
+
+        let bounds = cx
+            .debug_bounds("working-indicator")
+            .expect("the live row is painted while the reply is pending");
+        assert!(bounds.size.width > px(0.), "the indicator carries a label");
     }
 
     /// The compaction / branch-summary boundary cards must paint — collapsed

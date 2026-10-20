@@ -26,6 +26,13 @@ pub const ASSET: &str = "alpha-app-icon.png";
 #[cfg(not(all(debug_assertions, target_os = "macos")))]
 pub const ASSET: &str = "app-icon.png";
 
+/// The production mark's monogram, for the new-task page's halftone backdrop.
+///
+/// Deliberately not [`PNG`]: the debug Alpha plate is the same monogram with an
+/// "Alpha" pill appended, and a Dock affordance must not change the shape the
+/// workbench draws. One byte array, one shape, in every build.
+pub const MARK_PNG: &[u8] = include_bytes!("../assets/app-icon.png");
+
 /// The "Orbit Pi" wordmark, shown as the sidebar brand header. Source of
 /// truth: workspace `assets/icons/logo.png`; the copy in this crate is what
 /// the running binary embeds. White ink, for dark sidebars.

@@ -977,6 +977,11 @@ pub struct Transcript {
     /// extra slot after the last message). Spliced in when a run settles
     /// with file edits; removed when a new turn begins.
     tail_summary: Rc<Cell<bool>>,
+    /// A prompt is out and no assistant step has streamed yet. Drives the
+    /// same tail slot as the summary card, showing the live "Working for…"
+    /// row from the moment the user hits send instead of from the first
+    /// token — otherwise a slow provider looks like a dropped keystroke.
+    awaiting_reply: Rc<Cell<bool>>,
 }
 
 impl Transcript {
@@ -1015,6 +1020,7 @@ impl Transcript {
             seed_text: Rc::new(Cell::new(false)),
             seed_thinking: Rc::new(Cell::new(false)),
             tail_summary: Rc::new(Cell::new(false)),
+            awaiting_reply: Rc::new(Cell::new(false)),
         }
     }
 
@@ -1083,6 +1089,7 @@ impl Transcript {
         // Rebuild resets the list to the message count; re-add the summary
         // row when the loaded session touched files.
         self.tail_summary.set(false);
+        self.awaiting_reply.set(false);
         let touched_files = !self.changed_files_summary().is_empty();
         self.set_tail_row(touched_files);
     }
@@ -1117,6 +1124,7 @@ impl Transcript {
         self.step_mark.set(None);
         self.toolcall_args.borrow_mut().clear();
         self.tail_summary.set(false);
+        self.awaiting_reply.set(false);
     }
 
     /// Apply one protocol event; returns `true` if the transcript changed.
@@ -1180,6 +1188,12 @@ impl Transcript {
             // A new turn begins: the previous run's end-of-task summary row
             // steps aside before the prompt row lands.
             self.set_tail_row(false);
+        } else {
+            // A streamed answer retires the pending row — the live message row
+            // is the indicator now. Done before the list grows below so the
+            // slot count stays exact. A user echo keeps the row: the answer is
+            // still on its way.
+            self.retire_pending_row();
         }
         let mut messages = self.messages.borrow_mut();
         if message.user {
@@ -2014,10 +2028,67 @@ impl Transcript {
 
     /// Recover if stream updates previously inserted extra list slots.
     fn resync_list(&self) {
-        let count = self.messages.borrow().len() + self.tail_summary.get() as usize;
+        let count = self.messages.borrow().len() + self.wants_tail_row() as usize;
         if self.scroller.item_count() != count {
             self.scroller.reset(count);
         }
+    }
+
+    /// One slot after the last message serves two ends: the pending-reply row
+    /// while a prompt is out, and the end-of-task changed-files card once the
+    /// run settles. Both are "a row after the last message", so they share the
+    /// slot instead of leaving an empty row between them.
+    fn wants_tail_row(&self) -> bool {
+        self.tail_summary.get() || self.awaiting_reply.get()
+    }
+
+    /// Add or remove the tail slot to match [`Self::wants_tail_row`], leaving
+    /// the message rows alone (a pending reply must not re-scroll the reader).
+    fn sync_tail_row(&self) {
+        let present = self.wants_tail_row();
+        let count = self.scroller.item_count();
+        let occupied = count > self.messages.borrow().len();
+        match (present, occupied) {
+            (true, false) => {
+                self.scroller.append(1);
+            }
+            (false, true) => {
+                self.scroller.splice(count.saturating_sub(1)..count, 0);
+            }
+            _ => {}
+        }
+    }
+
+    /// Take the pending row down. Called *before* the message list grows, so
+    /// the slot bookkeeping (row count == messages + tail) stays exact.
+    fn retire_pending_row(&self) {
+        if !self.awaiting_reply.get() {
+            return;
+        }
+        self.awaiting_reply.set(false);
+        self.sync_tail_row();
+    }
+
+    /// The prompt is away: show the live row now, and start the turn's clock
+    /// at the send rather than at the first token, so the indicator cannot sit
+    /// silent while the provider is thinking (or the process is still booting).
+    pub fn expect_reply(&mut self) {
+        self.awaiting_reply.set(true);
+        self.mark_stream_start();
+        self.sync_tail_row();
+    }
+
+    /// The turn never started (pi rejected the prompt) or the run is over:
+    /// drop the pending row and its clock.
+    pub fn abandon_reply(&mut self) {
+        if !self.awaiting_reply.get() && self.stream_started.get().is_none() {
+            return;
+        }
+        self.awaiting_reply.set(false);
+        if self.streaming.get().is_none() {
+            self.stream_started.set(None);
+        }
+        self.sync_tail_row();
     }
 
     /// Every file the task changed, across all turns, merged by path with
@@ -2046,13 +2117,11 @@ impl Transcript {
         if present == self.tail_summary.get() {
             return;
         }
-        if present {
-            self.scroller.append(1);
-        } else {
-            let count = self.scroller.item_count();
-            self.scroller.splice(count.saturating_sub(1)..count, 0);
-        }
         self.tail_summary.set(present);
+        // A pending prompt owns the slot in between: adding the summary while
+        // the live row is up must not double it, and removing it must not take
+        // the live row down with it.
+        self.sync_tail_row();
     }
 
     /// True when no messages are loaded (drives the empty state).
@@ -2225,6 +2294,10 @@ impl Transcript {
         self.turn_started.set(None);
         self.thinking_started.set(None);
         self.reset_generation();
+        // A run that ends without ever streaming (an aborted first request, a
+        // provider that answered with an error) stops waiting too.
+        self.awaiting_reply.set(false);
+        self.sync_tail_row();
     }
 
     /// Turn end (or abort): drop live streaming state, then — once the run
@@ -2239,6 +2312,13 @@ impl Transcript {
     /// True while an assistant message is still streaming.
     pub fn is_streaming(&self) -> bool {
         self.streaming.get().is_some()
+    }
+
+    /// True from the moment a prompt is sent until its first step streams (or
+    /// the turn is abandoned). A turn is in flight across that whole window, so
+    /// the app's `is_running` — and every gate built on it — must see it.
+    pub fn is_awaiting_reply(&self) -> bool {
+        self.awaiting_reply.get()
     }
 
     /// Message indices whose text contains `needle` (already lowercased), in
@@ -2348,6 +2428,7 @@ impl Transcript {
                 scroller: self.scroller.clone(),
                 streaming: self.streaming.clone(),
                 stream_started: self.stream_started.clone(),
+                awaiting_reply: self.awaiting_reply.clone(),
                 turn_started: self.turn_started.clone(),
                 expanded_turns: self.expanded_turns.clone(),
                 expanded_files: self.expanded_files.clone(),
@@ -2386,6 +2467,91 @@ impl Transcript {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Sending a prompt must put the live row up at once — the regression is a
+    /// transcript that stays silent from Enter until the first token lands.
+    #[test]
+    fn sending_a_prompt_shows_the_live_row_immediately() {
+        let mut transcript = Transcript::new();
+        transcript.append_user_message("ship it", Vec::new());
+        assert!(!transcript.awaiting_reply.get(), "nothing is in flight yet");
+        assert_eq!(transcript.scroller.item_count(), 1);
+
+        transcript.expect_reply();
+        assert!(transcript.awaiting_reply.get(), "the tail row goes up now");
+        assert!(
+            transcript.stream_started.get().is_some(),
+            "the Working clock starts at the send, not at the first token"
+        );
+        // The row is the list's tail slot: messages + 1.
+        assert_eq!(transcript.scroller.item_count(), 2);
+    }
+
+    /// The first streamed step takes the pending row down and leaves exactly
+    /// one row per message (no phantom slot between the live row and the
+    /// assistant turn).
+    #[test]
+    fn the_first_streamed_step_retires_the_pending_row() {
+        let mut transcript = Transcript::new();
+        transcript.append_user_message("ship it", Vec::new());
+        transcript.expect_reply();
+
+        transcript.apply_event(&Event::MessageStart {
+            value: json!({
+                "type": "message_start",
+                "message": { "role": "assistant", "content": [{ "type": "text", "text": "On it" }] },
+            }),
+        });
+
+        assert!(!transcript.awaiting_reply.get());
+        assert!(transcript.is_streaming());
+        assert_eq!(transcript.message_count(), 2);
+        assert_eq!(
+            transcript.scroller.item_count(),
+            transcript.message_count(),
+            "the tail slot closed as the live row became a message row"
+        );
+    }
+
+    /// A rejected prompt (or a run that ends without streaming) must stop
+    /// waiting: otherwise the composer stays on Stop and the row spins forever.
+    #[test]
+    fn abandoning_a_prompt_closes_the_pending_row() {
+        let mut transcript = Transcript::new();
+        transcript.append_user_message("ship it", Vec::new());
+        transcript.expect_reply();
+        assert_eq!(transcript.scroller.item_count(), 2);
+
+        transcript.abandon_reply();
+        assert!(!transcript.awaiting_reply.get());
+        assert!(transcript.stream_started.get().is_none());
+        assert_eq!(transcript.scroller.item_count(), 1);
+        // Idempotent: unwinding twice is not a second row operation.
+        transcript.abandon_reply();
+        assert_eq!(transcript.scroller.item_count(), 1);
+    }
+
+    /// The end-of-task summary and the pending row share the tail slot, so a
+    /// settled task's card does not sit below an empty pending row.
+    #[test]
+    fn the_summary_and_the_pending_row_share_the_tail_slot() {
+        let mut transcript = Transcript::new();
+        transcript.append_user_message("ship it", Vec::new());
+        transcript.expect_reply();
+        assert_eq!(transcript.scroller.item_count(), 2);
+
+        transcript.set_tail_row(true);
+        assert_eq!(transcript.scroller.item_count(), 2, "no second tail row");
+        transcript.retire_pending_row();
+        assert_eq!(
+            transcript.scroller.item_count(),
+            2,
+            "the card keeps the slot"
+        );
+
+        transcript.set_tail_row(false);
+        assert_eq!(transcript.scroller.item_count(), 1);
+    }
 
     #[test]
     fn assistant_error_message_surfaces_stop_reason_error() {

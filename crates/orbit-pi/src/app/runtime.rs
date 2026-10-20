@@ -72,6 +72,17 @@ impl OrbitApp {
                 }
             }
         }
+        // A rejected prompt never opened a turn. The run state was set
+        // optimistically when the prompt went out, so unwind it here instead of
+        // leaving the composer on Stop and the transcript waiting for an answer
+        // that is not coming (see `submit_as`).
+        if command == "prompt" {
+            self.busy = false;
+            self.transcript.abandon_reply();
+            // pi is the authority on whether something else is still running;
+            // `get_state` re-syncs `busy` from it.
+            self.send(CommandBody::GetState, "get_state");
+        }
         let fallback = tr!("runtime.unspecified_error");
         let detail = error.unwrap_or(&fallback);
         self.set_error(tr!(
@@ -510,6 +521,9 @@ impl OrbitApp {
         }
         self.drop_client();
         self.busy = false;
+        // The prompt this process was running has no answer coming: close the
+        // transcript's live row too, or it would spin on a dead pi.
+        self.transcript.abandon_reply();
         self.toast_info(tr!("runtime.pi_process_stopped"));
         cx.notify();
     }

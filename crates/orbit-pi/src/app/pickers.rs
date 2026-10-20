@@ -327,6 +327,7 @@ impl OrbitApp {
             sidebar_visible: self.sidebar_visible,
             side_panel_visible: self.sidepane.read(cx).is_open(),
             terminal_visible: self.terminal_panel.read(cx).is_open(),
+            terminal_tabs: self.terminal_panel.read(cx).tab_count(),
             project_panel_visible: self.project_panel.read(cx).is_open(),
             can_choose_model: !self.available_models.is_empty() && !running,
             can_choose_thinking: self.can_choose_thinking() && !running,
@@ -499,6 +500,18 @@ impl OrbitApp {
             CommandId::ToggleTerminal => {
                 self.terminal_panel
                     .update(cx, |panel, cx| panel.toggle(window, cx));
+            }
+            CommandId::NewTerminalTab => {
+                self.on_new_terminal_tab(&crate::NewTerminalTab, window, cx);
+            }
+            CommandId::CloseTerminalTab => {
+                self.on_close_terminal_tab(&crate::CloseTerminalTab, window, cx);
+            }
+            CommandId::NextTerminalTab => {
+                self.on_next_terminal_tab(&crate::NextTerminalTab, window, cx);
+            }
+            CommandId::PrevTerminalTab => {
+                self.on_prev_terminal_tab(&crate::PrevTerminalTab, window, cx);
             }
             CommandId::ToggleProjectPanel => {
                 self.project_panel.update(cx, |panel, cx| panel.toggle(cx));

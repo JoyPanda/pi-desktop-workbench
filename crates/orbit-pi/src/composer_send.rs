@@ -171,13 +171,43 @@ mod tests {
     }
 
     fn bound_action(cx: &gpui::App, key: &str, context: &str) -> Option<Box<dyn gpui::Action>> {
+        bound_keystroke(cx, gpui::Keystroke::parse(key).unwrap(), context)
+    }
+
+    /// Resolve a binding against the exact keystroke a backend delivers, so a
+    /// test can assert on the platform's real key/modifier shape rather than
+    /// re-parsing the binding string it is meant to check.
+    fn bound_keystroke(
+        cx: &gpui::App,
+        keystroke: gpui::Keystroke,
+        context: &str,
+    ) -> Option<Box<dyn gpui::Action>> {
         let (bindings, _) = cx.key_bindings().borrow().bindings_for_input(
-            &[gpui::Keystroke::parse(key).unwrap()],
+            &[keystroke],
             &[gpui::KeyContext::parse(context).unwrap()],
         );
         bindings
             .first()
             .map(|binding| binding.action().boxed_clone())
+    }
+
+    /// The keystroke a backend actually delivers for `chord`. Both the macOS
+    /// and Linux backends report shifted punctuation as the shifted symbol and
+    /// clear `shift`, so ⇧] arrives as `}` — a `shift-]` binding never fires.
+    fn delivered(chord: &str) -> gpui::Keystroke {
+        let mut keystroke = gpui::Keystroke::parse(chord).unwrap();
+        if keystroke.modifiers.shift {
+            let shifted = match keystroke.key.as_str() {
+                "]" => Some("}"),
+                "[" => Some("{"),
+                _ => None,
+            };
+            if let Some(key) = shifted {
+                keystroke.key = key.to_string();
+                keystroke.modifiers.shift = false;
+            }
+        }
+        keystroke
     }
 
     #[gpui::test]
@@ -212,6 +242,88 @@ mod tests {
                 .unwrap()
                 .as_any()
                 .is::<crate::TerminalTab>());
+        });
+    }
+
+    /// Terminal tabs keep the shell's own chords: the tab actions are bound
+    /// only inside the `Terminal` context, Ctrl+Tab there still belongs to the
+    /// shell rather than to session cycling, and off macOS Ctrl+W / Ctrl+T are
+    /// left unbound so readline gets them.
+    #[gpui::test]
+    fn terminal_tab_shortcuts_are_scoped_to_the_terminal(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::bind_keys(cx);
+            let secondary = if cfg!(target_os = "macos") {
+                gpui::Modifiers {
+                    platform: true,
+                    ..Default::default()
+                }
+            } else {
+                gpui::Modifiers {
+                    control: true,
+                    ..Default::default()
+                }
+            };
+            let tab = |key: &str| gpui::Keystroke {
+                modifiers: secondary,
+                key: key.into(),
+                key_char: None,
+            };
+            // Tab open/close: Cmd+T/Cmd+W on macOS, Ctrl+Shift+T/Ctrl+Shift+W
+            // elsewhere.
+            if cfg!(target_os = "macos") {
+                assert!(bound_keystroke(cx, tab("t"), "Terminal")
+                    .unwrap()
+                    .as_any()
+                    .is::<crate::NewTerminalTab>());
+                assert!(bound_keystroke(cx, tab("w"), "Terminal")
+                    .unwrap()
+                    .as_any()
+                    .is::<crate::CloseTerminalTab>());
+            } else {
+                assert!(bound_keystroke(
+                    cx,
+                    delivered("secondary-shift-t"),
+                    "Terminal"
+                )
+                .unwrap()
+                .as_any()
+                .is::<crate::NewTerminalTab>());
+                assert!(bound_keystroke(
+                    cx,
+                    delivered("secondary-shift-w"),
+                    "Terminal"
+                )
+                .unwrap()
+                .as_any()
+                .is::<crate::CloseTerminalTab>());
+                // The shell keeps its own editing chords.
+                assert!(bound_keystroke(cx, tab("w"), "Terminal")
+                    .map(|action| !action.as_any().is::<crate::CloseTerminalTab>())
+                    .unwrap_or(true));
+                assert!(bound_keystroke(cx, tab("t"), "Terminal")
+                    .map(|action| !action.as_any().is::<crate::NewTerminalTab>())
+                    .unwrap_or(true));
+            }
+            // Cycling fires on the keystroke the backend actually delivers for
+            // ⇧] / ⇧[, which is `}` / `{` with `shift` cleared, not `shift-]`.
+            assert!(bound_keystroke(cx, delivered("secondary-shift-]"), "Terminal")
+                .unwrap()
+                .as_any()
+                .is::<crate::NextTerminalTab>());
+            assert!(bound_keystroke(cx, delivered("secondary-shift-["), "Terminal")
+                .unwrap()
+                .as_any()
+                .is::<crate::PrevTerminalTab>());
+            // The same chords are not claimed anywhere else: in the chat column
+            // ⌘T is not a tab command and Ctrl+Tab still cycles sessions.
+            assert!(bound_action(cx, "secondary-t", "Composer")
+                .map(|action| !action.as_any().is::<crate::NewTerminalTab>())
+                .unwrap_or(true));
+            assert!(bound_action(cx, "ctrl-tab", "Composer")
+                .unwrap()
+                .as_any()
+                .is::<crate::NextSession>());
         });
     }
 

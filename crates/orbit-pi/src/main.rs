@@ -44,6 +44,7 @@ mod ask;
 mod assets;
 mod auth;
 mod auto_title;
+mod backdrop;
 mod branch_picker;
 mod bug_report;
 mod bundled_extensions;
@@ -207,8 +208,19 @@ actions!(
 );
 // Terminal-panel actions (bound to the `Terminal` context on the grid).
 // `TerminalTab` exists so Tab reaches the shell's completion instead of the
-// global focus-traversal binding.
-actions!(terminal_keys, [TerminalEscape, TerminalTab]);
+// global focus-traversal binding. The rest are the panel's tab commands: they
+// are scoped to `Terminal` and their chords avoid the shell's own editing keys.
+actions!(
+    terminal_keys,
+    [
+        TerminalEscape,
+        TerminalTab,
+        NewTerminalTab,
+        CloseTerminalTab,
+        NextTerminalTab,
+        PrevTerminalTab
+    ]
+);
 
 // Custom-UI surface action (bound to the `CustomUi` context on the surface's
 // focus handle) so Escape reaches the component instead of aborting the run.
@@ -511,6 +523,9 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-tab", TerminalTab, Some("Terminal")),
         KeyBinding::new("ctrl-tab", TerminalTab, Some("Terminal")),
         KeyBinding::new("ctrl-shift-tab", TerminalTab, Some("Terminal")),
+        // Terminal tab open/close/cycle come from the command registry
+        // (`commands::BINDINGS`), which scopes them to `Terminal`. Their chords
+        // live in `platform::shortcuts` because they differ per platform.
         // Custom-UI surface: Escape must reach the component (which cancels
         // itself), but the global `escape`-to-`AbortRun` binding is always
         // enabled, so the `CustomUi` context re-binds it and forwards ESC.
@@ -652,14 +667,12 @@ fn main() {
 
         // `main_window` owns the one window and the shell it renders; the
         // reopen handler registered above re-opens it from the Dock.
-        cx.set_global(main_window::Shell::default());
         main_window::open(cx);
 
         // If this launch replaced an older build, tell the waiting helper the
         // new window is up so it can commit the swap instead of rolling back.
         updater::signal_relaunch_ready();
 
-        cx.activate(true);
         cx.on_action(|_: &Quit, cx| cx.quit());
     });
 }

@@ -142,6 +142,9 @@ pub struct PaletteSnapshot {
     pub sidebar_visible: bool,
     pub side_panel_visible: bool,
     pub terminal_visible: bool,
+    /// How many shells the terminal panel is holding: new/close/cycle are
+    /// meaningless without one.
+    pub terminal_tabs: usize,
     pub project_panel_visible: bool,
     pub can_choose_model: bool,
     pub can_choose_thinking: bool,
@@ -265,6 +268,9 @@ fn command_enabled(id: CommandId, snapshot: &PaletteSnapshot) -> bool {
         CommandId::CopySessionId => snapshot.session_id.is_some(),
         // Cycling needs somewhere to go.
         CommandId::NextSession | CommandId::PrevSession => snapshot.sessions.len() > 1,
+        // Terminal tabs: closing needs a tab to close, cycling needs two.
+        CommandId::CloseTerminalTab => snapshot.terminal_tabs > 0,
+        CommandId::NextTerminalTab | CommandId::PrevTerminalTab => snapshot.terminal_tabs > 1,
         _ => true,
     }
 }
@@ -1149,6 +1155,7 @@ mod tests {
             sidebar_visible: true,
             side_panel_visible: false,
             terminal_visible: false,
+            terminal_tabs: 0,
             project_panel_visible: false,
             can_choose_model: false,
             can_choose_thinking: false,

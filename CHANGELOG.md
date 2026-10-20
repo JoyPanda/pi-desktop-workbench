@@ -7,15 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The new-task page's background is now a living ordered-dither field instead of a
+  static dot grid. An 8×8 Bayer screen of four dot sizes over a soft density field
+  covers the page edge to edge — densest in a band behind the composer, calmer but never
+  empty at the window's borders and corners — and drifts slowly enough that dots cross
+  their thresholds a few at a time, so
+  the page breathes instead of strobing. It reads the same dither language the photo
+  backdrop already speaks, costs no asset, follows the palette, and freezes under
+  Reduce Motion. A configured background image still replaces it.
+- The app monogram is screened into that field. Its mask is sampled from the mark the
+  binary already ships (`app-icon.png`) rather than redrawn, so the backdrop cannot drift
+  from the icon and a `cargo run` build never grows the Alpha pill; the glyphs hold a quiet
+  density at rest and a soft band of light crosses them about every twenty seconds, filling
+  each letter with the largest dot in turn. A window too small to hold the mark drops it.
+- The terminal panel is tabbed. ⌘T opens another shell in the current
+  workspace, ⌘W closes the active one (the panel closes with its last tab), and
+  ⌘⇧] / ⌘⇧[ step between tabs — all scoped to the terminal, so Ctrl+Tab still
+  reaches the shell and session cycling is untouched elsewhere. Where Ctrl+W and
+  Ctrl+T belong to the shell (Windows, Linux), the same actions take
+  Ctrl+Shift+W / Ctrl+Shift+T instead. A background
+  tab keeps its PTY alive: a build left running in one tab keeps running while
+  you work in another. Switching sessions no longer kills the shells either;
+  new tabs follow the active workspace, existing ones stay where they are.
+- Each tab carries its login-shell profile mark (zsh, bash, fish — the Simple
+  Icons shell logos, CC0), with the shell name and start directory on hover.
+  The panel also gained a proper resize handle above the tab strip, so the
+  header row belongs to the tabs instead of doubling as a drag target.
+
 ### Fixed
 
+- Sending a prompt now shows the run immediately. The composer used to stay on
+  **Send** and the transcript stayed silent until pi's `agent_start` and the
+  first streamed token — on a slow provider, or a pi that was still booting,
+  the send looked dropped. The turn is now in flight from the moment you press
+  Enter: the composer flips to Stop, the transcript shows the live
+  “Working for…” row (its clock starting at the send), and a second Enter
+  queues a follow-up instead of racing a second prompt. A prompt pi rejects
+  unwinds that state, so nothing is left spinning.
 - macOS: closing the window no longer strands the app. The Dock icon kept its
   running dot but a click did nothing — the reopen request macOS sends to a
   windowless app had no handler, so only a full quit brought a window back.
   Clicking the Dock icon (or the app's Dock tile) now opens the window again,
   on the session that was still open — the shell, the pi process behind it,
   and any stream that kept running while the window was closed all survive the
-  close.
+  close. The heartbeat runs on the app rather than the window, so a run that
+  settles with no window open still posts its notification.
 
 ## [0.2.10] - 2026-10-16
 
