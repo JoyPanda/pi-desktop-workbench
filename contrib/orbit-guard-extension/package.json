@@ -1,6 +1,6 @@
 {
   "name": "orbit-guard-bridge",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "private": true,
   "type": "module",
   "description": "Orbit's access-mode guard: a pi extension loaded with --extension that confirms mutating tool calls according to the active access mode.",
