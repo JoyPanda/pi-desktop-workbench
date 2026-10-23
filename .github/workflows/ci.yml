@@ -5,6 +5,9 @@ on:
     branches: [main, "redesign/**"]
   pull_request:
 
+permissions:
+  contents: read
+
 # GPUI renders through each platform's native graphics API (Metal on macOS,
 # DXGI on Windows, X11/Wayland on Linux), so every change is built on all three
 # shipped platforms. Linux needs the same system libraries the release bundle
