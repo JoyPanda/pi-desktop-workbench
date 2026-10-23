@@ -232,6 +232,9 @@ pub(crate) struct TranscriptView {
     /// The selected find hit (stronger wash + a ring); `None` when find is
     /// closed.
     pub search_active: Option<Rc<Cell<Option<usize>>>>,
+    /// User-turn row indices, cached in `Transcript` and shared here so the
+    /// rail's O(message-count) pass does not run every frame.
+    pub user_turns: Rc<Vec<usize>>,
 }
 
 // ── text selection ─────────────────────────────────────────────────────────
@@ -1082,14 +1085,12 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let search_hits = view.search_hits.clone();
     let search_active = view.search_active.clone();
 
-    let (user_turns, active_turn) = {
+    // `user_turns` is cached in `Transcript` (rebuilt only when the message
+    // list changes); only `active_turn` depends on the live scroll position
+    // and is recomputed per frame.
+    let user_turns = view.user_turns.clone();
+    let active_turn = {
         let messages = messages.borrow();
-        let user_turns: Vec<usize> = messages
-            .iter()
-            .enumerate()
-            .filter(|(_, message)| message.user)
-            .map(|(ix, _)| ix)
-            .collect();
         // While the reader sits at the live edge the indicator tracks the
         // streaming/latest turn; once they scroll away it follows the
         // viewport instead (fixes the tick staying pinned to the newest
@@ -1099,8 +1100,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
         } else {
             Some(scroller.first_visible_index())
         };
-        let active_turn = active_user_index(&messages, streaming.get(), viewport_hint);
-        (user_turns, active_turn)
+        active_user_index(&messages, streaming.get(), viewport_hint)
     };
     let show_rail = user_turns.len() >= 2
         && view.main_width >= px(NAVIGATION_RAIL_MIN_MAIN_WIDTH)
@@ -1361,7 +1361,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
         .when(show_rail, |shell| {
             shell.child(render_navigation_rail(
                 hover_info,
-                user_turns,
+                user_turns.as_slice(),
                 active_turn,
                 hovered_turn.clone(),
                 view.scroller.clone(),
@@ -1388,7 +1388,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
 #[allow(clippy::too_many_arguments)]
 fn render_navigation_rail(
     hover_info: Option<(String, String)>,
-    user_turns: Vec<usize>,
+    user_turns: &[usize],
     active_turn: Option<usize>,
     hovered: Rc<Cell<Option<usize>>>,
     scroller: MessageScrollerState,
@@ -8979,9 +8979,19 @@ mod tests {
         messages: Rc<RefCell<Vec<ChatMessage>>>,
         scroller: MessageScrollerState,
     ) -> TranscriptView {
+        let user_turns = Rc::new(
+            messages
+                .borrow()
+                .iter()
+                .enumerate()
+                .filter(|(_, message)| message.user)
+                .map(|(ix, _)| ix)
+                .collect::<Vec<usize>>(),
+        );
         TranscriptView {
             scroller,
             messages,
+            user_turns,
             text_selection: state,
             streaming: Rc::new(Cell::new(None)),
             stream_started: Rc::new(Cell::new(None)),

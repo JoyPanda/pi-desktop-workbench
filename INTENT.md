@@ -277,7 +277,7 @@ legacy app today:
    and the in-app updater with Version History
 7. Markdown — GFM, syntax-highlighted code, copy-able code blocks, image lightbox
 8. Theming — dark/light palettes, accent, font, density, reduce-motion. Persisted to **Orbit's own store** (`~/.orbit-pi/{theme,ui.json,fonts.json}`), not pi's settings: theme/UI state is Orbit's, and writing it into pi's config would fork pi's own source of truth. (Revised from "persisted to pi's settings".)
-9. Attachments — files read to base64 images for prompts
+9. Attachments — images for prompts, compressed at ingest (1400 px longest edge, 512 KiB base64, JPEG quality 75; alpha images become lossless WebP) so a large screenshot never rides the session history at full size
 10. macOS native expectations — traffic lights, a native menu bar (Orbit/File/Edit/View, rebuilt
     on language change), native dialogs, keyboard operability. Orbit's actions are also exposed
     as keyboard/mouse surfaces (⌘P palette, shortcuts), not only through menus.
@@ -285,6 +285,23 @@ legacy app today:
 ### Implementation status (living)
 
 Done: streaming transcript + virtualization; markdown + highlighting; composer with steering, follow-ups, cancel, autocomplete, attachments; extension dialogs; diff/Review + Git page + GitHub issues/PRs (where `gh` is available); sessions (list/switch/new/delete/clone/cross-workspace) over an Orbit-owned project list (only folders the user added; removing one never touches pi) whose groups sort by activity, added date, name, or session count, with a **warm process pool** so re-opening a recent session is a resume, not a Node spawn; Git worktrees as first-class workspaces (`worktree.rs` + the Worktrees page: discovery, create from a new/existing branch, open/rename/move/lock/remove/prune/repair, configurable `.wt` root, optional async setup script with `ORBIT_ROOT_PATH`/`ORBIT_WORKTREE_PATH`, sessions rooted in and restored to the worktree — D14); Explorer project panel + editable Files surface; integrated terminal (⌘J); usage, skills, plugins, models, providers, settings pages; transcript find; image lightbox; theming (dark/light/system, 43 palettes) + reduce-motion; localization (ten locales + System, D9); in-app signed updater + Version History; notifications; open-in-editor; signed/notarizable macOS packaging + best-effort Windows/Linux bundles (D5); CI; access modes (a guard, not a sandbox), workflow modes (Plan/Build/Ask per D8), and the auto-title / quota extension bridges (D10); Zed design tokens (D11) with context menus, the tooltip, the extension dialog, the floating modal cards (provider usage / API-key / editor, update dialog, custom UI), the sidebar session / workspace rows, the transcript's message / card chrome, the settings section / group / row chrome, UI type on `TextSize` across every surface, corner radii on `Radius`, and one-shot motion on `AnimationDuration` migrated onto them.
+
+Attached images are compressed when they are queued (`attachments.rs`): the
+longest edge is capped at 1400 px (never upscaled), opaque images are re-encoded
+as JPEG with quality stepping down to keep the base64 payload within 512 KiB, and
+images with transparency become lossless WebP. Images already under both caps pass
+through untouched, and animated GIFs pass through so their frames survive. The
+composer chip and bug-report screenshots both read the compressed bytes, and the
+status line reports the before/after size when an image shrank.
+
+Session metadata is cached per file (`sessions.rs`) keyed on the file's
+`(mtime, length)`, so a turn settle or watcher reload re-reads only the session
+files that actually grew instead of rescanning the whole store; a reload that
+changed nothing is skipped. The transcript's tok/s readout is labeled `avg`
+because it averages output tokens over the whole request (prefill plus decode).
+The navigation rail's user-turn index is likewise cached in `Transcript` and
+rebuilt only when the message list changes, and debug builds log one local
+`[orbit:perf]` line per settle (window, cache, prompt, output, duration, rate).
 
 Every icon-only button carries the app's native tooltip — a localized label, usually
 with its shortcut appended (the send / stop button set the register) — across the top

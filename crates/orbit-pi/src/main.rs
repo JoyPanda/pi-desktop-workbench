@@ -42,6 +42,7 @@ mod app_icon;
 mod archive;
 mod ask;
 mod assets;
+mod attachments;
 mod auth;
 mod auto_title;
 mod backdrop;

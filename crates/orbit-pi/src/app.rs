@@ -961,6 +961,12 @@ struct Attachment {
     data: String,
     /// Decoded image for the chip thumbnail.
     preview: Option<Arc<gpui::Image>>,
+    /// Raw byte length of the original file/paste.
+    original_len: usize,
+    /// Raw byte length of what is actually stored (after compression).
+    stored_len: usize,
+    /// The image was resized or re-encoded before it was queued.
+    compressed: bool,
 }
 
 impl Attachment {
@@ -974,12 +980,11 @@ impl Attachment {
             gpui::ImageFormat::Svg => "svg",
             gpui::ImageFormat::Tiff => "tiff",
         };
-        Self {
-            name: tr!("app.pasted_image", index = index + 1, ext = ext),
-            mime: image.format.mime_type().to_string(),
-            data: base64::engine::general_purpose::STANDARD.encode(&image.bytes),
-            preview: Some(Arc::new(image.clone())),
-        }
+        Self::from_bytes(
+            tr!("app.pasted_image", index = index + 1, ext = ext),
+            &image.bytes,
+            image.format,
+        )
     }
 
     /// Images only — anything else returns `None` so a drop can fall back to
@@ -989,26 +994,40 @@ impl Attachment {
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_lowercase)?;
-        let (mime, format) = match ext.as_str() {
-            "png" => ("image/png", gpui::ImageFormat::Png),
-            "jpg" | "jpeg" => ("image/jpeg", gpui::ImageFormat::Jpeg),
-            "webp" => ("image/webp", gpui::ImageFormat::Webp),
-            "gif" => ("image/gif", gpui::ImageFormat::Gif),
-            "bmp" => ("image/bmp", gpui::ImageFormat::Bmp),
+        let format = match ext.as_str() {
+            "png" => gpui::ImageFormat::Png,
+            "jpg" | "jpeg" => gpui::ImageFormat::Jpeg,
+            "webp" => gpui::ImageFormat::Webp,
+            "gif" => gpui::ImageFormat::Gif,
+            "bmp" => gpui::ImageFormat::Bmp,
             _ => return None,
         };
         let bytes = std::fs::read(path).ok()?;
-        let preview = Arc::new(gpui::Image::from_bytes(format, bytes.clone()));
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "image".into());
-        Some(Self {
+        Some(Self::from_bytes(name, &bytes, format))
+    }
+
+    /// Build an attachment from encoded image bytes, compressing at ingest so
+    /// a large screenshot never rides the prompt (or the session history) at
+    /// full size.
+    fn from_bytes(name: String, bytes: &[u8], format: gpui::ImageFormat) -> Self {
+        let compressed = crate::attachments::compress_image(bytes, format);
+        let preview = Arc::new(gpui::Image::from_bytes(
+            compressed.format,
+            compressed.bytes.clone(),
+        ));
+        Self {
             name,
-            mime: mime.into(),
-            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            mime: compressed.format.mime_type().to_string(),
+            data: base64::engine::general_purpose::STANDARD.encode(&compressed.bytes),
             preview: Some(preview),
-        })
+            original_len: bytes.len(),
+            stored_len: compressed.bytes.len(),
+            compressed: compressed.compressed,
+        }
     }
 
     /// The wire shape pi's `prompt.images` expects.
@@ -1023,6 +1042,26 @@ impl Attachment {
         base64::engine::general_purpose::STANDARD
             .decode(&self.data)
             .ok()
+    }
+}
+
+impl OrbitApp {
+    /// Queue one prepared attachment, honoring the cap and reporting
+    /// compression so a large screenshot visibly shrinks before it ships.
+    fn push_attachment(&mut self, attachment: Attachment, cx: &mut Context<Self>) {
+        if self.attachments.len() >= MAX_ATTACHMENTS {
+            self.set_status(tr!("composer_ops.max_attachments", count = MAX_ATTACHMENTS));
+            return;
+        }
+        if attachment.compressed {
+            self.set_status(tr!(
+                "composer_ops.image_compressed",
+                original = crate::attachments::human_bytes(attachment.original_len),
+                stored = crate::attachments::human_bytes(attachment.stored_len),
+            ));
+        }
+        self.attachments.push(attachment);
+        cx.notify();
     }
 }
 

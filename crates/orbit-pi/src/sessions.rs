@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use crate::watch::debounced_watch;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInfo {
     /// Path to the `.jsonl` session file (used by `switch_session`).
     pub path: PathBuf,
@@ -276,9 +276,20 @@ impl SessionWatcher {
 }
 
 fn read_session(path: &Path) -> Option<SessionInfo> {
+    // A scan revisits every file on startup, every watcher reload, and every
+    // turn settle. Sessions that have not changed since the last scan are the
+    // common case (a store can hold hundreds of MB across dozens of files), so
+    // short-circuit on the file's (mtime, length) before opening anything.
+    let meta = fs::metadata(path).ok()?;
+    let file_modified = meta.modified().ok()?;
+    let len = meta.len();
+    if let Some(info) = info_cache_get(path, file_modified, len) {
+        return Some(info);
+    }
+
     let file = fs::File::open(path).ok()?;
     let mut reader = BufReader::new(file);
-    let fallback = fs::metadata(path).ok()?.modified().ok()?;
+    let fallback = file_modified;
     // Age from the last real message, so bookkeeping appends (quota snapshots
     // written when the session is merely opened) don't reset it to "now".
     let modified = last_message_time(path).unwrap_or(fallback);
@@ -331,14 +342,50 @@ fn read_session(path: &Path) -> Option<SessionInfo> {
         .map(|name| cap_chars(&name, 80))
         .unwrap_or_else(|| cap_chars(&first_text, 80));
 
-    Some(SessionInfo {
+    let info = SessionInfo {
         path: path.to_path_buf(),
         id,
         cwd,
         title,
         first_message,
         modified,
-    })
+    };
+    info_cache_put(path, file_modified, len, info.clone());
+    Some(info)
+}
+
+/// One session's cached metadata, valid while the file's `(mtime, length)`
+/// are unchanged. A stale entry is dropped and recomputed on the next scan.
+#[derive(Clone)]
+struct InfoCacheEntry {
+    file_modified: SystemTime,
+    len: u64,
+    info: SessionInfo,
+}
+
+/// Per-file [`SessionInfo`] cache shared by the startup scan and the watcher
+/// thread. Scans are therefore O(changed files): a settle or a watcher reload
+/// re-reads only the file(s) that actually grew, and directory walks hit this
+/// cache for the rest.
+static INFO_CACHE: RwLock<Option<HashMap<PathBuf, InfoCacheEntry>>> = RwLock::new(None);
+
+fn info_cache_get(path: &Path, file_modified: SystemTime, len: u64) -> Option<SessionInfo> {
+    let guard = INFO_CACHE.read().ok()?;
+    let entry = guard.as_ref()?.get(path)?;
+    (entry.file_modified == file_modified && entry.len == len).then(|| entry.info.clone())
+}
+
+fn info_cache_put(path: &Path, file_modified: SystemTime, len: u64, info: SessionInfo) {
+    if let Ok(mut guard) = INFO_CACHE.write() {
+        guard.get_or_insert_with(HashMap::new).insert(
+            path.to_path_buf(),
+            InfoCacheEntry {
+                file_modified,
+                len,
+                info,
+            },
+        );
+    }
 }
 
 /// The session's most recent pi-assigned name. pi writes a `session_info`
@@ -779,6 +826,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(read_session(&path).unwrap().title, "deep name");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The per-file cache must not serve a stale activity time after the
+    /// session grows: the key is the file's (mtime, length), so appending a
+    /// new message invalidates the entry and the next scan re-reads it.
+    #[test]
+    fn session_info_cache_refreshes_when_the_file_grows() {
+        let dir = std::env::temp_dir().join("orbit-session-cache-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("session.jsonl");
+
+        let millis = |ts: u64| std::time::UNIX_EPOCH + Duration::from_millis(ts);
+        let body = |user: u64, assistant: u64| {
+            format!(
+                "{{\"type\":\"session\",\"id\":\"cache\",\"cwd\":\"/tmp/ws\"}}\n\
+                 {{\"type\":\"message\",\"timestamp\":{user},\"message\":{{\"role\":\"user\",\"content\":\"hi\"}}}}\n\
+                 {{\"type\":\"message\",\"timestamp\":{assistant},\"message\":{{\"role\":\"assistant\",\"content\":\"yo\"}}}}\n"
+            )
+        };
+
+        fs::write(&path, body(1_700_000_000_000, 1_700_000_001_000)).unwrap();
+        let first = read_session(&path).expect("listable");
+        assert_eq!(first.modified, millis(1_700_000_001_000));
+
+        // Grow the file with a newer message; the cache key (length) changed,
+        // so the next read must reflect the newer activity time.
+        let appended = format!(
+            "{}{{\"type\":\"message\",\"timestamp\":1700000002000,\"message\":{{\"role\":\"user\",\"content\":\"more\"}}}}\n",
+            body(1_700_000_000_000, 1_700_000_001_000)
+        );
+        fs::write(&path, appended).unwrap();
+        let second = read_session(&path).expect("listable");
+        assert_eq!(second.modified, millis(1_700_000_002_000));
+
+        // An unchanged file re-reads to the same result (a cache hit).
+        assert_eq!(read_session(&path).unwrap().modified, millis(1_700_000_002_000));
+
         let _ = fs::remove_dir_all(&dir);
     }
 

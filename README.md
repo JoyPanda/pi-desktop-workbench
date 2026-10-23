@@ -40,6 +40,7 @@ Usage — requests, tokens, cost, and cache, read from your own sessions:
 - GPU-rendered transcript — virtualized so cost is independent of message count, with stick-to-latest streaming and coalesced commits
 - GFM markdown and syntax-highlighted code; highlighting is paint-only so streaming code blocks never reflow, and Mermaid fences stay copyable code blocks
 - In-transcript find (⌘F) and a full-window image lightbox
+- **Compressed image attachments** — images you attach or paste are downscaled and re-encoded at ingest (1400 px longest edge, 512 KiB base64, JPEG; transparency keeps lossless WebP), so a large screenshot no longer bloats the prompt or the session history; the status line reports the before/after size
 - Tool activity — bash, edit, read, and thinking rows drawn natively, expanding into Arguments/Output cards with per-section copy
 
 **Sessions**

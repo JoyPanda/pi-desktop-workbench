@@ -267,6 +267,12 @@ stack is gone; do not resurrect it.
   `context_menu_surface` / `context_menu_entry` / `context_menu_separator`
   (`app/helpers.rs`).
 - Public releases cannot assume the author's providers, models, paths, or machine state.
+- Provider HTTP bodies have hard caps (measured: `ollama.com/v1` accepts ~7.5 MB and
+  returns `413` at ~8 MB; much larger bodies surface as `400 failed to read request
+  body`). `read` images stay in the transcript as base64, so long visual-debug
+  sessions hit the cap. Fix with `inputLimits.images.resize` via `modelOverrides` in
+  `~/.pi/agent/models.json` and a fresh session — see
+  `docs/provider-request-limits.md`. Retrying cannot fix it.
 
 ### Known gaps
 

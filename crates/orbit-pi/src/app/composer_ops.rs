@@ -411,7 +411,7 @@ impl OrbitApp {
                 break;
             }
             match Attachment::from_path(path) {
-                Some(attachment) => self.attachments.push(attachment),
+                Some(attachment) => self.push_attachment(attachment, cx),
                 None => {
                     self.input.update(cx, |input, cx| {
                         input.insert_at_caret(&format!("{} ", path.display()), cx);
@@ -443,21 +443,13 @@ impl OrbitApp {
                 return;
             };
             let path = handle.path().to_path_buf();
+            // Decode + compress off the UI thread; only the finished
+            // attachment (and its preview) lands on the next update.
+            let attachment = Attachment::from_path(&path);
             let _ = this.update(cx, |app, cx| {
-                match Attachment::from_path(&path) {
-                    Some(attachment) => {
-                        if app.attachments.len() >= MAX_ATTACHMENTS {
-                            app.set_status(tr!(
-                                "composer_ops.max_attachments",
-                                count = MAX_ATTACHMENTS
-                            ));
-                        } else {
-                            app.attachments.push(attachment);
-                        }
-                    }
-                    None => {
-                        app.set_status(tr!("composer_ops.unsupported_image_format"));
-                    }
+                match attachment {
+                    Some(attachment) => app.push_attachment(attachment, cx),
+                    None => app.set_status(tr!("composer_ops.unsupported_image_format")),
                 }
                 cx.notify();
             });
@@ -477,21 +469,18 @@ impl OrbitApp {
                 return;
             };
             let path = handle.path().to_path_buf();
+            // Decode + compress off the UI thread; only the finished
+            // attachment (and its preview) lands on the next update.
+            let attachment = Attachment::from_path(&path);
             let _ = this.update_in(cx, |app, window, cx| {
-                if let Some(attachment) = Attachment::from_path(&path) {
-                    if app.attachments.len() >= MAX_ATTACHMENTS {
-                        app.set_status(tr!(
-                            "composer_ops.max_attachments",
-                            count = MAX_ATTACHMENTS
-                        ));
-                    } else {
-                        app.attachments.push(attachment);
+                match attachment {
+                    Some(attachment) => app.push_attachment(attachment, cx),
+                    None => {
+                        app.input.update(cx, |input, cx| {
+                            input.insert_at_caret(&format!("{} ", path.display()), cx);
+                        });
+                        app.input.read(cx).focus(window);
                     }
-                } else {
-                    app.input.update(cx, |input, cx| {
-                        input.insert_at_caret(&format!("{} ", path.display()), cx);
-                    });
-                    app.input.read(cx).focus(window);
                 }
                 cx.notify();
             });

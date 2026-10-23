@@ -121,9 +121,14 @@ impl WorkspaceWatcher {
 
     /// Whether a relevant path changed since the last call.
     pub fn take_dirty(&self) -> bool {
-        self.dirty
-            .iter()
-            .fold(false, |dirty, rx| drain(rx) || dirty)
+        let mut dirty = false;
+        for rx in &self.dirty {
+            // Drain every receiver so no pending event is dropped; a fold is
+            // deliberate here (`.any` would short-circuit and leave later
+            // receivers undrained, losing their flags).
+            dirty = drain(rx) || dirty;
+        }
+        dirty
     }
 }
 

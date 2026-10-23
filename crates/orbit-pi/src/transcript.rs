@@ -982,6 +982,11 @@ pub struct Transcript {
     /// row from the moment the user hits send instead of from the first
     /// token — otherwise a slow provider looks like a dropped keystroke.
     awaiting_reply: Rc<Cell<bool>>,
+    /// Cached user-turn row indices, rebuilt only when the message count
+    /// changes (messages only append or are rebuilt wholesale). The rail
+    /// renders every frame; this keeps that O(message-count) pass off the
+    /// hot path.
+    user_turns: Rc<RefCell<(usize, Rc<Vec<usize>>)>>,
 }
 
 impl Transcript {
@@ -1021,7 +1026,37 @@ impl Transcript {
             seed_thinking: Rc::new(Cell::new(false)),
             tail_summary: Rc::new(Cell::new(false)),
             awaiting_reply: Rc::new(Cell::new(false)),
+            user_turns: Rc::new(RefCell::new((0, Rc::new(Vec::new())))),
         }
+    }
+
+    /// User-turn row indices for the navigation rail, recomputed only when
+    /// the message list actually changes. Messages only ever append (or are
+    /// rebuilt wholesale via `load_from`/`clear`), so the message count is a
+    /// sufficient cache key once those two paths invalidate it.
+    fn cached_user_turns(&self) -> Rc<Vec<usize>> {
+        let messages = self.messages.borrow();
+        let mut cache = self.user_turns.borrow_mut();
+        if cache.0 == messages.len() {
+            return cache.1.clone();
+        }
+        let turns = Rc::new(
+            messages
+                .iter()
+                .enumerate()
+                .filter(|(_, message)| message.user)
+                .map(|(ix, _)| ix)
+                .collect::<Vec<usize>>(),
+        );
+        *cache = (messages.len(), turns.clone());
+        turns
+    }
+
+    /// Force the user-turn cache to rebuild on the next read (`load_from`
+    /// and `clear` replace the message list wholesale, so a matching length
+    /// is not proof the cached indices are still valid).
+    fn invalidate_user_turns(&self) {
+        self.user_turns.borrow_mut().0 = usize::MAX;
     }
 
     /// The current transcript text selection, if any — the keyboard copy
@@ -1061,6 +1096,7 @@ impl Transcript {
         }
         let count = parsed.len();
         *self.messages.borrow_mut() = parsed;
+        self.invalidate_user_turns();
         self.scroller.reset(count);
         self.streaming.set(None);
         self.seed_text.set(false);
@@ -1097,6 +1133,7 @@ impl Transcript {
     /// Clear for a fresh session.
     pub fn clear(&mut self) {
         *self.messages.borrow_mut() = Vec::new();
+        self.invalidate_user_turns();
         self.text_selection.borrow_mut().clear();
         self.scroller.reset(0);
         self.streaming.set(None);
@@ -2170,6 +2207,18 @@ impl Transcript {
         Some((ix, messages[ix].text()))
     }
 
+    /// The settled run's last assistant message usage, for the debug-build
+    /// per-turn diagnostic log.
+    pub fn last_message_usage(&self) -> Option<MessageUsage> {
+        self.messages.borrow().last().and_then(ChatMessage::usage)
+    }
+
+    /// The settled run's last message generation clock — pi's `durationMs`
+    /// (prefill plus decode), or the client-measured fallback.
+    pub fn last_message_duration(&self) -> Option<Duration> {
+        self.messages.borrow().last().and_then(ChatMessage::generation_time)
+    }
+
     /// Summarize the turn that just settled for a background notification:
     /// the newest assistant message's answer (or the agent error that ended
     /// it) and whether the user aborted it. A user message newer than the
@@ -2424,6 +2473,7 @@ impl Transcript {
         transcript_view::render_transcript(
             TranscriptView {
                 messages: self.messages.clone(),
+                user_turns: self.cached_user_turns(),
                 text_selection: self.text_selection.clone(),
                 scroller: self.scroller.clone(),
                 streaming: self.streaming.clone(),

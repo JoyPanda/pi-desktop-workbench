@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Image attachments are compressed at ingest.** A large PNG/JPEG attached to a
+  prompt is downscaled (longest edge 1400 px, never upscaled) and re-encoded as
+  JPEG (quality steps down to fit a 512 KiB base64 payload), while images with an
+  alpha channel become lossless WebP so transparency survives. Images already
+  under both caps pass through untouched, and animated GIFs pass through so their
+  frames survive. The status line reports the before/after size when an image
+  shrank, and both the composer chip and bug-report screenshots use the
+  compressed bytes — so a visual-debugging session can no longer balloon the
+  request body (see `docs/provider-request-limits.md`).
+
+### Changed
+
+- **Session-store scans are O(changed files).** The sidebar's session metadata is
+  now cached per file, keyed on the file's `(mtime, length)`, so a turn settle or
+  a watcher reload re-reads only the session files that actually grew instead of
+  rescanning the whole store (which could hold hundreds of MB). A watcher reload
+  that changed nothing no longer rebuilds the sidebar or repaints.
+
+- **The transcript's tok/s figure is labeled honestly.** It is an *average* over
+  the whole provider request (prefill plus decode), so it now reads `tok/s avg`
+  instead of implying instantaneous decode speed — the reason a long, mostly
+  cached prompt still shows a lower number.
+
+- **The navigation rail no longer rescans the message list every frame.** Its
+  user-turn index is cached in `Transcript` and rebuilt only when the message
+  list actually changes (messages only append or are rebuilt wholesale), so a
+  long transcript does not pay an O(message-count) pass on every render.
+
+### Debug
+
+- **Per-turn diagnostic log.** Debug builds (`cargo run`) print one `[orbit:perf]`
+  line to stderr when a turn settles — context window, cache read and hit rate,
+  uncached prompt, output, duration, and average rate — so a drop in tok/s can be
+  attributed to prefill vs. decode at a glance. This is local-only diagnostic
+  output, compiled out of release builds; nothing leaves the process.
+
 ## [0.2.11] - 2026-10-21
 
 ### Added
