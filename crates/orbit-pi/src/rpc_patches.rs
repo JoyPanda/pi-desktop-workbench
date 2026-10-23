@@ -316,8 +316,20 @@ fn save_package_root(base: &Path, root: &Path) {
 }
 
 fn write_config(base: &Path, config: &Config) {
-    if let Ok(bytes) = serde_json::to_vec_pretty(config) {
-        let _ = fs::write(base.join("config.json"), bytes);
+    let path = base.join("config.json");
+    match serde_json::to_vec_pretty(config) {
+        Ok(bytes) => {
+            if let Err(error) = fs::write(&path, bytes) {
+                eprintln!(
+                    "Orbit rpc patches: could not write {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        Err(error) => eprintln!(
+            "Orbit rpc patches: could not serialize {}: {error}",
+            path.display()
+        ),
     }
 }
 
@@ -395,8 +407,20 @@ fn read_state(base: &Path) -> Option<AppliedState> {
 }
 
 fn write_state(base: &Path, state: &AppliedState) {
-    if let Ok(bytes) = serde_json::to_vec_pretty(state) {
-        let _ = fs::write(state_path(base), bytes);
+    let path = state_path(base);
+    match serde_json::to_vec_pretty(state) {
+        Ok(bytes) => {
+            if let Err(error) = fs::write(&path, bytes) {
+                eprintln!(
+                    "Orbit rpc patches: could not write {}: {error}",
+                    path.display()
+                );
+            }
+        }
+        Err(error) => eprintln!(
+            "Orbit rpc patches: could not serialize {}: {error}",
+            path.display()
+        ),
     }
 }
 

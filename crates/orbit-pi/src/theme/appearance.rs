@@ -40,8 +40,8 @@ impl Default for AppearancePrefs {
     fn default() -> Self {
         Self {
             mode: AppearanceMode::System,
-            light_theme: ThemeId::OrbitLight,
-            dark_theme: ThemeId::Orbit,
+            light_theme: ThemeId::OrbitAzureLight,
+            dark_theme: ThemeId::OrbitAzure,
         }
     }
 }
@@ -136,32 +136,12 @@ impl AppearancePrefs {
     }
 }
 
-/// Every palette of `mode` in [`ThemeId::ALL`] order: the full catalog, used
-/// by the partition test and by [`theme_options`] when the user asks for all
-/// themes.
+/// Every palette of `mode` in [`ThemeId::ALL`] order: the set a theme
+/// dropdown offers for that appearance.
 pub fn themes_for(mode: ThemeMode) -> impl Iterator<Item = ThemeId> {
     ThemeId::ALL
         .into_iter()
         .filter(move |id| id.appearance() == mode)
-}
-
-/// The palettes a theme dropdown offers for `mode`, in the order it paints
-/// them. Collapsed, that is the curated [`ThemeId::FEATURED`] set plus the
-/// palette actually in effect, so the checkmark always has a row to sit on and
-/// a saved editor theme is never invisible. Expanded appends the rest of the
-/// catalog after the curated block, so revealing never reorders the rows the
-/// user is already reading.
-///
-/// The `configured` palette is only appended when it belongs to `mode`; a
-/// caller passing the other mode's palette gets the curated set unchanged.
-pub fn theme_options(mode: ThemeMode, all: bool, configured: ThemeId) -> Vec<ThemeId> {
-    let mut options: Vec<ThemeId> = themes_for(mode).filter(|id| id.featured()).collect();
-    if all {
-        options.extend(themes_for(mode).filter(|id| !id.featured()));
-    } else if configured.appearance() == mode && !options.contains(&configured) {
-        options.push(configured);
-    }
-    options
 }
 
 pub fn appearance_prefs(cx: &App) -> AppearancePrefs {
@@ -212,10 +192,10 @@ mod tests {
     #[test]
     fn legacy_dark_theme_preserves_explicit_choice() {
         assert_eq!(
-            AppearancePrefs::parse("catppuccin\n"),
+            AppearancePrefs::parse("flexoki\n"),
             AppearancePrefs {
                 mode: AppearanceMode::Dark,
-                dark_theme: ThemeId::Catppuccin,
+                dark_theme: ThemeId::Flexoki,
                 ..AppearancePrefs::default()
             }
         );
@@ -227,7 +207,7 @@ mod tests {
             AppearancePrefs::parse("one-light"),
             AppearancePrefs {
                 mode: AppearanceMode::Light,
-                light_theme: ThemeId::OneLight,
+                light_theme: ThemeId::OrbitLight,
                 ..AppearancePrefs::default()
             }
         );
@@ -236,14 +216,14 @@ mod tests {
     #[test]
     fn system_resolves_normal_and_vibrant_appearances() {
         let prefs = AppearancePrefs {
-            dark_theme: ThemeId::Nord,
+            dark_theme: ThemeId::Flexoki,
             ..AppearancePrefs::default()
         };
         for (system, expected) in [
-            (WindowAppearance::Light, ThemeId::OrbitLight),
-            (WindowAppearance::VibrantLight, ThemeId::OrbitLight),
-            (WindowAppearance::Dark, ThemeId::Nord),
-            (WindowAppearance::VibrantDark, ThemeId::Nord),
+            (WindowAppearance::Light, ThemeId::OrbitAzureLight),
+            (WindowAppearance::VibrantLight, ThemeId::OrbitAzureLight),
+            (WindowAppearance::Dark, ThemeId::Flexoki),
+            (WindowAppearance::VibrantDark, ThemeId::Flexoki),
         ] {
             assert_eq!(prefs.resolve(system), expected);
         }
@@ -252,12 +232,12 @@ mod tests {
     #[test]
     fn explicit_modes_ignore_system() {
         for (mode, expected) in [
-            (AppearanceMode::Light, ThemeId::OrbitLight),
-            (AppearanceMode::Dark, ThemeId::Nord),
+            (AppearanceMode::Light, ThemeId::OrbitAzureLight),
+            (AppearanceMode::Dark, ThemeId::Flexoki),
         ] {
             let prefs = AppearancePrefs {
                 mode,
-                dark_theme: ThemeId::Nord,
+                dark_theme: ThemeId::Flexoki,
                 ..AppearancePrefs::default()
             };
             for system in [WindowAppearance::Light, WindowAppearance::Dark] {
@@ -272,21 +252,24 @@ mod tests {
             mode: AppearanceMode::Light,
             ..AppearancePrefs::default()
         };
-        prefs.set_theme(ThemeMode::Dark, ThemeId::Dracula);
-        assert_eq!(prefs.resolve(WindowAppearance::Dark), ThemeId::OrbitLight);
+        prefs.set_theme(ThemeMode::Dark, ThemeId::OrbitDarker);
+        assert_eq!(
+            prefs.resolve(WindowAppearance::Dark),
+            ThemeId::OrbitAzureLight
+        );
         prefs.mode = AppearanceMode::Dark;
-        assert_eq!(prefs.resolve(WindowAppearance::Light), ThemeId::Dracula);
+        assert_eq!(prefs.resolve(WindowAppearance::Light), ThemeId::OrbitDarker);
     }
 
     #[test]
     fn invalid_fields_fall_back_independently() {
         let prefs = AppearancePrefs::parse(
-            r#"{"mode":"unknown","light_theme":"nord","dark_theme":"dracula"}"#,
+            r#"{"mode":"unknown","light_theme":"nord","dark_theme":"flexoki"}"#,
         );
         assert_eq!(
             prefs,
             AppearancePrefs {
-                dark_theme: ThemeId::Dracula,
+                dark_theme: ThemeId::Flexoki,
                 ..AppearancePrefs::default()
             }
         );
@@ -307,7 +290,7 @@ mod tests {
         for mode in AppearanceMode::ALL {
             let prefs = AppearancePrefs {
                 mode,
-                dark_theme: ThemeId::Vague,
+                dark_theme: ThemeId::OrbitCobalt,
                 ..AppearancePrefs::default()
             };
             prefs.persist_to(&path).unwrap();
@@ -333,13 +316,13 @@ mod tests {
         cx.update(|cx| {
             let prefs = AppearancePrefs {
                 mode: AppearanceMode::Dark,
-                dark_theme: ThemeId::Nord,
+                dark_theme: ThemeId::Flexoki,
                 ..AppearancePrefs::default()
             };
             cx.set_global(prefs);
-            cx.set_global(Theme::for_id(ThemeId::Nord));
+            cx.set_global(Theme::for_id(ThemeId::Flexoki));
             apply_system_appearance(cx, WindowAppearance::Light);
-            assert_eq!(get(cx).theme_id, ThemeId::Nord);
+            assert_eq!(get(cx).theme_id, ThemeId::Flexoki);
             assert_eq!(appearance_prefs(cx), prefs);
         });
     }
@@ -352,16 +335,10 @@ mod tests {
             light,
             vec![
                 ThemeId::OrbitLight,
+                ThemeId::OrbitAzureLight,
                 ThemeId::OrbitPaper,
                 ThemeId::OrbitContrast,
-                ThemeId::AyuLight,
-                ThemeId::CatppuccinLatte,
                 ThemeId::FlexokiLight,
-                ThemeId::GruvboxLight,
-                ThemeId::NordLight,
-                ThemeId::OneLight,
-                ThemeId::SolarizedLight,
-                ThemeId::TokyoNightLight,
             ]
         );
         assert_eq!(light.len() + dark.len(), ThemeId::ALL.len());
@@ -369,53 +346,25 @@ mod tests {
     }
 
     #[test]
-    fn theme_options_keep_the_configured_palette_visible() {
-        // `FEATURED` is dark-first, so each mode is one contiguous slice of it.
-        let dark = theme_options(ThemeMode::Dark, false, ThemeId::Orbit);
-        assert_eq!(dark, ThemeId::FEATURED[..3].to_vec());
-        let light = theme_options(ThemeMode::Light, false, ThemeId::OrbitLight);
-        assert_eq!(light, ThemeId::FEATURED[3..].to_vec());
-        assert!(light.iter().all(|id| id.appearance() == ThemeMode::Light));
-    }
-
-    #[test]
-    fn theme_options_append_an_unfeatured_choice_instead_of_hiding_it() {
-        let collapsed = theme_options(ThemeMode::Dark, false, ThemeId::Dracula);
-        assert_eq!(collapsed.last(), Some(&ThemeId::Dracula));
-        assert_eq!(collapsed.len(), ThemeId::FEATURED.len() / 2 + 1);
-        // The other mode's palette never leaks into this list.
-        let other = theme_options(ThemeMode::Dark, false, ThemeId::NordLight);
-        assert!(!other.contains(&ThemeId::NordLight));
-    }
-
-    #[test]
-    fn theme_options_reach_every_theme_without_reordering_the_curated_block() {
-        for mode in [ThemeMode::Dark, ThemeMode::Light] {
-            let curated = theme_options(mode, false, ThemeId::Orbit);
-            let all = theme_options(mode, true, ThemeId::Orbit);
-            // Revealing more only ever appends: the first `curated.len()`
-            // rows are the same palettes in the same order.
-            assert_eq!(all[..curated.len()], curated[..]);
-            let mut catalog: Vec<_> = themes_for(mode).collect();
-            catalog.sort_by_key(|id| !id.featured());
-            assert_eq!(all, catalog);
-            assert!(all.iter().all(|id| id.appearance() == mode));
-        }
-    }
-
-    #[test]
-    fn every_curated_palette_loads() {
-        for id in ThemeId::FEATURED {
-            assert!(id.featured());
+    fn every_theme_round_trips_through_its_key() {
+        for id in ThemeId::ALL {
             assert_eq!(ThemeId::parse(id.as_str()), Some(id));
         }
+    }
+
+    #[test]
+    fn retired_theme_keys_still_load() {
+        assert_eq!(ThemeId::parse("dracula"), Some(ThemeId::Orbit));
+        assert_eq!(ThemeId::parse("nord"), Some(ThemeId::Orbit));
+        assert_eq!(ThemeId::parse("one-light"), Some(ThemeId::OrbitLight));
+        assert_eq!(ThemeId::parse("gruvbox-light"), Some(ThemeId::OrbitLight));
     }
 
     #[gpui::test]
     fn system_changes_apply_live_and_preserve_ui_preferences(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let prefs = AppearancePrefs {
-                dark_theme: ThemeId::Nord,
+                dark_theme: ThemeId::Flexoki,
                 ..AppearancePrefs::default()
             };
             cx.set_global(prefs);
@@ -423,12 +372,12 @@ mod tests {
                 reduce_motion: true,
                 ..super::super::UiPrefs::default()
             };
-            cx.set_global(Theme::for_id(ThemeId::Nord).with_ui(ui));
+            cx.set_global(Theme::for_id(ThemeId::Flexoki).with_ui(ui));
             apply_system_appearance(cx, WindowAppearance::Light);
-            assert_eq!(get(cx).theme_id, ThemeId::OrbitLight);
+            assert_eq!(get(cx).theme_id, ThemeId::OrbitAzureLight);
             assert_eq!(get(cx).ui, ui);
             apply_system_appearance(cx, WindowAppearance::Dark);
-            assert_eq!(get(cx).theme_id, ThemeId::Nord);
+            assert_eq!(get(cx).theme_id, ThemeId::Flexoki);
             assert_eq!(appearance_prefs(cx), prefs);
         });
     }

@@ -4,7 +4,7 @@
 //! Follows the same GPUI conventions as the command palette and the branch
 //! picker:
 //!
-//! - compact raised surface (`menu_bg`, strong border, layered shadow)
+//! - compact raised surface (`surface_elevated`, strong border, layered shadow)
 //! - inset search field, then a horizontally scrollable scope row (`All`,
 //!   `Recents`/`Favorites` when any exist, and each provider), then the list
 //! - models are grouped under provider headers (name + count), with recently
@@ -39,9 +39,9 @@ use crate::app::{
 use crate::composer::ComposerInput;
 use crate::context_meter::format_tokens;
 use crate::favorites::Favorites;
-use crate::recent_models::Recents;
 use crate::model_selector_match::is_model_selected;
 use crate::providers::provider_display_name;
+use crate::recent_models::Recents;
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
     context_menu, input, list, picker, BufferLineHeight, ButtonSize, DynamicSpacing, IconSize,
@@ -586,22 +586,22 @@ impl ModelSelector {
             let active = self.scope == scope;
             // `All`/`Favorites` carry a static glyph; each provider chip
             // carries its own brand mark, in the provider's identity color —
-            // except on the active fill, where `active_fg` keeps contrast.
+            // except on the active fill, where `selection_fg` keeps contrast.
             let lead = match &scope {
                 Scope::Provider(provider) => {
                     let color = if active {
-                        theme.active_fg
+                        theme.text_primary
                     } else {
-                        provider_mark_color(provider, &theme, theme.text_3)
+                        provider_mark_color(provider, &theme, theme.text_muted)
                     };
                     icon_dyn(provider_icon(provider), IconSize::Small.px(&theme), color)
                         .into_any_element()
                 }
                 _ => {
                     let brand = if active {
-                        theme.active_fg
+                        theme.text_primary
                     } else {
-                        theme.text_3
+                        theme.text_muted
                     };
                     icon(static_icon, IconSize::Small.px(&theme), brand).into_any_element()
                 }
@@ -631,8 +631,12 @@ impl ModelSelector {
                     row = row.child(scope_chip(
                         ElementId::Name(id.into()),
                         tr!("model_selector.favorite_current"),
-                        icon("icons/star.svg", IconSize::Small.px(&theme), theme.text_3)
-                            .into_any_element(),
+                        icon(
+                            "icons/star.svg",
+                            IconSize::Small.px(&theme),
+                            theme.text_muted,
+                        )
+                        .into_any_element(),
                         false,
                         theme,
                         move |_, cx| {
@@ -984,7 +988,7 @@ impl Render for ModelSelector {
                     .child(icon(
                         "icons/search.svg",
                         input::ICON.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     ))
                     .child(div().flex_1().min_w_0().child(self.filter.clone())),
             )
@@ -1006,14 +1010,14 @@ impl Render for ModelSelector {
 /// sparkles (auto). Unknown levels fall back to the plain spark.
 pub(crate) fn thinking_icon(level: &str, theme: &Theme) -> (&'static str, gpui::Hsla) {
     match level.to_ascii_lowercase().as_str() {
-        "off" | "none" => ("icons/thinking-none.svg", theme.text_3),
-        "minimal" | "low" => ("icons/thinking-low.svg", theme.accent),
-        "medium" => ("icons/thinking-medium.svg", theme.accent),
-        "high" => ("icons/thinking-high.svg", theme.accent),
-        "xhigh" | "ultra" => ("icons/thinking-xhigh.svg", theme.accent),
-        "max" => ("icons/thinking-max.svg", theme.accent),
-        "auto" => ("icons/thinking-auto.svg", theme.accent),
-        _ => ("icons/spark.svg", theme.accent),
+        "off" | "none" => ("icons/thinking-none.svg", theme.text_muted),
+        "minimal" | "low" => ("icons/thinking-low.svg", theme.accent_text),
+        "medium" => ("icons/thinking-medium.svg", theme.accent_text),
+        "high" => ("icons/thinking-high.svg", theme.accent_text),
+        "xhigh" | "ultra" => ("icons/thinking-xhigh.svg", theme.accent_text),
+        "max" => ("icons/thinking-max.svg", theme.accent_text),
+        "auto" => ("icons/thinking-auto.svg", theme.accent_text),
+        _ => ("icons/spark.svg", theme.accent_text),
     }
 }
 
@@ -1124,7 +1128,7 @@ fn trailing_check(selected: bool, theme: Theme) -> impl IntoElement + use<> {
             icon(
                 "icons/check.svg",
                 context_menu::ICON.px(&theme),
-                theme.accent,
+                theme.accent_text,
             )
             .into_any_element()
         } else {
@@ -1135,13 +1139,13 @@ fn trailing_check(selected: bool, theme: Theme) -> impl IntoElement + use<> {
 /// The one neutral tile both pickers lead every row with: a 28px raised square
 /// with an 8px corner. It stays neutral in every state — selection is carried
 /// by the row's own fill and the trailing accent check, so the tile never adds
-/// a second ember mark to the same row (the One Accent Rule).
+/// a second accent mark to the same row (the One Accent Rule).
 fn leading_tile(theme: Theme, glyph: AnyElement) -> impl IntoElement + use<> {
     div()
         .size(px(LEADING_TILE))
         .flex_none()
         .rounded(Radius::Large.px(&theme))
-        .bg(theme.bg_raised)
+        .bg(theme.surface_elevated)
         .border_1()
         .border_color(theme.border)
         .flex()
@@ -1169,7 +1173,11 @@ fn provider_chip(provider: &str, selected: bool, theme: Theme) -> impl IntoEleme
             provider_mark_color(
                 provider,
                 &theme,
-                if selected { theme.text } else { theme.text_2 },
+                if selected {
+                    theme.text_primary
+                } else {
+                    theme.text_secondary
+                },
             ),
         )
         .into_any_element(),
@@ -1195,20 +1203,20 @@ fn scope_chip(
         })
         .raised(
             if active {
-                theme.active
+                theme.selection
             } else {
-                theme.bg_raised
+                theme.surface_elevated
             },
             &theme,
         )
         .text_color(if active {
-            theme.active_fg
+            theme.text_primary
         } else {
-            theme.text_2
+            theme.text_secondary
         })
         .cursor_pointer()
         .when(!active, |chip| {
-            chip.hover(|s| s.raised(theme.bg_hover, &theme))
+            chip.hover(|s| s.raised(theme.surface_hover, &theme))
         })
         .on_click(move |_, window, cx| on_click(window, cx))
         .child(lead)
@@ -1233,7 +1241,7 @@ fn favorite_button(
         .cursor_pointer()
         .group_hover("picker-row", |s| s.opacity(1.))
         .when(!favorited, |button| button.opacity(0.))
-        .hover(|s| s.bg(theme.overlay))
+        .hover(|s| s.bg(theme.surface_hover))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             // Keep the row's own click (model selection) from also firing.
             cx.stop_propagation();
@@ -1243,9 +1251,9 @@ fn favorite_button(
             "icons/star.svg",
             ButtonSize::Default.icon_size().px(&theme),
             if favorited {
-                theme.accent
+                theme.accent_text
             } else {
-                theme.text_3
+                theme.text_muted
             },
         ))
         .into_any_element()
@@ -1277,8 +1285,10 @@ fn group_header(
                 .items_center()
                 .gap(DynamicSpacing::Base04.px(&theme))
                 .text_size(list::SUB_HEADER_TEXT.px(&theme))
-                .text_color(theme.text_3)
-                .children(glyph.map(|path| icon(path, IconSize::XSmall.px(&theme), theme.text_3)))
+                .text_color(theme.text_muted)
+                .children(
+                    glyph.map(|path| icon(path, IconSize::XSmall.px(&theme), theme.text_muted)),
+                )
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
@@ -1307,11 +1317,11 @@ fn empty_state(kind: PickerKind, theme: Theme) -> impl IntoElement + use<> {
             // height as a real row (and `flex_none` like the palette's).
             .h(picker::two_line_entry_height(&theme))
             .flex_none()
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .child(icon(
                 "icons/search.svg",
                 context_menu::ICON.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(
                 div()
@@ -1347,7 +1357,7 @@ fn footer(count_label: String, theme: Theme) -> gpui::Div {
         .border_t_1()
         .border_color(theme.border)
         .text_size(TextSize::Small.px(&theme))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(
             div()
                 .flex_1()
@@ -1365,6 +1375,7 @@ fn label_column<P: IntoElement, S: IntoElement>(
     primary: P,
     secondary: S,
     selected: bool,
+    highlighted: bool,
     secondary_mono: bool,
     theme: Theme,
 ) -> impl IntoElement + use<P, S> {
@@ -1376,7 +1387,11 @@ fn label_column<P: IntoElement, S: IntoElement>(
         .truncate()
         .text_size(picker::SECONDARY_TEXT.px(&theme))
         .line_height(line_box(picker::SECONDARY_TEXT))
-        .text_color(theme.text_3)
+        .text_color(if selected || highlighted {
+            theme.text_secondary
+        } else {
+            theme.text_muted
+        })
         .child(secondary);
     let secondary_text = if secondary_mono {
         secondary_text.font_family(theme::code_font_family())
@@ -1400,9 +1415,9 @@ fn label_column<P: IntoElement, S: IntoElement>(
                     FontWeight::NORMAL
                 })
                 .text_color(if selected {
-                    theme.active_fg
+                    theme.text_primary
                 } else {
-                    theme.text_2
+                    theme.text_secondary
                 })
                 .child(primary),
         )
@@ -1499,10 +1514,10 @@ fn render_row(
         })
         // Keyboard/hover cursor and the chosen option are separate
         // states: the cursor is a wash, the choice keeps the fill.
-        .when(highlighted, |row| row.bg(theme.overlay_strong))
-        .when(!highlighted && selected, |row| row.bg(theme.active))
+        .when(highlighted, |row| row.bg(theme.selection))
+        .when(!highlighted && selected, |row| row.bg(theme.selection))
         .when(!highlighted && !selected, |row| {
-            row.hover(|style| style.bg(theme.overlay))
+            row.hover(|style| style.bg(theme.surface_hover))
         })
     };
 
@@ -1513,6 +1528,7 @@ fn render_row(
                 thinking_display(level),
                 thinking_hint(level),
                 selected,
+                highlighted,
                 false,
                 theme,
             ))
@@ -1548,6 +1564,7 @@ fn render_row(
                     model.name.clone(),
                     secondary,
                     selected,
+                    highlighted,
                     mono,
                     theme,
                 ))
@@ -1820,7 +1837,13 @@ mod tests {
         // Recents lead, then favorites, then the provider groups.
         assert!(matches!(rows[0], Row::Header { recents: true, .. }));
         assert!(matches!(rows[1], Row::Model { model_ix: 1, .. }));
-        assert!(matches!(rows[2], Row::Header { favorites: true, .. }));
+        assert!(matches!(
+            rows[2],
+            Row::Header {
+                favorites: true,
+                ..
+            }
+        ));
         assert!(matches!(rows[3], Row::Model { model_ix: 2, .. }));
         // Neither pinned model repeats under its provider group.
         let model_ixs: Vec<usize> = rows

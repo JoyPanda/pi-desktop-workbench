@@ -146,7 +146,7 @@ pub fn timeline(
                 .w_full()
                 .h(px(plot_h))
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .children((0..=4).map(|step| {
                     // step 4 = the axis maximum (top line), 0 = the baseline.
                     // The plot's origin is its top edge, so the position is the
@@ -323,7 +323,7 @@ fn x_axis_labels(
         .w_full()
         .h(px(AXIS_GAP))
         .text_size(TextSize::XSmall.px(&theme))
-        .text_color(theme.text_3);
+        .text_color(theme.text_muted);
     for (i, point) in series.points.iter().enumerate() {
         if (i + 1) % tick_margin != 0 {
             continue;
@@ -375,7 +375,7 @@ fn marker(ix: usize, count: usize, value: f64, max: f64, theme: Theme) -> AnyEle
                 .size(px(7.))
                 .rounded_full()
                 .border_2()
-                .border_color(theme.bg_main)
+                .border_color(theme.background)
                 .bg(theme.accent),
         )
         .into_any_element()
@@ -495,7 +495,7 @@ fn readout(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(bucket.stamp.clone()),
         );
     for (label, value) in rows {
@@ -555,13 +555,13 @@ fn readout_row(label: &str, value: &str, theme: Theme) -> AnyElement {
         .child(
             div()
                 .flex_none()
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(label.to_string()),
         )
         .child(
             div()
                 .min_w_0()
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(value.to_string()),
         )
         .into_any_element()

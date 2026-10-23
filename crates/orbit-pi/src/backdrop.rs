@@ -126,8 +126,8 @@ pub fn layer(theme: Theme, phase: f32) -> impl IntoElement + use<> {
     // texture, not a second content layer. Light mode needs more of it to
     // carry the same weight on a bright canvas.
     let ink = match theme.mode {
-        ThemeMode::Light => theme.text_3.opacity(0.62),
-        ThemeMode::Dark => theme.text_3.opacity(0.55),
+        ThemeMode::Light => theme.text_muted.opacity(0.62),
+        ThemeMode::Dark => theme.text_muted.opacity(0.55),
     };
     // The cell pitch rides the UI scale so the screen's ruling keeps its
     // proportion on a dense or a roomy interface.

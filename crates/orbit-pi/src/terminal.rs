@@ -110,26 +110,26 @@ impl Palette {
         let background = theme.code_bg;
         Self {
             ansi: [
-                theme.text_3,
-                theme.del_red,
-                theme.add_green,
+                theme.text_muted,
+                theme.error,
+                theme.success,
                 theme.syn_number,
                 theme.syn_function,
                 theme.syn_string,
                 theme.syn_type,
-                theme.text,
-                theme.text_3,
-                theme.stop_red,
-                theme.ok_green,
+                theme.text_primary,
+                theme.text_muted,
+                theme.error,
+                theme.success,
                 theme.syn_literal,
                 theme.syn_function,
                 theme.syn_string,
                 theme.syn_type,
-                theme.text,
+                theme.text_primary,
             ],
             foreground,
             background,
-            cursor: theme.accent,
+            cursor: theme.accent_text,
         }
     }
 
@@ -667,7 +667,7 @@ fn prepare_grid(
                 .as_ref()
                 .is_some_and(|range| cell_selected(range, cell_point))
             {
-                background = Some(theme.active);
+                background = Some(theme.selection);
             }
 
             if solid_cursor && cell_point == cursor.point {
@@ -932,7 +932,6 @@ pub struct TerminalView {
     font_size: Pixels,
     cell_width: Pixels,
     cell_height: Pixels,
-    measured: bool,
     cursor_on: bool,
     blink_ticks: u32,
     selecting: bool,
@@ -986,7 +985,7 @@ impl TerminalView {
             }
         });
 
-        Self {
+        let mut view = Self {
             session: None,
             error: None,
             focus_handle,
@@ -999,13 +998,29 @@ impl TerminalView {
             font_size: px(13.),
             cell_width: px(CELL_WIDTH_FALLBACK),
             cell_height: px(13. * LINE_HEIGHT_RATIO),
-            measured: false,
             cursor_on: true,
             blink_ticks: 0,
             selecting: false,
             scroll_accumulator: 0.0,
             grid_bounds: Rc::new(Cell::new(None)),
             _task: task,
+        };
+        view.measure_font(cx);
+        view
+    }
+
+    /// Resolve the face's advance once, from the app's text system, so the
+    /// grid math matches the cell box gpui actually shapes with.
+    fn measure_font(&mut self, cx: &App) {
+        let font_size = theme::get(cx).term_px(13.0);
+        let font = terminal_font(cx);
+        let font_id = cx.text_system().resolve_font(&font);
+        if let Ok(advance) = cx.text_system().advance(font_id, font_size, 'M') {
+            if advance.width > px(0.) {
+                self.font_size = font_size;
+                self.cell_width = advance.width;
+                self.cell_height = px(f32::from(font_size) * LINE_HEIGHT_RATIO);
+            }
         }
     }
 
@@ -1292,7 +1307,7 @@ impl TerminalView {
     /// drives an exact shell (say `/bin/cat`) instead of the login shell. Its
     /// only caller runs on Unix, so Windows test builds do not carry it.
     fn with_session(session: TerminalSession, cx: &mut Context<Self>) -> Self {
-        Self {
+        let mut view = Self {
             session: Some(session),
             error: None,
             focus_handle: cx.focus_handle().tab_stop(true),
@@ -1305,36 +1320,22 @@ impl TerminalView {
             font_size: px(13.),
             cell_width: px(CELL_WIDTH_FALLBACK),
             cell_height: px(13. * LINE_HEIGHT_RATIO),
-            measured: false,
             cursor_on: true,
             blink_ticks: 0,
             selecting: false,
             scroll_accumulator: 0.,
             grid_bounds: Rc::new(Cell::new(None)),
             _task: Task::ready(()),
-        }
+        };
+        view.measure_font(cx);
+        view
     }
 }
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = *theme::get(cx);
-        let font_size = theme.term_px(13.0);
         let font = terminal_font(cx);
-
-        // Measure the advance once per font/size; the grid math depends on the
-        // cell box matching the face gpui actually shapes with.
-        if !self.measured {
-            let font_id = window.text_system().resolve_font(&font);
-            if let Ok(advance) = window.text_system().advance(font_id, font_size, 'M') {
-                if advance.width > px(0.) {
-                    self.font_size = font_size;
-                    self.cell_width = advance.width;
-                    self.cell_height = px(f32::from(font_size) * LINE_HEIGHT_RATIO);
-                    self.measured = true;
-                }
-            }
-        }
 
         let background = Palette::from_theme(&theme).background;
         let focused = self.focus_handle.is_focused(window);
@@ -1401,7 +1402,7 @@ impl TerminalView {
         let cell_width = self.cell_width;
         let cell_height = self.cell_height;
         let blinking = self.cursor_on;
-        let scroll_thumb = theme.text_3.opacity(0.45);
+        let scroll_thumb = theme.text_muted.opacity(0.45);
 
         canvas(
             move |bounds, window, _| {
@@ -1575,7 +1576,7 @@ fn terminal_message(theme: &Theme, title: &str, detail: Option<&str>) -> AnyElem
         .child(
             div()
                 .text_size(TextSize::Small.px(theme))
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(SharedString::from(title.to_owned())),
         );
     if let Some(detail) = detail {
@@ -1583,7 +1584,7 @@ fn terminal_message(theme: &Theme, title: &str, detail: Option<&str>) -> AnyElem
             div()
                 .max_w(px(520.))
                 .text_size(TextSize::Small.px(theme))
-                .text_color(theme.stop_red)
+                .text_color(theme.error)
                 .child(SharedString::from(detail.to_owned())),
         );
     }
@@ -1895,10 +1896,10 @@ impl TerminalPanel {
                 .rounded(Radius::Medium.px(&theme))
                 .cursor_pointer()
                 .text_size(TextSize::Small.px(&theme))
-                .when(active, |el| el.bg(theme.active))
+                .when(active, |el| el.bg(theme.surface_active))
                 .when(!active, |el| {
-                    el.text_color(theme.text_3)
-                        .hover(|el| el.bg(theme.bg_hover).text_color(theme.text_2))
+                    el.text_color(theme.text_muted)
+                        .hover(|el| el.bg(theme.surface_hover).text_color(theme.text_secondary))
                 }),
         )
         .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
@@ -1911,9 +1912,9 @@ impl TerminalPanel {
             icon_path,
             IconSize::XSmall.px(&theme),
             if active {
-                theme.active_fg
+                theme.text_primary
             } else {
-                theme.text_3
+                theme.text_muted
             },
         ))
         .child(
@@ -1926,9 +1927,9 @@ impl TerminalPanel {
                     FontWeight::NORMAL
                 })
                 .text_color(if active {
-                    theme.active_fg
+                    theme.text_primary
                 } else {
-                    theme.text_3
+                    theme.text_muted
                 })
                 .child(label),
         )
@@ -1943,7 +1944,7 @@ impl TerminalPanel {
             .group(BUTTON_GROUP)
             .tip(tr!("terminal.close_tab"))
             .cursor_pointer()
-            .hover(|el| el.bg(theme.overlay))
+            .hover(|el| el.bg(theme.surface_hover))
             .on_click(cx.listener(move |this, _: &gpui::ClickEvent, window, cx| {
                 this.close_tab(index, window, cx);
                 // Click handlers bubble: without this the chip's own handler
@@ -1954,9 +1955,9 @@ impl TerminalPanel {
                 "icons/x.svg",
                 ButtonSize::None.icon_size().px(&theme),
                 if active {
-                    theme.active_fg
+                    theme.text_primary
                 } else {
-                    theme.text_3
+                    theme.text_muted
                 },
             )),
         )
@@ -2003,15 +2004,15 @@ impl TerminalPanel {
                     .group(BUTTON_GROUP)
                     .tip(tr!("terminal.new_tab"))
                     .cursor_pointer()
-                    .hover(|style| style.bg(theme.bg_hover))
-                    .active(|style| style.bg(theme.active))
+                    .hover(|style| style.bg(theme.surface_hover))
+                    .active(|style| style.bg(theme.surface_active))
                     .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
                         this.new_tab(window, cx);
                     }))
                     .child(icon(
                         "icons/plus.svg",
                         ButtonSize::Default.icon_size().px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     )),
             );
         if exited {
@@ -2021,9 +2022,9 @@ impl TerminalPanel {
                     .px(px(6.))
                     .py(px(1.))
                     .rounded(Radius::Small.px(&theme))
-                    .bg(theme.stop_red.opacity(0.15))
+                    .bg(theme.error.opacity(0.15))
                     .text_size(TextSize::XSmall.px(&theme))
-                    .text_color(theme.stop_red)
+                    .text_color(theme.error)
                     .child(tr!("terminal.exited")),
             );
         }
@@ -2035,14 +2036,18 @@ impl TerminalPanel {
                     .group(BUTTON_GROUP)
                     .tip(tr!("terminal.restart"))
                     .cursor_pointer()
-                    .hover(|style| style.bg(theme.bg_hover))
-                    .active(|style| style.bg(theme.active))
+                    .hover(|style| style.bg(theme.surface_hover))
+                    .active(|style| style.bg(theme.surface_active))
                     .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.restart(cx)))
                     .child(refresh_glyph(
                         "terminal-restart-spin",
                         ButtonSize::Default.icon_size().px(&theme),
                         self.restart_spin_until.is_some(),
-                        if exited { theme.accent } else { theme.text_2 },
+                        if exited {
+                            theme.accent_text
+                        } else {
+                            theme.text_secondary
+                        },
                         theme,
                     )),
             )
@@ -2051,7 +2056,7 @@ impl TerminalPanel {
                     .group(BUTTON_GROUP)
                     .tip(tr!("common.close"))
                     .cursor_pointer()
-                    .hover(|style| style.bg(theme.bg_hover))
+                    .hover(|style| style.bg(theme.surface_hover))
                     .on_click(
                         cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
                             this.toggle(window, cx)
@@ -2060,7 +2065,7 @@ impl TerminalPanel {
                     .child(icon(
                         "icons/x.svg",
                         ButtonSize::Default.icon_size().px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     )),
             )
             .into_any_element()
@@ -2089,14 +2094,14 @@ impl TerminalPanel {
                         .px(DynamicSpacing::Base16.px(&theme))
                         .py(DynamicSpacing::Base12.px(&theme))
                         .rounded(Radius::XLarge.px(&theme))
-                        .bg(theme.bg_raised)
+                        .bg(theme.surface_elevated)
                         .border_1()
                         .border_color(theme.border)
                         .shadow(theme.composer_shadow())
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(tr!("terminal.shell_exited")),
                         )
                         .child(
@@ -2105,10 +2110,10 @@ impl TerminalPanel {
                                 &theme,
                                 ButtonSize::Medium,
                             )
-                            .raised(theme.accent, &theme)
+                            .raised(theme.action, &theme)
                             .cursor_pointer()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.active_fg)
+                            .text_color(theme.action_fg)
                             .hover(|style| style.opacity(0.9))
                             .on_mouse_up(
                                 MouseButton::Left,
@@ -2117,7 +2122,7 @@ impl TerminalPanel {
                             .child(icon(
                                 "icons/refresh.svg",
                                 ButtonSize::Medium.icon_size().px(&theme),
-                                theme.active_fg,
+                                theme.text_primary,
                             ))
                             .child(tr!("terminal.restart")),
                         ),
@@ -2332,10 +2337,13 @@ mod tests {
         let selected = row
             .runs
             .iter()
-            .filter(|run| run.background_color == Some(theme.active))
+            .filter(|run| run.background_color == Some(theme.selection))
             .map(|run| run.len)
             .sum::<usize>();
-        assert_eq!(selected, 2, "exactly the selected cells take the accent");
+        assert_eq!(
+            selected, 2,
+            "exactly the selected cells take the selection wash"
+        );
     }
 
     #[test]
@@ -2357,7 +2365,7 @@ mod tests {
         let selected = prepared.rows[0]
             .runs
             .iter()
-            .filter(|run| run.background_color == Some(theme.active))
+            .filter(|run| run.background_color == Some(theme.selection))
             .map(|run| run.len)
             .sum::<usize>();
         assert_eq!(selected, 1);

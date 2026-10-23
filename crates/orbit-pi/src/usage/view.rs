@@ -11,7 +11,7 @@
 //! canvas behind a hairline. Chrome is spent only where it earns its weight.
 //!
 //! **OWN-WORLD.** Orbit's instrument panel, inherited whole: canvas ground,
-//! one raised card per section, one ember accent on the active series,
+//! one raised card per section, one accent on the active series,
 //! hairlines inside the cards, tabular mono figures.
 //!
 //! **STORY.** The operator reads the four headline figures, reads the trend,
@@ -111,8 +111,8 @@ impl Render for UsagePage {
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.bg_main)
-            .text_color(theme.text)
+            .bg(theme.background)
+            .text_color(theme.text_primary)
             .font_family(theme::ui_font_family())
             .text_size(TextSize::Default.px(&theme))
             .child(self.header(theme, cx))
@@ -165,7 +165,7 @@ impl UsagePage {
                     button_frame(div().id("usage-top-back"), &theme, ButtonSize::Medium)
                         .group(BUTTON_GROUP)
                         .cursor_pointer()
-                        .hover(|style| style.bg(theme.bg_hover)),
+                        .hover(|style| style.bg(theme.surface_hover)),
                 )
                 .on_mouse_down(MouseButton::Left, {
                     let entity = cx.entity();
@@ -176,9 +176,13 @@ impl UsagePage {
                 .child(icon(
                     "icons/arrow-left.svg",
                     ButtonSize::Medium.icon_size().px(&theme),
-                    theme.text_2,
+                    theme.text_secondary,
                 ))
-                .child(div().text_color(theme.text_2).child(tr!("view.back"))),
+                .child(
+                    div()
+                        .text_color(theme.text_secondary)
+                        .child(tr!("view.back")),
+                ),
             )
             .child(
                 div()
@@ -188,13 +192,13 @@ impl UsagePage {
                     .child(icon(
                         "icons/chart-analysis.svg",
                         IconSize::Medium.px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     ))
                     .child(
                         div()
                             .text_size(TextSize::Large.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("view.usage")),
                     ),
             )
@@ -233,7 +237,7 @@ impl UsagePage {
             .children(status.map(|status| {
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(status)
             }))
             .child(div().flex_1())
@@ -604,7 +608,7 @@ impl UsagePage {
                         .pr(DynamicSpacing::Base02.px(&theme))
                         .text_size(TextSize::Small.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("view.filters")),
                 )
                 .children(chips)
@@ -636,9 +640,9 @@ impl UsagePage {
                         .mt(DynamicSpacing::Base02.px(&theme))
                         .border_1()
                         .border_color(theme.border)
-                        .raised(theme.bg_raised, &theme)
+                        .raised(theme.surface_elevated, &theme)
                         .cursor_pointer()
-                        .hover(|style| style.raised(theme.bg_hover, &theme)),
+                        .hover(|style| style.raised(theme.surface_hover, &theme)),
                 )
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     entity.update(cx, |page, cx| page.refresh(cx));
@@ -891,9 +895,9 @@ impl UsagePage {
                     .mt(DynamicSpacing::Base02.px(&theme))
                     .border_1()
                     .border_color(theme.border)
-                    .raised(theme.bg_raised, &theme)
+                    .raised(theme.surface_elevated, &theme)
                     .cursor_pointer()
-                    .hover(|style| style.raised(theme.bg_hover, &theme)),
+                    .hover(|style| style.raised(theme.surface_hover, &theme)),
             )
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 entity.update(cx, |page, cx| page.clear_filters(cx));
@@ -911,7 +915,7 @@ impl UsagePage {
                 .w(px(width))
                 .h(px(height))
                 .rounded(Radius::Small.px(&theme))
-                .bg(theme.trough)
+                .bg(theme.surface_secondary)
                 .into_any_element()
         };
         // One card shell, so the load→loaded swap keeps the same shape: a
@@ -923,7 +927,7 @@ impl UsagePage {
                 .rounded(Radius::XLarge.px(&theme))
                 .border_1()
                 .border_color(theme.border)
-                .bg(theme.bg_raised)
+                .bg(theme.surface_elevated)
                 .flex()
                 .flex_col()
                 .overflow_hidden()
@@ -955,7 +959,7 @@ impl UsagePage {
                     .flex_1()
                     .min_w(px(150.))
                     .p(DynamicSpacing::Base12.px(&theme))
-                    .bg(theme.bg_raised)
+                    .bg(theme.surface_elevated)
                     .flex()
                     .flex_col()
                     .gap(DynamicSpacing::Base08.px(&theme))
@@ -978,21 +982,21 @@ impl UsagePage {
                     .h(px(168.))
                     .w_full()
                     .rounded(Radius::XLarge.px(&theme))
-                    .bg(theme.trough),
+                    .bg(theme.surface_secondary),
             )
             .child(
                 div()
                     .h(px(96.))
                     .w_full()
                     .rounded(Radius::XLarge.px(&theme))
-                    .bg(theme.trough),
+                    .bg(theme.surface_secondary),
             )
             .child(
                 div()
                     .h(px(72.))
                     .w_full()
                     .rounded(Radius::XLarge.px(&theme))
-                    .bg(theme.trough),
+                    .bg(theme.surface_secondary),
             );
 
         // Records: a header rule and a handful of rows.
@@ -1080,7 +1084,7 @@ impl UsagePage {
                                 .h(px(96.))
                                 .w_full()
                                 .rounded(Radius::XLarge.px(&theme))
-                                .bg(theme.trough),
+                                .bg(theme.surface_secondary),
                         )
                         .into_any_element(),
                 ))
@@ -1116,7 +1120,7 @@ impl UsagePage {
                         .flex()
                         .justify_center()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(note),
                 )
                 .into_any_element();
@@ -1161,7 +1165,7 @@ impl UsagePage {
                     .max_w(px(440.))
                     .text_align(gpui::TextAlign::Center)
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(body.to_string()),
             )
             .children(action)
@@ -1193,8 +1197,8 @@ impl UsagePage {
             for (col_ix, cell) in chunk.iter().enumerate() {
                 let entity = cx.entity();
                 let tint = match cell.tone {
-                    CellTone::Normal => theme.text,
-                    CellTone::Muted => theme.text_3,
+                    CellTone::Normal => theme.text_primary,
+                    CellTone::Muted => theme.text_muted,
                 };
                 let mut element = div()
                     .id(SharedString::from(format!("usage-kpi-{row_ix}-{col_ix}")))
@@ -1213,13 +1217,13 @@ impl UsagePage {
                     })
                     .when(cell.click.is_some(), |cell| {
                         cell.cursor_pointer()
-                            .hover(|style| style.bg(theme.bg_hover))
+                            .hover(|style| style.bg(theme.surface_hover))
                     })
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(cell.label.clone()),
                     )
                     .child(
@@ -1233,7 +1237,7 @@ impl UsagePage {
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(cell.sub.clone()),
                     );
                 if let Some(metric) = cell.click {
@@ -1472,9 +1476,9 @@ impl UsagePage {
                         &theme,
                         ButtonSize::Compact,
                     )
-                    .text_color(theme.crit)
+                    .text_color(theme.error)
                     .cursor_pointer()
-                    .hover(|style| style.text_color(theme.text)),
+                    .hover(|style| style.text_color(theme.text_primary)),
                 )
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     fail_entity.update(cx, |page, cx| page.set_errors_only(true, cx));
@@ -1512,9 +1516,9 @@ impl UsagePage {
             .gap(DynamicSpacing::Base08.px(&theme))
             .children(insights.iter().map(|insight| {
                 let (path, color) = match insight.tone {
-                    Tone::Positive => ("icons/check.svg", theme.ok_green),
-                    Tone::Warning => ("icons/info.svg", theme.warn),
-                    Tone::Neutral => ("icons/spark.svg", theme.text_3),
+                    Tone::Positive => ("icons/check.svg", theme.success),
+                    Tone::Warning => ("icons/info.svg", theme.warning),
+                    Tone::Neutral => ("icons/spark.svg", theme.text_muted),
                 };
                 div()
                     .flex()
@@ -1530,7 +1534,7 @@ impl UsagePage {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(insight.text.clone()),
                     )
                     .into_any_element()
@@ -1676,7 +1680,7 @@ impl UsagePage {
             content = content.child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(reason),
             );
         }
@@ -1734,7 +1738,7 @@ impl UsagePage {
             select_entity.update(cx, |page, cx| page.scope_to_day(day_ms, cx));
         };
 
-        // Empty-day cells paint `bg_main`; on the raised section card they
+        // Empty-day cells paint `background`; on the raised section card they
         // recess without a second frame. Nested cards are forbidden.
         let width = self.table_width().max(240.);
         heatmap::calendar(
@@ -1785,9 +1789,9 @@ impl UsagePage {
                 .flex()
                 .items_center()
                 .when(!last, |row| row.border_b_1().border_color(theme.border))
-                .when(selected == Some(start_ms), |row| row.bg(theme.active))
+                .when(selected == Some(start_ms), |row| row.bg(theme.selection))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.bg_hover))
+                .hover(|style| style.bg(theme.surface_hover))
                 .on_mouse_down(MouseButton::Left, {
                     let entity = entity.clone();
                     move |_, _, cx| {
@@ -1804,14 +1808,16 @@ impl UsagePage {
             for (col_ix, column) in columns.iter().enumerate() {
                 let key = keys.get(col_ix).copied().unwrap_or(SeriesSort::Time);
                 let (text, color) = match key {
-                    SeriesSort::Time => (point.stamp.clone(), theme.text_2),
+                    SeriesSort::Time => (point.stamp.clone(), theme.text_secondary),
                     SeriesSort::Value => (
                         chart::format_point(metric, latency_metric, point),
-                        theme.text,
+                        theme.text_primary,
                     ),
-                    SeriesSort::Requests => (format::exact(point.totals.requests), theme.text_3),
+                    SeriesSort::Requests => {
+                        (format::exact(point.totals.requests), theme.text_muted)
+                    }
                     SeriesSort::Tokens => {
-                        (format::compact(point.totals.tokens.total), theme.text_3)
+                        (format::compact(point.totals.tokens.total), theme.text_muted)
                     }
                 };
                 line = line.child(text_cell(column, text, color, theme));
@@ -2257,7 +2263,7 @@ impl UsagePage {
             .text_size(TextSize::Small.px(&theme))
             .child(
                 div()
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .font_weight(FontWeight::MEDIUM)
                     .child(tr!("view.response_time")),
             )
@@ -2266,14 +2272,19 @@ impl UsagePage {
                     .flex()
                     .items_center()
                     .gap(DynamicSpacing::Base04.px(&theme))
-                    .child(div().text_color(theme.text_3).child(label))
-                    .child(div().font(num_font()).text_color(theme.text_2).child(value))
+                    .child(div().text_color(theme.text_muted).child(label))
+                    .child(
+                        div()
+                            .font(num_font())
+                            .text_color(theme.text_secondary)
+                            .child(value),
+                    )
                     .into_any_element()
             }))
             .child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(if latency.has_percentiles() {
                         tr!("usage.sub_measured", count = format::count(latency.samples))
                     } else {
@@ -2596,32 +2607,32 @@ impl UsagePage {
                 .items_center()
                 .when(!last, |row| row.border_b_1().border_color(theme.border))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.bg_hover));
+                .hover(|style| style.bg(theme.surface_hover));
             for column in &columns {
                 let cell = match column.id {
                     "name" => breakdown_name_cell(column, row, theme),
                     "requests" => text_cell(
                         column,
                         format::count(row.totals.requests),
-                        theme.text_2,
+                        theme.text_secondary,
                         theme,
                     ),
                     "input" => text_cell(
                         column,
                         format::compact(row.totals.tokens.input),
-                        theme.text_3,
+                        theme.text_muted,
                         theme,
                     ),
                     "output" => text_cell(
                         column,
                         format::compact(row.totals.tokens.output),
-                        theme.text_3,
+                        theme.text_muted,
                         theme,
                     ),
                     "cache" => text_cell(
                         column,
                         format::compact(row.totals.tokens.cache_read),
-                        theme.text_3,
+                        theme.text_muted,
                         theme,
                     ),
                     "share" => {
@@ -2630,12 +2641,12 @@ impl UsagePage {
                         } else {
                             row.share
                         };
-                        text_cell(column, format::share(share), theme.text_3, theme)
+                        text_cell(column, format::share(share), theme.text_muted, theme)
                     }
                     _ => text_cell(
                         column,
                         format::compact(row.totals.tokens.total),
-                        theme.text,
+                        theme.text_primary,
                         theme,
                     ),
                 };
@@ -2726,7 +2737,7 @@ impl UsagePage {
                     .items_center()
                     .gap(DynamicSpacing::Base08.px(&theme))
                     .cursor_pointer()
-                    .hover(|style| style.bg(theme.bg_hover))
+                    .hover(|style| style.bg(theme.surface_hover))
                     .child(chart_label(&row.label, row.sub.as_deref(), theme))
                     .child(bar_track(fraction, theme))
                     .child(chart_value(
@@ -2823,7 +2834,7 @@ impl UsagePage {
                 .flex()
                 .items_center()
                 .when(!last, |row| row.border_b_1().border_color(theme.border))
-                .hover(|style| style.bg(theme.bg_hover));
+                .hover(|style| style.bg(theme.surface_hover));
             for column in &columns {
                 let cell = match column.id {
                     "tool" => cell_shell(column)
@@ -2834,7 +2845,7 @@ impl UsagePage {
                                 .max_w(px(column.width - 96.))
                                 .truncate()
                                 .text_size(TextSize::Default.px(&theme))
-                                .text_color(theme.text)
+                                .text_color(theme.text_primary)
                                 .child(row.label.clone()),
                         )
                         .child(
@@ -2843,11 +2854,16 @@ impl UsagePage {
                                 .min_w_0()
                                 .truncate()
                                 .text_size(TextSize::XSmall.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .child(row.class.label()),
                         )
                         .into_any_element(),
-                    "calls" => text_cell(column, format::count(row.calls), theme.text_2, theme),
+                    "calls" => text_cell(
+                        column,
+                        format::count(row.calls),
+                        theme.text_secondary,
+                        theme,
+                    ),
                     "errors" => text_cell(
                         column,
                         if row.errors > 0 {
@@ -2856,9 +2872,9 @@ impl UsagePage {
                             "—".into()
                         },
                         if row.errors > 0 {
-                            theme.crit
+                            theme.error
                         } else {
-                            theme.text_3
+                            theme.text_muted
                         },
                         theme,
                     ),
@@ -2867,7 +2883,7 @@ impl UsagePage {
                         row.avg_duration_ms()
                             .map(format::duration_ms)
                             .unwrap_or_else(|| "—".into()),
-                        theme.text_3,
+                        theme.text_muted,
                         theme,
                     ),
                     _ => text_cell(
@@ -2877,7 +2893,7 @@ impl UsagePage {
                         } else {
                             "—".into()
                         },
-                        theme.text_3,
+                        theme.text_muted,
                         theme,
                     ),
                 };
@@ -2948,7 +2964,7 @@ impl UsagePage {
             .rounded(Radius::Full.px(&theme))
             .overflow_hidden()
             .flex()
-            .bg(theme.trough);
+            .bg(theme.surface_secondary);
         for &(_, value, color, _) in slices.iter() {
             if value == 0 || total == 0 {
                 continue;
@@ -2993,7 +3009,7 @@ impl UsagePage {
                     .items_center()
                     .gap(DynamicSpacing::Base08.px(&theme))
                     .cursor_pointer()
-                    .hover(|style| style.bg(theme.bg_hover))
+                    .hover(|style| style.bg(theme.surface_hover))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         entity.update(cx, |page, cx| page.set_metric(metric, cx));
                     })
@@ -3008,7 +3024,7 @@ impl UsagePage {
                         div()
                             .flex_1()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(label.clone()),
                     )
                     .child(
@@ -3016,7 +3032,7 @@ impl UsagePage {
                             .whitespace_nowrap()
                             .font(num_font())
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(format::compact(*value)),
                     )
                     .child(
@@ -3026,7 +3042,7 @@ impl UsagePage {
                             .whitespace_nowrap()
                             .font(num_font())
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .text_align(gpui::TextAlign::Right)
                             .child(share),
                     )
@@ -3037,7 +3053,7 @@ impl UsagePage {
             div()
                 .px(DynamicSpacing::Base08.px(&theme))
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(if total == 0 {
                     tr!("usage.no_tokens_in_range")
                 } else if tokens.cache_read == 0 && tokens.cache_write == 0 {
@@ -3092,7 +3108,7 @@ impl UsagePage {
                             .child(
                                 div()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(tr!("view.of_prompt_tokens_served_from_cache")),
                             ),
                     )
@@ -3101,7 +3117,7 @@ impl UsagePage {
                             .w_full()
                             .h(px(6.))
                             .rounded(Radius::Full.px(&theme))
-                            .bg(theme.trough)
+                            .bg(theme.surface_secondary)
                             .overflow_hidden()
                             .child(
                                 div()
@@ -3158,15 +3174,15 @@ impl UsagePage {
                 .text_size(TextSize::XSmall.px(&theme))
                 .child(
                     div()
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("usage.hit_rate_formula")),
                 )
                 .child(
                     press(
                         button_frame(div().id("usage-cache-toggle"), &theme, ButtonSize::Compact)
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .cursor_pointer()
-                            .hover(|style| style.text_color(theme.accent)),
+                            .hover(|style| style.text_color(theme.accent_text)),
                     )
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         entity.update(cx, |page, cx| page.set_cached_only(!cached_only, cx));
@@ -3900,8 +3916,10 @@ impl UsagePage {
                 .flex()
                 .items_center()
                 .when(!last, |row| row.border_b_1().border_color(theme.border))
-                .hover(|style| style.bg(theme.bg_hover))
-                .when(selected == Some(row.session), |line| line.bg(theme.active))
+                .hover(|style| style.bg(theme.surface_hover))
+                .when(selected == Some(row.session), |line| {
+                    line.bg(theme.selection)
+                })
                 .on_mouse_down(MouseButton::Left, {
                     let entity = entity.clone();
                     let session = row.session;
@@ -3955,7 +3973,7 @@ impl UsagePage {
                 .flex()
                 .items_center()
                 .when(!last, |row| row.border_b_1().border_color(theme.border))
-                .hover(|style| style.bg(theme.bg_hover));
+                .hover(|style| style.bg(theme.surface_hover));
             for (ix, column) in columns.iter().enumerate() {
                 let key = keys.get(ix).copied().unwrap_or(BucketSort::Date);
                 if key == BucketSort::Date {
@@ -3965,35 +3983,37 @@ impl UsagePage {
                             .child(
                                 div()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .text_color(theme.text)
+                                    .text_color(theme.text_primary)
                                     .child(row.label.clone()),
                             )
                             .child(
                                 div()
                                     .text_size(TextSize::XSmall.px(&theme))
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(granularity.label()),
                             ),
                     );
                 } else {
                     let (text, color) = match key {
-                        BucketSort::Requests => (format::count(row.totals.requests), theme.text_2),
+                        BucketSort::Requests => {
+                            (format::count(row.totals.requests), theme.text_secondary)
+                        }
                         BucketSort::Tokens => {
-                            (format::compact(row.totals.tokens.total), theme.text)
+                            (format::compact(row.totals.tokens.total), theme.text_primary)
                         }
                         BucketSort::Cache => (
                             match row.totals.cache_hit_rate() {
                                 Some(rate) => format::percent(rate),
                                 None => "—".to_string(),
                             },
-                            theme.text_3,
+                            theme.text_muted,
                         ),
                         BucketSort::Errors => (
                             format::count(row.totals.errors),
                             if row.totals.errors > 0 {
-                                theme.crit
+                                theme.error
                             } else {
-                                theme.text_3
+                                theme.text_muted
                             },
                         ),
                         BucketSort::Date => unreachable!("handled above"),
@@ -4025,18 +4045,18 @@ impl UsagePage {
                 .flex()
                 .items_center()
                 .when(!last, |row| row.border_b_1().border_color(theme.border))
-                .hover(|style| style.bg(theme.bg_hover));
+                .hover(|style| style.bg(theme.surface_hover));
             for (ix, column) in columns.iter().enumerate() {
                 let key = keys.get(ix).copied().unwrap_or(FailureSort::When);
                 let (label, color) = match key {
-                    FailureSort::When => (super::table::failure_when(row.ts_ms), theme.text_3),
+                    FailureSort::When => (super::table::failure_when(row.ts_ms), theme.text_muted),
                     FailureSort::Kind => {
                         let (label, color) = super::table::failure_kind_register(row.kind, theme);
                         (label, color)
                     }
-                    FailureSort::Model => (row.model.clone(), theme.text_2),
-                    FailureSort::Session => (row.session_title.clone(), theme.text_2),
-                    FailureSort::Message => (row.message.clone(), theme.text_3),
+                    FailureSort::Model => (row.model.clone(), theme.text_secondary),
+                    FailureSort::Session => (row.session_title.clone(), theme.text_secondary),
+                    FailureSort::Message => (row.message.clone(), theme.text_muted),
                 };
                 line = line.child(text_cell(column, label, color, theme));
             }
@@ -4140,9 +4160,9 @@ impl UsagePage {
                 .items_center()
                 .gap(DynamicSpacing::Base12.px(&theme))
                 .text_size(TextSize::Small.px(&theme))
-                .child(div().text_color(theme.text_3).child(filtered))
+                .child(div().text_color(theme.text_muted).child(filtered))
                 .child(div().flex_1())
-                .child(div().text_color(theme.text_3).child(page))
+                .child(div().text_color(theme.text_muted).child(page))
                 .into_any_element(),
         )
     }
@@ -4270,18 +4290,18 @@ fn table_handlers(
 fn session_cell(row: &SessionRow, key: SessionSort, theme: Theme, column: &Column) -> AnyElement {
     let totals = row.totals;
     let (text, color) = match key {
-        SessionSort::Title => (row.title.clone(), theme.text),
-        SessionSort::Workspace => (row.workspace.clone(), theme.text_2),
-        SessionSort::Provider => (row.provider.clone(), theme.text_2),
-        SessionSort::Model => (row.top_model.clone(), theme.text_2),
+        SessionSort::Title => (row.title.clone(), theme.text_primary),
+        SessionSort::Workspace => (row.workspace.clone(), theme.text_secondary),
+        SessionSort::Provider => (row.provider.clone(), theme.text_secondary),
+        SessionSort::Model => (row.top_model.clone(), theme.text_secondary),
         SessionSort::Started => (
             super::model::bucket_label(row.ended_ms, Granularity::Day),
-            theme.text_3,
+            theme.text_muted,
         ),
-        SessionSort::Duration => (format::span_ms(row.duration_ms()), theme.text_3),
-        SessionSort::Requests => (format::count(totals.requests), theme.text_2),
-        SessionSort::Input => (format::compact(totals.tokens.input), theme.text_3),
-        SessionSort::Output => (format::compact(totals.tokens.output), theme.text_3),
+        SessionSort::Duration => (format::span_ms(row.duration_ms()), theme.text_muted),
+        SessionSort::Requests => (format::count(totals.requests), theme.text_secondary),
+        SessionSort::Input => (format::compact(totals.tokens.input), theme.text_muted),
+        SessionSort::Output => (format::compact(totals.tokens.output), theme.text_muted),
         SessionSort::Cache => (
             // "0" would claim the provider reported no cache reuse; "—" says
             // nothing was reported at all.
@@ -4290,19 +4310,23 @@ fn session_cell(row: &SessionRow, key: SessionSort, theme: Theme, column: &Colum
             } else {
                 format::compact(totals.tokens.cache_read)
             },
-            theme.text_3,
+            theme.text_muted,
         ),
-        SessionSort::Tokens => (format::compact(totals.tokens.total), theme.text),
+        SessionSort::Tokens => (format::compact(totals.tokens.total), theme.text_primary),
         SessionSort::Errors => {
             let errors = totals.errors + row.tool_errors;
             (
                 format::count(errors),
-                if errors > 0 { theme.crit } else { theme.text_3 },
+                if errors > 0 {
+                    theme.error
+                } else {
+                    theme.text_muted
+                },
             )
         }
         // Tool calls are shown in the tool activity panel, which ranks them
         // properly; the table's column plan does not include one.
-        SessionSort::Tools => (format::count(row.tool_runs), theme.text_3),
+        SessionSort::Tools => (format::count(row.tool_runs), theme.text_muted),
     };
     text_cell(column, text, color, theme)
 }
@@ -4339,7 +4363,7 @@ fn open_session_cell(
                 .child(icon(
                     "icons/arrow-up-right.svg",
                     ButtonSize::Default.icon_size().px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 )),
         )
         .into_any_element()
@@ -4451,9 +4475,9 @@ fn context_item(
     picker_entry(div(), &theme)
         .h(picker::entry_height(&theme))
         .flex_none()
-        .text_color(theme.text_2)
+        .text_color(theme.text_secondary)
         .cursor_pointer()
-        .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+        .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             cx.stop_propagation();
             on_click(window, cx);
@@ -4515,7 +4539,7 @@ fn band(id: &'static str, title: &str, content: AnyElement, theme: Theme) -> Any
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(14.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(title.to_uppercase()),
         )
         .child(content)
@@ -4535,7 +4559,7 @@ fn subpanel(label: &str, meta: Option<String>, content: AnyElement, theme: Theme
         .rounded(Radius::XLarge.px(&theme))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.bg_main)
+        .bg(theme.background)
         .child(
             div()
                 .flex()
@@ -4545,13 +4569,13 @@ fn subpanel(label: &str, meta: Option<String>, content: AnyElement, theme: Theme
                     div()
                         .text_size(TextSize::Small.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(label.to_uppercase()),
                 )
                 .children(meta.map(|meta| {
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(meta)
                 })),
         )
@@ -4577,7 +4601,7 @@ fn card(
         .rounded(Radius::XLarge.px(&theme))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.bg_raised)
+        .bg(theme.surface_elevated)
         .shadow(theme.composer_shadow())
         .flex()
         .flex_col()
@@ -4602,13 +4626,13 @@ fn card(
                                 .text_size(TextSize::Large.px(&theme))
                                 .line_height(theme.ui_px(20.))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text)
+                                .text_color(theme.text_primary)
                                 .child(title.to_string()),
                         )
                         .children(meta.map(|meta| {
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .child(meta)
                         }))
                         .child(div().flex_1())
@@ -4618,7 +4642,7 @@ fn card(
                     div()
                         .text_size(TextSize::Small.px(&theme))
                         .line_height(theme.ui_px(16.))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(description.to_string())
                 })),
         )
@@ -4641,7 +4665,7 @@ type SegmentPick<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
 /// group lines up with the page's chips and buttons.
 ///
 /// `inset` picks the resting fill for the surface the group sits on, exactly as
-/// [`filters::chip`] does: `bg_raised` on the canvas, `bg_main` inside a raised
+/// [`filters::chip`] does: `surface_elevated` on the canvas, `background` inside a raised
 /// card so the inactive segments read as recessed wells instead of vanishing
 /// into the card. `enabled` keeps a segment that has no data yet visible but
 /// inert — the chart's metric switcher dims a metric it cannot plot rather
@@ -4663,9 +4687,9 @@ where
 {
     let on_pick: SegmentPick<T> = Rc::new(on_pick);
     let resting = if inset {
-        theme.bg_main
+        theme.background
     } else {
-        theme.bg_raised
+        theme.surface_elevated
     };
     let radius = button::RADIUS.px(&theme);
     let many = options.len() > 1;
@@ -4688,16 +4712,16 @@ where
                 .when(many && ix == last, |tab| tab.rounded_r(radius).border_l_0())
                 .when(many && ix > 0 && ix < last, |tab| tab.border_l_0())
                 .when(is_active, |tab| {
-                    tab.raised_flat(theme.active)
-                        .text_color(theme.active_fg)
+                    tab.raised_flat(theme.surface_active)
+                        .text_color(theme.text_primary)
                         .font_weight(FontWeight::MEDIUM)
                         .cursor_pointer()
                 })
                 .when(!is_active && is_enabled, |tab| {
                     tab.raised_flat(resting)
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .cursor_pointer()
-                        .hover(|style| style.raised_flat(theme.bg_hover))
+                        .hover(|style| style.raised_flat(theme.surface_hover))
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             handler(option, window, cx)
                         })
@@ -4706,7 +4730,7 @@ where
                 // the group keeps its shape as availability changes.
                 .when(!is_active && !is_enabled, |tab| {
                     tab.bg(resting)
-                        .text_color(theme.text_3.opacity(0.55))
+                        .text_color(theme.text_disabled)
                         .cursor_default()
                 })
                 .child(label(option)),
@@ -4724,7 +4748,7 @@ fn search_box(input: &Entity<ComposerInput>, theme: Theme) -> AnyElement {
         .child(icon(
             "icons/search.svg",
             input::ICON.px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .child(div().flex_1().min_w_0().child(input.clone()))
         .into_any_element()
@@ -4765,13 +4789,13 @@ fn table_pager(
                 .flex_1()
                 .min_w_0()
                 .text_size(TextSize::Default.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(summary),
         )
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("view.rows")),
         )
         .child(size_control)
@@ -4780,7 +4804,7 @@ fn table_pager(
                 .px(DynamicSpacing::Base02.px(&theme))
                 .font(num_font())
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(format!("{current}/{pages}")),
         )
         .child(prev)
@@ -4799,14 +4823,14 @@ fn chart_label(label: &str, sub: Option<&str>, theme: Theme) -> AnyElement {
             div()
                 .truncate()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(label.to_string()),
         )
         .children(sub.map(|sub| {
             div()
                 .truncate()
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(sub.to_string())
         }))
         .into_any_element()
@@ -4819,7 +4843,7 @@ fn bar_track(fraction: f64, theme: Theme) -> AnyElement {
         .min_w(px(48.))
         .h(px(8.))
         .rounded(Radius::Full.px(&theme))
-        .bg(theme.trough)
+        .bg(theme.surface_secondary)
         .overflow_hidden()
         .child(
             div()
@@ -4838,7 +4862,7 @@ fn chart_value(value: &str, theme: Theme) -> AnyElement {
         .flex_none()
         .font(num_font())
         .text_size(TextSize::Small.px(&theme))
-        .text_color(theme.text)
+        .text_color(theme.text_primary)
         .text_align(gpui::TextAlign::Right)
         .child(value.to_string())
         .into_any_element()
@@ -4852,7 +4876,7 @@ fn chart_share(share: &str, theme: Theme) -> AnyElement {
         .whitespace_nowrap()
         .font(num_font())
         .text_size(TextSize::Small.px(&theme))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .text_align(gpui::TextAlign::Right)
         .child(share.to_string())
         .into_any_element()
@@ -4867,9 +4891,13 @@ fn totals_row(filtered: &str, page: &str, theme: Theme) -> AnyElement {
         .items_center()
         .gap(DynamicSpacing::Base12.px(&theme))
         .text_size(TextSize::Small.px(&theme))
-        .child(div().text_color(theme.text_3).child(filtered.to_string()))
+        .child(
+            div()
+                .text_color(theme.text_muted)
+                .child(filtered.to_string()),
+        )
         .child(div().flex_1())
-        .child(div().text_color(theme.text_3).child(page.to_string()))
+        .child(div().text_color(theme.text_muted).child(page.to_string()))
         .into_any_element()
 }
 
@@ -4878,7 +4906,7 @@ fn empty_line(text: &str, theme: Theme) -> AnyElement {
         .px(DynamicSpacing::Base08.px(&theme))
         .py(DynamicSpacing::Base06.px(&theme))
         .text_size(TextSize::Small.px(&theme))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(text.to_string())
         .into_any_element()
 }
@@ -4886,7 +4914,7 @@ fn empty_line(text: &str, theme: Theme) -> AnyElement {
 fn retry_note(theme: Theme) -> AnyElement {
     div()
         .text_size(TextSize::Small.px(&theme))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(tr!("view.retries_are_unavailable_pi_records_automatic_ret"))
         .into_any_element()
 }
@@ -4902,13 +4930,13 @@ fn stat_row(label: &str, value: &str, theme: Theme) -> AnyElement {
         .child(
             div()
                 .flex_1()
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(label.to_string()),
         )
         .child(
             div()
                 .font(num_font())
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(value.to_string()),
         )
         .into_any_element()
@@ -4947,7 +4975,7 @@ fn hit_rate_bars(series: &TimeSeries, theme: Theme) -> AnyElement {
                 ),
                 None => (
                     0.03,
-                    theme.trough,
+                    theme.surface_secondary,
                     tr!("usage.cache_bar_no_traffic", stamp = point.stamp),
                 ),
             };
@@ -4996,7 +5024,7 @@ fn breakdown_name_cell(column: &Column, row: &GroupRow, theme: Theme) -> AnyElem
                 .max_w(px(column.width - 24.))
                 .truncate()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(row.label.clone()),
         )
         .children(row.sub.clone().map(|sub| {
@@ -5005,7 +5033,7 @@ fn breakdown_name_cell(column: &Column, row: &GroupRow, theme: Theme) -> AnyElem
                 .min_w_0()
                 .truncate()
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(sub)
         }))
         .into_any_element()
@@ -5089,8 +5117,13 @@ fn summary_stat(label: String, value: String, theme: Theme) -> AnyElement {
         .items_center()
         .gap(DynamicSpacing::Base06.px(&theme))
         .text_size(TextSize::Small.px(&theme))
-        .child(div().text_color(theme.text_3).child(label))
-        .child(div().font(num_font()).text_color(theme.text_2).child(value))
+        .child(div().text_color(theme.text_muted).child(label))
+        .child(
+            div()
+                .font(num_font())
+                .text_color(theme.text_secondary)
+                .child(value),
+        )
         .into_any_element()
 }
 

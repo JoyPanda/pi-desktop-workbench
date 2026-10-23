@@ -114,13 +114,24 @@ impl RetentionConfig {
     }
 
     /// Persist to `~/.orbit-pi/session-retention.json`. Best-effort: a failed
-    /// write keeps the previous setting on disk.
+    /// write keeps the previous setting on disk and is reported on stderr.
     pub fn persist(&self) {
         let path = store_path();
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                eprintln!(
+                    "Orbit retention: could not create {}: {error}",
+                    parent.display()
+                );
+                return;
+            }
         }
-        let _ = std::fs::write(path, self.to_json());
+        if let Err(error) = std::fs::write(&path, self.to_json()) {
+            eprintln!(
+                "Orbit retention: could not write {}: {error}",
+                path.display()
+            );
+        }
     }
 }
 

@@ -1293,6 +1293,20 @@ impl UsagePage {
         self.snapshot.as_ref()
     }
 
+    /// Set by `OrbitApp` on every render: the main area's width in points.
+    pub fn set_main_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        if (self.main_width - width).abs() > 0.5 {
+            self.main_width = width;
+            cx.notify();
+        }
+    }
+
+    /// The header's leading inset. The shell leaves it at the normal page
+    /// padding unless a page override widens it.
+    pub fn header_leading(&self) -> f32 {
+        self.header_leading
+    }
+
     /// The width of the main area the shell gave us. The page lays itself out
     /// against this instead of guessing from the window size (§58).
     pub fn main_width(&self) -> f32 {
@@ -1311,31 +1325,6 @@ impl UsagePage {
             - CARD_EDGE
             - super::view::SECTION_PAD * 2.)
             .max(360.)
-    }
-
-    /// Set by `OrbitApp` on every render: the main area's width in points.
-    pub fn set_main_width(&mut self, width: f32, cx: &mut Context<Self>) {
-        if (self.main_width - width).abs() > 0.5 {
-            self.main_width = width;
-            cx.notify();
-        }
-    }
-
-    /// The header's leading inset. `OrbitApp` sets it each render.
-    pub fn header_leading(&self) -> f32 {
-        self.header_leading
-    }
-
-    /// Set by `OrbitApp` on every render: how far the header's leading edge
-    /// sits from the page's left edge. It widens when the sessions sidebar is
-    /// collapsed, because the page then spans the window and its own Back
-    /// affordance would otherwise sit under the macOS traffic lights (and the
-    /// overlaid sidebar/history controls).
-    pub fn set_header_leading(&mut self, leading: f32, cx: &mut Context<Self>) {
-        if (self.header_leading - leading).abs() > 0.5 {
-            self.header_leading = leading;
-            cx.notify();
-        }
     }
 
     // ── tables ─────────────────────────────────────────────────────────────

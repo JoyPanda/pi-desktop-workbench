@@ -259,6 +259,7 @@ impl OrbitApp {
                 if result.is_ok() {
                     app.latest_turn = Some(turn);
                 }
+                app.sync_review_context(cx);
                 app.sidepane
                     .update(cx, |pane, cx| pane.mark_review_stale(cx));
                 app.git_panel
@@ -343,6 +344,7 @@ impl OrbitApp {
                     return;
                 }
                 app.latest_turn = latest;
+                app.sync_review_context(cx);
                 if let Some(latest) = latest {
                     // Continue numbering after the recovered turn so new refs
                     // never clobber the persisted ones.
@@ -573,6 +575,7 @@ impl OrbitApp {
         self.sidepane.update(cx, |pane, cx| pane.close(cx));
         self.project_panel.update(cx, |panel, cx| panel.close(cx));
         self.terminal_panel.update(cx, |panel, cx| panel.close(cx));
+        self.sync_terminal_active(cx);
     }
 
     pub(super) fn on_new_session(
@@ -674,7 +677,7 @@ impl OrbitApp {
         self.workflow_pending = None;
         self.workflow_mode = WorkflowMode::default();
         self.add_workspace(cwd.clone(), cx);
-        self.set_current_workspace(cwd.clone());
+        self.set_current_workspace(cwd.clone(), cx);
 
         match self.extensions.spawn(&cwd, true, &self.mcp.secret_env()) {
             Ok(client) => {
@@ -877,7 +880,7 @@ impl OrbitApp {
         self.seed_session_name_input(cx);
         // Opening a session keeps its folder in Orbit's own sidebar list.
         self.add_workspace(session.cwd.clone(), cx);
-        self.set_current_workspace(session.cwd.clone());
+        self.set_current_workspace(session.cwd.clone(), cx);
         self.current_session_path = Some(session.path.clone());
         if push {
             self.session_history.truncate(self.history_index + 1);
@@ -1026,12 +1029,14 @@ impl OrbitApp {
                 .border_1()
                 .border_color(theme.border)
                 .when(generating, |button| button.bg(theme.overlay))
-                .when(!generating, |button| button.raised(theme.bg_raised, &theme));
+                .when(!generating, |button| {
+                    button.raised(theme.surface_elevated, &theme)
+                });
         if !generating {
             button = button
                 .cursor_pointer()
                 .hover(|s| {
-                    s.raised(theme.bg_hover, &theme)
+                    s.raised(theme.surface_hover, &theme)
                         .border_color(theme.border_strong)
                 })
                 .active(|s| s.opacity(PRESS_DIM))
@@ -1049,14 +1054,14 @@ impl OrbitApp {
                     crate::app::spinner(
                         "sess-generate-title-spinner",
                         ButtonSize::Large.icon_size().px(&theme),
-                        theme.accent,
+                        theme.accent_text,
                         theme,
                     )
                 } else {
                     icon(
                         "icons/magic-wand.svg",
                         ButtonSize::Large.icon_size().px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     )
                     .into_any_element()
                 })
@@ -1107,6 +1112,7 @@ impl OrbitApp {
         // (see `close_git_for_review`).
         self.sidepane.update(cx, |pane, cx| pane.close(cx));
         self.git_panel.update(cx, |panel, cx| panel.show(cx));
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -1130,6 +1136,7 @@ impl OrbitApp {
     pub(super) fn close_git(&mut self, cx: &mut Context<Self>) {
         self.git_open = false;
         self.git_panel.update(cx, |panel, cx| panel.hide(cx));
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -1140,6 +1147,7 @@ impl OrbitApp {
         if self.git_open {
             self.git_open = false;
             self.git_panel.update(cx, |panel, cx| panel.hide(cx));
+            self.sync_terminal_active(cx);
             cx.notify();
         }
     }
@@ -1159,6 +1167,7 @@ impl OrbitApp {
         // Files is another main-area feature; leave it for the Usage card.
         self.close_files(cx);
         self.usage.update(cx, |page, cx| page.open(cx));
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -1166,6 +1175,7 @@ impl OrbitApp {
     pub(super) fn close_usage(&mut self, cx: &mut Context<Self>) {
         self.usage_open = false;
         self.usage.update(cx, |page, cx| page.close(cx));
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -1270,7 +1280,7 @@ impl OrbitApp {
             .path("icons/check.svg")
             .flex_none()
             .size(IconSize::XSmall.px(&theme))
-            .text_color(theme.send_fg);
+            .text_color(theme.action_fg);
         if theme::reduce_motion(cx) {
             return svg.into_any_element();
         }
@@ -1329,13 +1339,13 @@ impl OrbitApp {
                 div()
                     .text_size(TextSize::Small.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(tr!("session.session_details")),
             )
             .children(session_id.is_empty().then(|| {
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("session.no_active"))
             }));
 
@@ -1349,7 +1359,7 @@ impl OrbitApp {
                 .flex()
                 .flex_col()
                 .gap(input::gap(&theme))
-                .child(input_label(tr!("session.name"), &theme).text_color(theme.text_3))
+                .child(input_label(tr!("session.name"), &theme).text_color(theme.text_muted))
                 .child(
                     div()
                         .w_full()
@@ -1360,7 +1370,7 @@ impl OrbitApp {
                             input_field_frame(div(), &theme)
                                 .flex_1()
                                 .min_w_0()
-                                .bg(theme.bg_main)
+                                .bg(theme.background)
                                 .overflow_hidden()
                                 .child(self.session_name_input.clone()),
                         )
@@ -1382,15 +1392,15 @@ impl OrbitApp {
                                 // that pops in, so the button confirms the
                                 // rename instead of silently doing nothing.
                                 button = button
-                                    .raised(theme.ok_green, &theme)
-                                    .border_color(theme.ok_green)
+                                    .raised(theme.success, &theme)
+                                    .border_color(theme.success)
                                     .child(Self::rename_check(theme, cx));
                             } else {
                                 button = button
-                                    .raised(theme.bg_raised, &theme)
+                                    .raised(theme.surface_elevated, &theme)
                                     .border_color(theme.border)
-                                    .text_color(theme.text)
-                                    .hover(|s| s.raised(theme.bg_hover, &theme))
+                                    .text_color(theme.text_primary)
+                                    .hover(|s| s.raised(theme.surface_hover, &theme))
                                     .child(tr!("session.update"));
                             }
                             button
@@ -1405,7 +1415,7 @@ impl OrbitApp {
                 .pb(DynamicSpacing::Base04.px(&theme))
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(label.to_string())
         };
 
@@ -1449,7 +1459,7 @@ impl OrbitApp {
                     .items_center()
                     .gap(DynamicSpacing::Base08.px(&theme))
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .hover(|s| s.bg(theme.surface_hover))
                     .on_click({
                         let this = this.clone();
                         move |_, _window, cx| {
@@ -1461,19 +1471,19 @@ impl OrbitApp {
                     .child(icon(
                         "icons/branch.svg",
                         IconSize::Small.px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     ))
                     .child(
                         div()
                             .flex_1()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("session.commit_or_push")),
                     )
                     .child(icon(
                         "icons/chevron-right.svg",
                         IconSize::XSmall.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     )),
             )
             .child(
@@ -1485,7 +1495,7 @@ impl OrbitApp {
                     .items_center()
                     .gap(DynamicSpacing::Base08.px(&theme))
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .hover(|s| s.bg(theme.surface_hover))
                     .on_click({
                         let this = this.clone();
                         move |_, window, cx| {
@@ -1497,19 +1507,19 @@ impl OrbitApp {
                     .child(icon(
                         "icons/file-diff.svg",
                         IconSize::Small.px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     ))
                     .child(
                         div()
                             .flex_1()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("session.compare_branch")),
                     )
                     .child(icon(
                         "icons/chevron-right.svg",
                         IconSize::XSmall.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     )),
             )
             .child(
@@ -1608,7 +1618,7 @@ impl OrbitApp {
                 .child(icon_dyn(
                     provider_icon(&report.provider),
                     IconSize::XSmall.px(&theme),
-                    provider_mark_color(&report.provider, &theme, theme.text_3),
+                    provider_mark_color(&report.provider, &theme, theme.text_muted),
                 ))
                 .child(
                     div()
@@ -1616,7 +1626,7 @@ impl OrbitApp {
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(providers::provider_display_name(&report.provider)),
                 )
         };
@@ -1632,7 +1642,7 @@ impl OrbitApp {
                             .max_w(px(72.))
                             .truncate()
                             .text_size(TextSize::XSmall.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(if is_five_hour_window(window) {
                                 "5h".to_string()
                             } else {
@@ -1656,7 +1666,7 @@ impl OrbitApp {
                                 .text_color(tint)
                                 .child(format!("{}%", (fraction * 100.0).round() as i32)),
                         )
-                        .child(context_ring(fraction, tint, theme.ring_track));
+                        .child(context_ring(fraction, tint, theme.surface_elevated));
                 }
             }
             // A balance-only account (DeepSeek, OpenRouter) has no window to
@@ -1672,7 +1682,7 @@ impl OrbitApp {
                         .font(crate::usage::view::num_font())
                         .text_size(TextSize::Small.px(&theme))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(text),
                 );
             }
@@ -1686,13 +1696,13 @@ impl OrbitApp {
                         .child(icon(
                             "icons/tools/mcp.svg",
                             IconSize::Small.px(&theme),
-                            theme.text_2,
+                            theme.text_secondary,
                         ))
                         .child(div().size(px(6.)).rounded_full().bg(dot))
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(label),
                         );
                 }
@@ -1701,12 +1711,12 @@ impl OrbitApp {
                         .child(icon(
                             "icons/spark.svg",
                             IconSize::Small.px(&theme),
-                            theme.text_2,
+                            theme.text_secondary,
                         ))
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(tr!("session.usage")),
                         );
                 }
@@ -1743,15 +1753,15 @@ impl OrbitApp {
             "quota-refresh-spin",
             ButtonSize::Medium.icon_size().px(&theme),
             self.quota_refreshing,
-            theme.text_2,
+            theme.text_secondary,
             theme,
         );
         let refresh_button =
             icon_button_frame(div().id("quota-refresh"), &theme, ButtonSize::Medium)
                 .group(BUTTON_GROUP)
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.bg_hover))
-                .active(|style| style.bg(theme.active))
+                .hover(|style| style.bg(theme.surface_hover))
+                .active(|style| style.bg(theme.surface_active))
                 .tooltip({
                     let label = tr!("common.refresh");
                     move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into()
@@ -1788,12 +1798,13 @@ impl OrbitApp {
                 .cursor_pointer()
                 .border_color(theme.border)
                 .when(selected, |chip| {
-                    chip.raised_flat(theme.active).text_color(theme.active_fg)
+                    chip.raised_flat(theme.surface_active)
+                        .text_color(theme.text_primary)
                 })
                 .when(!selected, |chip| {
-                    chip.raised_flat(theme.bg_raised)
-                        .text_color(theme.text_2)
-                        .hover(|style| style.raised_flat(theme.bg_hover))
+                    chip.raised_flat(theme.surface_elevated)
+                        .text_color(theme.text_secondary)
+                        .hover(|style| style.raised_flat(theme.surface_hover))
                 })
                 .on_mouse_up(MouseButton::Left, {
                     let this = this.clone();
@@ -1807,24 +1818,24 @@ impl OrbitApp {
 
         let header = div()
             .flex_none()
-            .px(px(12.))
+            .px(DynamicSpacing::Base12.px(&theme))
             .py(px(10.))
             .border_b_1()
             .border_color(theme.border)
             .flex()
             .items_center()
-            .gap(px(8.))
+            .gap(DynamicSpacing::Base08.px(&theme))
             .child(tabs)
             .child(div().flex_1())
             .child(match tab {
                 QuotaPopupTab::Providers => div()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
+                    .gap(DynamicSpacing::Base08.px(&theme))
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(tr!("session.provider_count", count = count)),
                     )
                     .child(refresh_button)
@@ -1850,10 +1861,10 @@ impl OrbitApp {
                     .w_full()
                     .max_h(body_max_h)
                     .overflow_y_scroll()
-                    .p(px(8.))
+                    .p(DynamicSpacing::Base08.px(&theme))
                     .flex()
                     .flex_col()
-                    .gap(px(8.))
+                    .gap(DynamicSpacing::Base08.px(&theme))
                     .children(visible.iter().map(|report| {
                         quota_provider_card(
                             self,
@@ -1948,7 +1959,7 @@ impl OrbitApp {
         let provider = provider.to_string();
         icon_button_frame(div().id(id), &theme, ButtonSize::Compact)
             .cursor_pointer()
-            .hover(|style| style.bg(theme.bg_hover))
+            .hover(|style| style.bg(theme.surface_hover))
             .active(|style| style.opacity(PRESS_DIM))
             .tooltip({
                 let label = label.clone();
@@ -1970,7 +1981,7 @@ impl OrbitApp {
             .child(icon(
                 path,
                 ButtonSize::Compact.icon_size().px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .into_any_element()
     }
@@ -1989,13 +2000,13 @@ impl OrbitApp {
             .child(icon(
                 "icons/spark.svg",
                 IconSize::Medium.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(tr!("session.no_provider_usage")),
             )
             .child(
@@ -2003,9 +2014,10 @@ impl OrbitApp {
                     .debug_selector(|| "quota-empty-mcp".to_string())
                     .cursor_pointer()
                     .font_weight(FontWeight::MEDIUM)
-                    .raised(theme.send_bg, &theme)
-                    .text_color(theme.send_fg)
-                    .hover(|style| style.raised(theme.send_bg_hover, &theme))
+                    .raised(theme.action, &theme)
+                    .text_color(theme.action_fg)
+                    .hover(|style| style.raised(theme.action_hover, &theme))
+                    .active(|style| style.raised(theme.action_pressed, &theme))
                     .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                         this.update(cx, |app, cx| {
                             app.mcp_popup_tab(QuotaPopupTab::Mcp, cx);
@@ -2037,7 +2049,7 @@ impl OrbitApp {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(DynamicSpacing::Base08.px(&theme))
             .child(
                 div()
                     .id("quota-hidden-toggle")
@@ -2046,19 +2058,19 @@ impl OrbitApp {
                     .cursor_pointer()
                     .flex()
                     .items_center()
-                    .gap(px(6.))
-                    .px(px(4.))
+                    .gap(DynamicSpacing::Base06.px(&theme))
+                    .px(DynamicSpacing::Base04.px(&theme))
                     .py(px(2.))
                     .rounded(Radius::Medium.px(&theme))
-                    .hover(|style| style.bg(theme.bg_hover))
+                    .hover(|style| style.bg(theme.surface_hover))
                     .on_mouse_up(MouseButton::Left, cx.listener(Self::on_quota_hidden_toggle))
-                    .child(icon(chevron, IconSize::XSmall.px(&theme), theme.text_3))
+                    .child(icon(chevron, IconSize::XSmall.px(&theme), theme.text_muted))
                     .child(
                         div()
                             .flex_1()
                             .text_size(TextSize::XSmall.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(tr!("session.hidden_providers", count = reports.len())),
                     ),
             );
@@ -2218,11 +2230,11 @@ impl OrbitApp {
         let value = value.to_string();
         let v = value.clone();
         div()
-            .px(px(12.))
+            .px(DynamicSpacing::Base12.px(&theme))
             .py(px(7.))
             .flex()
             .items_center()
-            .gap(px(8.))
+            .gap(DynamicSpacing::Base08.px(&theme))
             .child(
                 div()
                     .flex_1()
@@ -2233,13 +2245,13 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(label),
                     )
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .truncate()
                             .child(if value.is_empty() {
                                 "—".to_string()
@@ -2252,14 +2264,14 @@ impl OrbitApp {
                 icon_button_frame(div().id(("sess-copy", ix)), &theme, ButtonSize::Compact)
                     .tip(tr!("common.copy"))
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .hover(|s| s.bg(theme.surface_hover))
                     .on_click(move |_, _window, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(v.clone()));
                     })
                     .child(icon(
                         "icons/copy.svg",
                         ButtonSize::Compact.icon_size().px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     )),
             )
     }
@@ -2445,6 +2457,7 @@ impl OrbitApp {
         self.worktrees_open = false;
         self.file_viewer
             .update(cx, |viewer, cx| viewer.show(path, display, cx));
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -2614,6 +2627,7 @@ impl OrbitApp {
     /// Leave the Files surface and return to the chat.
     pub(super) fn close_files(&mut self, cx: &mut Context<Self>) {
         self.file_viewer.update(cx, |viewer, cx| viewer.hide(cx));
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -2782,11 +2796,11 @@ impl OrbitApp {
 /// same thresholds the Settings quota meters use, so the two surfaces agree.
 fn quota_tint(fraction: f32, theme: Theme) -> Hsla {
     if fraction >= 0.9 {
-        theme.crit
+        theme.error
     } else if fraction >= 0.75 {
-        theme.warn
+        theme.warning
     } else {
-        theme.ok_green
+        theme.success
     }
 }
 
@@ -2861,7 +2875,7 @@ fn quota_provider_card(
         .child(icon_dyn(
             provider_icon(&report.provider),
             IconSize::Small.px(&theme),
-            provider_mark_color(&report.provider, &theme, theme.text_3),
+            provider_mark_color(&report.provider, &theme, theme.text_muted),
         ))
         .child(
             div()
@@ -2870,20 +2884,24 @@ fn quota_provider_card(
                 .truncate()
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(name),
         );
     if let Some(plan) = &report.plan {
-        header =
-            header.child(app.provider_badge(plan, theme.accent, theme.accent.opacity(0.12), theme));
+        header = header.child(app.provider_badge(
+            plan,
+            theme.accent_text,
+            theme.accent.opacity(0.12),
+            theme,
+        ));
     }
     if let Some(action) = action {
         header = header.child(action);
     }
 
-    // The card fill is the ink wash rather than `bg_raised`: most palettes
-    // set `menu_bg == bg_raised`, where a raised fill would vanish inside
-    // the popup. The wash steps off any surface in every palette.
+    // The card fill is the ink wash rather than `surface_elevated`: the popup
+    // itself already sits on that elevation, so a raised card would vanish
+    // inside it. The wash steps off any surface in every palette.
     let card_selector = format!(
         "quota-card-{}-{}",
         if hidden { "hidden" } else { "visible" },
@@ -2896,11 +2914,11 @@ fn quota_provider_card(
         .border_1()
         .border_color(theme.border)
         .bg(theme.overlay)
-        .px(px(12.))
+        .px(DynamicSpacing::Base12.px(&theme))
         .py(px(10.))
         .flex()
         .flex_col()
-        .gap(px(8.))
+        .gap(DynamicSpacing::Base08.px(&theme))
         .child(header);
 
     for window in &report.windows {
@@ -2925,14 +2943,14 @@ fn quota_provider_card(
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(DynamicSpacing::Base08.px(&theme))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(window.label.clone()),
                 )
                 .child(
@@ -2940,7 +2958,7 @@ fn quota_provider_card(
                         .flex_none()
                         .text_size(TextSize::Small.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(value),
                 ),
         );
@@ -2952,7 +2970,7 @@ fn quota_provider_card(
                     .h(px(5.))
                     .rounded_full()
                     .overflow_hidden()
-                    .bg(theme.trough)
+                    .bg(theme.surface_secondary)
                     .child(
                         div()
                             .h_full()
@@ -2966,7 +2984,7 @@ fn quota_provider_card(
             row = row.child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(quota_reset_hint(
                         resets_at,
                         chrono::Local::now().timestamp_millis(),
@@ -2987,14 +3005,14 @@ fn quota_provider_card(
                 .w_full()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(DynamicSpacing::Base08.px(&theme))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(balance.label.clone()),
                 )
                 .child(
@@ -3002,7 +3020,7 @@ fn quota_provider_card(
                         .flex_none()
                         .text_size(TextSize::Small.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(text),
                 ),
         );
@@ -3012,7 +3030,7 @@ fn quota_provider_card(
         block = block.child(
             div()
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.crit)
+                .text_color(theme.error)
                 .child(error.clone()),
         );
     } else if note_should_render(report) {
@@ -3020,7 +3038,7 @@ fn quota_provider_card(
             block = block.child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(note.clone()),
             );
         }

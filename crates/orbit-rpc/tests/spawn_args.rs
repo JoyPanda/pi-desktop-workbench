@@ -9,9 +9,14 @@
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use orbit_rpc::PiClient;
+
+/// Distinguishes the two tests' scratch dirs; `SystemTime` alone can return
+/// the same nanosecond to tests that construct a `FakePi` in parallel.
+static NEXT_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
 struct FakePi {
     _dir: PathBuf,
@@ -25,15 +30,19 @@ impl FakePi {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("orbit-spawn-args-{nanos}"));
+        let sequence = NEXT_SCRATCH.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "orbit-spawn-args-{}-{nanos}-{sequence}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let argv = dir.join("argv.txt");
         let bin = dir.join("fake-pi");
         std::fs::write(
             &bin,
             format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\n",
-                argv.display()
+                "#!/bin/sh\ntmp='{argv}.tmp'\nprintf '%s\\n' \"$@\" > \"$tmp\"\nmv \"$tmp\" '{argv}'\n",
+                argv = argv.display()
             ),
         )
         .expect("write fake pi");
@@ -51,9 +60,8 @@ impl FakePi {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if let Ok(raw) = std::fs::read_to_string(&self.argv) {
-                // The shell creates the file before `printf` writes it; an
-                // empty or newline-less read is a partial write, keep waiting
-                // (`printf '%s\n' "$@"` always ends with a newline).
+                // The script writes to a sibling file and renames it into
+                // place, so a visible `argv.txt` is always complete.
                 if !raw.is_empty() && raw.ends_with('\n') {
                     return raw.lines().map(str::to_string).collect();
                 }

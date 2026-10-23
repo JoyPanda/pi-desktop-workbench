@@ -53,6 +53,7 @@ impl OrbitApp {
         self.close_files(cx);
         self.sidepane.update(cx, |pane, cx| pane.close(cx));
         self.refresh_worktrees(cx);
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -61,6 +62,7 @@ impl OrbitApp {
         self.worktrees_open = false;
         self.worktree_menu = None;
         self.worktree_advanced_open = false;
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -570,7 +572,7 @@ impl OrbitApp {
         }
         let path = path.to_path_buf();
         self.add_workspace(path.clone(), cx);
-        self.set_current_workspace(path);
+        self.set_current_workspace(path, cx);
         self.close_worktrees(cx);
     }
 
@@ -704,7 +706,7 @@ impl OrbitApp {
                         // A moved active workspace follows its directory so a
                         // running session is not stranded on a dead path.
                         if app.worktree_is_active(&path) {
-                            app.set_current_workspace(destination.clone());
+                            app.set_current_workspace(destination.clone(), cx);
                         }
                         app.worktrees_error = None;
                     }
@@ -958,7 +960,7 @@ impl OrbitApp {
     fn settings_text_field(&self, input: &Entity<ComposerInput>, theme: &Theme) -> AnyElement {
         input_field_frame(div(), theme)
             .w(px(240.))
-            .bg(theme.bg_main)
+            .bg(theme.background)
             .child(input.clone())
             .into_any_element()
     }
@@ -998,7 +1000,7 @@ impl OrbitApp {
                     button_frame(div().id("worktrees-top-back"), &theme, ButtonSize::Medium)
                         .group(BUTTON_GROUP)
                         .cursor_pointer()
-                        .hover(|style| style.bg(theme.bg_hover)),
+                        .hover(|style| style.bg(theme.surface_hover)),
                 )
                 .on_mouse_up(
                     MouseButton::Left,
@@ -1007,9 +1009,13 @@ impl OrbitApp {
                 .child(icon(
                     "icons/arrow-left.svg",
                     ButtonSize::Medium.icon_size().px(&theme),
-                    theme.text_2,
+                    theme.text_secondary,
                 ))
-                .child(div().text_color(theme.text_2).child(tr!("view.back"))),
+                .child(
+                    div()
+                        .text_color(theme.text_secondary)
+                        .child(tr!("view.back")),
+                ),
             )
             .child(
                 div()
@@ -1019,13 +1025,13 @@ impl OrbitApp {
                     .child(icon(
                         "icons/branch.svg",
                         IconSize::Medium.px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     ))
                     .child(
                         div()
                             .text_size(TextSize::Large.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("worktree.page.title")),
                     ),
             )
@@ -1043,8 +1049,8 @@ impl OrbitApp {
             .w_full()
             .flex()
             .flex_col()
-            .bg(theme.bg_main)
-            .text_color(theme.text)
+            .bg(theme.background)
+            .text_color(theme.text_primary)
             .font_family(theme::ui_font_family())
             .child(self.worktrees_header(theme, this.clone(), cx))
             .child(
@@ -1110,13 +1116,13 @@ impl OrbitApp {
                     .child(spinner(
                         "worktree-op-spinner",
                         IconSize::Small.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                         theme,
                     ))
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(label),
                     ),
             );
@@ -1134,16 +1140,20 @@ impl OrbitApp {
             button_frame(div().id("worktrees-new"), &theme, ButtonSize::Medium)
                 .border_1()
                 .border_color(theme.border)
-                .raised(theme.bg_raised, &theme)
+                .raised(theme.surface_elevated, &theme)
                 .font_weight(FontWeight::MEDIUM)
                 .cursor_pointer()
-                .hover(|s| s.raised(theme.bg_hover, &theme))
+                .hover(|s| s.raised(theme.surface_hover, &theme))
                 .child(icon(
                     "icons/plus.svg",
                     ButtonSize::Medium.icon_size().px(&theme),
-                    theme.accent,
+                    theme.accent_text,
                 ))
-                .child(div().text_color(theme.text).child(tr!("worktree.page.new")))
+                .child(
+                    div()
+                        .text_color(theme.text_primary)
+                        .child(tr!("worktree.page.new")),
+                )
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, _: &MouseUpEvent, _, cx| {
@@ -1168,7 +1178,7 @@ impl OrbitApp {
                     .min_w_0()
                     .truncate()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(repo_label),
             )
             .child(right)
@@ -1224,8 +1234,7 @@ impl OrbitApp {
                                                 // button's mouse-up (the same
                                                 // click) cannot toggle it back
                                                 // open.
-                                                app.menu_dismissed_at =
-                                                    Some(Instant::now());
+                                                app.menu_dismissed_at = Some(Instant::now());
                                                 cx.notify();
                                             });
                                         }
@@ -1258,24 +1267,24 @@ impl OrbitApp {
                     .border_color(theme.border)
                     .raised(
                         if open {
-                            theme.bg_hover
+                            theme.surface_hover
                         } else {
-                            theme.bg_raised
+                            theme.surface_elevated
                         },
                         &theme,
                     )
                     .cursor_pointer()
-                    .hover(|s| s.raised(theme.bg_hover, &theme))
+                    .hover(|s| s.raised(theme.surface_hover, &theme))
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(tr!("worktree.page.advanced")),
                     )
                     .child(icon(
                         "icons/chevron-down.svg",
                         IconSize::XSmall.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     )),
             )
             .on_mouse_up(
@@ -1304,7 +1313,7 @@ impl OrbitApp {
         let mut card = div()
             .w_full()
             .min_w_0()
-            .bg(theme.bg_composer)
+            .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
             .rounded(Radius::XLarge.px(&theme))
@@ -1317,17 +1326,17 @@ impl OrbitApp {
         let (glyph, glyph_color, title) = match &state.outcome {
             None => (
                 "icons/loader.svg",
-                theme.text_3,
+                theme.text_muted,
                 tr!("worktree.setup.running"),
             ),
             Some(outcome) if outcome.success => (
                 "icons/check.svg",
-                theme.ok_green,
+                theme.success,
                 tr!("worktree.setup.succeeded"),
             ),
             Some(_) => (
                 "icons/circle-x.svg",
-                theme.stop_red,
+                theme.error,
                 tr!("worktree.setup.failed"),
             ),
         };
@@ -1356,13 +1365,13 @@ impl OrbitApp {
                         .child(
                             div()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text)
+                                .text_color(theme.text_primary)
                                 .child(title),
                         )
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .truncate()
                                 .child(tr!(
                                     "worktree.setup.script_label",
@@ -1377,7 +1386,7 @@ impl OrbitApp {
                 card = card.child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(outcome.summary()),
                 );
             }
@@ -1428,14 +1437,14 @@ impl OrbitApp {
                         .id("worktree-setup-output")
                         .max_h(px(220.))
                         .overflow_y_scroll()
-                        .bg(theme.bg_main)
+                        .bg(theme.background)
                         .border_1()
                         .border_color(theme.border)
                         .rounded(Radius::Medium.px(&theme))
                         .p(DynamicSpacing::Base08.px(&theme))
                         .font_family(theme::code_font_family())
                         .text_size(theme.code_px(11.))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(if output.trim().is_empty() {
                             tr!("worktree.setup.no_output")
                         } else {
@@ -1454,9 +1463,9 @@ impl OrbitApp {
             div()
                 .w_full()
                 .min_w_0()
-                .bg(theme.stop_red.opacity(0.08))
+                .bg(theme.error.opacity(0.08))
                 .border_1()
-                .border_color(theme.stop_red.opacity(0.35))
+                .border_color(theme.error.opacity(0.35))
                 .rounded(Radius::XLarge.px(&theme))
                 .px(DynamicSpacing::Base16.px(&theme))
                 .py(DynamicSpacing::Base12.px(&theme))
@@ -1466,7 +1475,7 @@ impl OrbitApp {
                 .child(icon(
                     "icons/circle-x.svg",
                     IconSize::Medium.px(&theme),
-                    theme.stop_red,
+                    theme.error,
                 ))
                 .child(
                     div()
@@ -1474,7 +1483,7 @@ impl OrbitApp {
                         .min_w_0()
                         .font_family(theme::code_font_family())
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(error),
                 )
                 .child(worktree_text_button(
@@ -1514,7 +1523,7 @@ impl OrbitApp {
         .child(icon(
             "icons/x.svg",
             ButtonSize::Default.icon_size().px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| {
@@ -1528,7 +1537,7 @@ impl OrbitApp {
                 .debug_selector(|| "worktree-howto-card".to_string())
                 .w_full()
                 .min_w_0()
-                .bg(theme.bg_composer)
+                .bg(theme.surface_secondary)
                 .border_1()
                 .border_color(theme.border)
                 .rounded(Radius::XLarge.px(&theme))
@@ -1545,7 +1554,7 @@ impl OrbitApp {
                         .child(icon(
                             "icons/info.svg",
                             IconSize::Small.px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         ))
                         .child(
                             div()
@@ -1559,7 +1568,7 @@ impl OrbitApp {
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(tr!("worktree.howto.intro")),
                 )
                 .child(worktree_howto_line(theme, tr!("worktree.howto.create")))
@@ -1624,8 +1633,8 @@ impl OrbitApp {
             .items_center()
             .gap(DynamicSpacing::Base12.px(&theme))
             .cursor_pointer()
-            .when(active, |row| row.bg(theme.overlay))
-            .hover(|row| row.bg(theme.bg_hover))
+            .when(active, |row| row.bg(theme.selection))
+            .hover(|row| row.bg(theme.surface_hover))
             .on_mouse_down(MouseButton::Right, {
                 let this = this.clone();
                 let path = path.clone();
@@ -1658,7 +1667,7 @@ impl OrbitApp {
                             .child(
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
+                                    .text_color(theme.text_primary)
                                     .child(name.clone()),
                             )
                             .when(active, |row| {
@@ -1668,7 +1677,7 @@ impl OrbitApp {
                                         .rounded(Radius::Small.px(&theme))
                                         .bg(theme.accent.opacity(0.14))
                                         .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(theme.accent)
+                                        .text_color(theme.accent_text)
                                         .child(tr!("worktree.row.active")),
                                 )
                             })
@@ -1676,7 +1685,7 @@ impl OrbitApp {
                                 row.child(
                                     div()
                                         .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(theme.text_3)
+                                        .text_color(theme.text_muted)
                                         .child(tr!("worktree.bare")),
                                 )
                             }),
@@ -1689,13 +1698,13 @@ impl OrbitApp {
                             .child(icon(
                                 "icons/branch.svg",
                                 IconSize::XSmall.px(&theme),
-                                theme.text_3,
+                                theme.text_muted,
                             ))
                             .child(
                                 div()
                                     .font_family(theme::code_font_family())
                                     .text_size(TextSize::Small.px(&theme))
-                                    .text_color(theme.text_2)
+                                    .text_color(theme.text_secondary)
                                     .child(branch),
                             ),
                     )
@@ -1704,7 +1713,7 @@ impl OrbitApp {
                             .truncate()
                             .font_family(theme::code_font_family())
                             .text_size(TextSize::XSmall.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(shorten_home(&path)),
                     ),
             )
@@ -1736,7 +1745,7 @@ impl OrbitApp {
                 .child(icon(
                     "icons/more.svg",
                     ButtonSize::Compact.icon_size().px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .children(row_menu.map(|menu| worktree_row_menu(&menu, worktree, theme, menu_this)))
             })
@@ -1812,7 +1821,7 @@ impl OrbitApp {
         div()
             .w(px(520.))
             .max_h(px(560.))
-            .bg(theme.bg_composer)
+            .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
             .rounded(Radius::XLarge.px(&theme))
@@ -1831,7 +1840,7 @@ impl OrbitApp {
                         div()
                             .text_size(TextSize::Large.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(title),
                     ),
             )
@@ -1856,7 +1865,7 @@ impl OrbitApp {
         Some(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.stop_red)
+                .text_color(theme.error)
                 .child(error)
                 .into_any_element(),
         )
@@ -1875,7 +1884,7 @@ impl OrbitApp {
             Some(&tr!("worktree.field.name_hint")),
             input_field_frame(div(), &theme)
                 .w_full()
-                .bg(theme.bg_main)
+                .bg(theme.background)
                 .child(self.worktree_name_input.clone()),
         );
         let mode = self.worktree_branch_mode;
@@ -1921,26 +1930,26 @@ impl OrbitApp {
                 .child(
                     input_field_frame(div(), &theme)
                         .w_full()
-                        .bg(theme.bg_main)
+                        .bg(theme.background)
                         .child(self.worktree_branch_input.clone()),
                 )
                 .child(
                     input_field_frame(div(), &theme)
                         .w_full()
-                        .bg(theme.bg_main)
+                        .bg(theme.background)
                         .child(self.worktree_start_input.clone()),
                 )
                 .child(
                     div()
                         .text_size(TextSize::XSmall.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("worktree.field.start_hint")),
                 );
         } else if self.worktree_branches.is_empty() {
             branch_section = branch_section.child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("worktree.field.loading_branches")),
             );
         } else {
@@ -1967,8 +1976,8 @@ impl OrbitApp {
                         .items_center()
                         .gap(DynamicSpacing::Base08.px(&theme))
                         .cursor_pointer()
-                        .when(selected, |row| row.bg(theme.overlay))
-                        .hover(|row| row.bg(theme.bg_hover))
+                        .when(selected, |row| row.bg(theme.selection))
+                        .hover(|row| row.bg(theme.surface_hover))
                         .child(icon(
                             if selected {
                                 "icons/check.svg"
@@ -1976,7 +1985,11 @@ impl OrbitApp {
                                 "icons/branch.svg"
                             },
                             IconSize::Small.px(&theme),
-                            if selected { theme.accent } else { theme.text_3 },
+                            if selected {
+                                theme.accent_text
+                            } else {
+                                theme.text_muted
+                            },
                         ))
                         .child(
                             div()
@@ -1985,7 +1998,11 @@ impl OrbitApp {
                                 .truncate()
                                 .font_family(theme::code_font_family())
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(if selected { theme.text } else { theme.text_2 })
+                                .text_color(if selected {
+                                    theme.text_primary
+                                } else {
+                                    theme.text_secondary
+                                })
                                 .child(branch.clone()),
                         )
                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
@@ -2021,7 +2038,7 @@ impl OrbitApp {
                 .py(DynamicSpacing::Base08.px(&theme))
                 .font_family(theme::code_font_family())
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(if location.is_empty() {
                     tr!("worktree.field.location_unknown")
                 } else {
@@ -2055,7 +2072,7 @@ impl OrbitApp {
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(tr!("worktree.field.run_setup")),
                         )
                         .child(
@@ -2063,7 +2080,7 @@ impl OrbitApp {
                                 .truncate()
                                 .font_family(theme::code_font_family())
                                 .text_size(TextSize::XSmall.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .child(shorten_home(&script)),
                         ),
                 )
@@ -2131,7 +2148,7 @@ impl OrbitApp {
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(text),
                 )
                 .child(footer)
@@ -2152,7 +2169,7 @@ impl OrbitApp {
             Some(&tr!("worktree.field.rename_hint")),
             input_field_frame(div(), &theme)
                 .w_full()
-                .bg(theme.bg_main)
+                .bg(theme.background)
                 .child(self.worktree_field_input.clone()),
         );
         let footer = worktree_dialog_footer(
@@ -2190,7 +2207,7 @@ impl OrbitApp {
             Some(&tr!("worktree.field.move_hint")),
             input_field_frame(div(), &theme)
                 .w_full()
-                .bg(theme.bg_main)
+                .bg(theme.background)
                 .child(self.worktree_field_input.clone()),
         );
         let footer = worktree_dialog_footer(
@@ -2260,14 +2277,14 @@ impl OrbitApp {
                         .child(
                             div()
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text)
+                                .text_color(theme.text_primary)
                                 .child(name),
                         )
                         .child(
                             div()
                                 .font_family(theme::code_font_family())
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .child(branch),
                         )
                         .child(
@@ -2275,14 +2292,18 @@ impl OrbitApp {
                                 .truncate()
                                 .font_family(theme::code_font_family())
                                 .text_size(TextSize::XSmall.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .child(shorten_home(path)),
                         ),
                 )
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(if dirty { theme.stop_red } else { theme.text_2 })
+                        .text_color(if dirty {
+                            theme.error
+                        } else {
+                            theme.text_secondary
+                        })
                         .child(body),
                 )
                 .child(footer)
@@ -2333,7 +2354,7 @@ impl OrbitApp {
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(tr!("worktree.unavailable.body")),
                 )
                 .child(
@@ -2341,7 +2362,7 @@ impl OrbitApp {
                         .truncate()
                         .font_family(theme::code_font_family())
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(shorten_home(path)),
                 )
                 .child(footer)
@@ -2392,13 +2413,13 @@ impl OrbitApp {
                 .child(
                     div()
                         .font_family(theme::code_font_family())
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(branch.to_string()),
                 )
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(tr!("worktree.branch_in_use.body")),
                 )
                 .child(footer)
@@ -2701,10 +2722,12 @@ impl OrbitApp {
                     button_frame(div().id("status-work-in"), &theme, ButtonSize::Default)
                         .cursor_pointer()
                         .when(!open, |chip| {
-                            chip.hover(|s| s.bg(theme.overlay).text_color(theme.text_2))
+                            chip.hover(|s| {
+                                s.bg(theme.surface_hover).text_color(theme.text_secondary)
+                            })
                         })
                         .when(open, |chip| {
-                            chip.bg(theme.active).text_color(theme.active_fg)
+                            chip.bg(theme.surface_active).text_color(theme.text_primary)
                         })
                         .tip(tr!("worktree.work_in.title"))
                         .on_mouse_up(
@@ -2714,16 +2737,20 @@ impl OrbitApp {
                         .child(icon(
                             icon_path,
                             ButtonSize::Default.icon_size().px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         ))
                         .child(
                             div()
-                                .text_color(if open { theme.active_fg } else { theme.text_3 })
+                                .text_color(if open {
+                                    theme.text_primary
+                                } else {
+                                    theme.text_muted
+                                })
                                 .child(label),
                         )
                         .child(Self::chip_caret(
                             open,
-                            theme.active_fg,
+                            theme.text_primary,
                             "work-in-caret-turn",
                             cx,
                         )),
@@ -2771,9 +2798,9 @@ impl OrbitApp {
             list = list.child(
                 picker_entry(entry, &theme)
                     .cursor_pointer()
-                    .when(selected || highlighted, |row| row.bg(theme.active))
+                    .when(selected || highlighted, |row| row.bg(theme.selection))
                     .when(!selected && !highlighted, |row| {
-                        row.hover(|style| style.bg(theme.overlay))
+                        row.hover(|style| style.bg(theme.surface_hover))
                     })
                     .on_hover(move |hovered, _, cx| {
                         if *hovered {
@@ -2803,14 +2830,18 @@ impl OrbitApp {
                             .items_center()
                             .justify_center()
                             .bg(if selected || highlighted {
-                                theme.active_fg.opacity(0.14)
+                                theme.text_primary.opacity(0.14)
                             } else {
                                 theme.overlay
                             })
                             .child(icon(
                                 icon_path,
                                 context_menu::ICON.px(&theme),
-                                if selected { theme.accent } else { theme.text_3 },
+                                if selected {
+                                    theme.accent_text
+                                } else {
+                                    theme.text_muted
+                                },
                             )),
                     )
                     .child(
@@ -2823,9 +2854,9 @@ impl OrbitApp {
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(if selected || highlighted {
-                                        theme.active_fg
+                                        theme.text_primary
                                     } else {
-                                        theme.text_2
+                                        theme.text_secondary
                                     })
                                     .child(title),
                             )
@@ -2836,9 +2867,9 @@ impl OrbitApp {
                                     .font_family(theme::code_font_family())
                                     .text_size(picker::SECONDARY_TEXT.px(&theme))
                                     .text_color(if selected || highlighted {
-                                        theme.active_fg.opacity(0.75)
+                                        theme.text_primary.opacity(0.75)
                                     } else {
-                                        theme.text_3
+                                        theme.text_muted
                                     })
                                     .child(subtitle)
                             })),
@@ -2847,7 +2878,7 @@ impl OrbitApp {
                         row.child(icon(
                             "icons/check.svg",
                             context_menu::ICON.px(&theme),
-                            theme.accent,
+                            theme.accent_text,
                         ))
                     }),
             );
@@ -3028,13 +3059,13 @@ fn worktree_markers(worktree: &Worktree, theme: Theme) -> AnyElement {
         row = row.child(icon(
             "icons/lock.svg",
             IconSize::Small.px(&theme),
-            theme.text_2,
+            theme.text_secondary,
         ));
     } else if worktree.prunable {
         row = row.child(icon(
             "icons/circle-x.svg",
             IconSize::Small.px(&theme),
-            theme.stop_red,
+            theme.error,
         ));
     } else if worktree.is_main {
         row = row.child(div().size(px(8.)).rounded_full().bg(theme.accent));
@@ -3044,7 +3075,7 @@ fn worktree_markers(worktree: &Worktree, theme: Theme) -> AnyElement {
                 .size(px(8.))
                 .rounded_full()
                 .border_1()
-                .border_color(theme.text_3),
+                .border_color(theme.text_muted),
         );
     }
     row.into_any_element()
@@ -3056,13 +3087,13 @@ fn worktree_howto_line(theme: Theme, text: String) -> AnyElement {
         .flex()
         .items_start()
         .gap(DynamicSpacing::Base08.px(&theme))
-        .child(div().flex_none().text_color(theme.text_3).child("•"))
+        .child(div().flex_none().text_color(theme.text_muted).child("•"))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(text),
         )
         .into_any_element()
@@ -3081,21 +3112,21 @@ fn worktree_empty_state(theme: Theme, busy: bool, has_no_error: bool) -> AnyElem
             spinner(
                 "worktrees-empty-spin",
                 IconSize::Medium.px(&theme),
-                theme.text_3,
+                theme.text_muted,
                 theme,
             )
         } else {
             icon(
                 "icons/branch.svg",
                 IconSize::Medium.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             )
             .into_any_element()
         })
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(if busy {
                     tr!("worktree.empty.loading")
                 } else if has_no_error {
@@ -3107,7 +3138,7 @@ fn worktree_empty_state(theme: Theme, busy: bool, has_no_error: bool) -> AnyElem
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("worktree.empty.hint")),
         )
         .into_any_element()
@@ -3137,13 +3168,13 @@ fn worktree_field_label(theme: &Theme, label: String, hint: Option<&str>) -> Any
         .child(
             input_label(label, theme)
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_2),
+                .text_color(theme.text_secondary),
         );
     if let Some(hint) = hint {
         column = column.child(
             div()
                 .text_size(TextSize::XSmall.px(theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(hint.to_string()),
         );
     }
@@ -3202,10 +3233,10 @@ where
     button_frame(div().id(id), &theme, ButtonSize::Medium)
         .border_1()
         .border_color(theme.border)
-        .raised(theme.bg_raised, &theme)
+        .raised(theme.surface_elevated, &theme)
         .cursor_pointer()
-        .hover(|s| s.raised(theme.bg_hover, &theme))
-        .text_color(theme.text_2)
+        .hover(|s| s.raised(theme.surface_hover, &theme))
+        .text_color(theme.text_secondary)
         .child(label)
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| action(app, cx));
@@ -3227,14 +3258,14 @@ where
     button_frame(div().id(id), &theme, ButtonSize::Medium)
         .border_1()
         .border_color(theme.border)
-        .raised(theme.bg_raised, &theme)
+        .raised(theme.surface_elevated, &theme)
         .cursor_pointer()
-        .hover(|s| s.raised(theme.bg_hover, &theme))
+        .hover(|s| s.raised(theme.surface_hover, &theme))
         .tip(tr!("common.refresh"))
         .child(icon(
             icon_path,
             ButtonSize::Medium.icon_size().px(&theme),
-            theme.text_2,
+            theme.text_secondary,
         ))
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| action(app, cx));
@@ -3260,7 +3291,7 @@ where
         .cursor_pointer()
         .hover(|s| s.raised(theme.accent.opacity(0.2), &theme))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(theme.accent)
+        .text_color(theme.accent_text)
         .child(label)
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| action(app, cx));
@@ -3284,14 +3315,18 @@ where
         .h(picker::entry_height(&theme))
         .flex_none()
         .cursor_pointer()
-        .hover(|s| s.bg(theme.overlay))
-        .child(icon(icon_path, context_menu::ICON.px(&theme), theme.text_3))
+        .hover(|s| s.bg(theme.surface_hover))
+        .child(icon(
+            icon_path,
+            context_menu::ICON.px(&theme),
+            theme.text_muted,
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(label),
         )
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -3324,14 +3359,18 @@ where
             if selected {
                 theme.accent.opacity(0.14)
             } else {
-                theme.bg_raised
+                theme.surface_elevated
             },
             &theme,
         )
         .cursor_pointer()
-        .hover(|s| s.raised(theme.bg_hover, &theme))
+        .hover(|s| s.raised(theme.surface_hover, &theme))
         .font_weight(FontWeight::MEDIUM)
-        .text_color(if selected { theme.accent } else { theme.text_2 })
+        .text_color(if selected {
+            theme.accent_text
+        } else {
+            theme.text_secondary
+        })
         .child(label)
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| action(app, cx));

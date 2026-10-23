@@ -52,7 +52,7 @@ export default function GettingStartedPage() {
           <tr>
             <td>Linux</td>
             <td>
-              <code>.deb</code> and <code>.tar.gz</code>
+              <code>.deb</code> and <code>.tar.gz</code>, for x86_64 and Arm64
             </td>
           </tr>
         </tbody>

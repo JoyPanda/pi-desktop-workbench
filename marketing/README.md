@@ -26,13 +26,14 @@ src/app/page.tsx            section order
 src/app/changelog/page.tsx  release feed (repo CHANGELOG.md + GitHub releases)
 src/app/changelog/[version]/  per-release page + its Open Graph image
 src/components/             nav, footer, ui primitives, screenshot frame
-src/components/download-button.tsx  OS-aware download CTA + link
+src/components/download-button.tsx  OS-aware download CTA + options menu
 src/components/sections/    hero, stage, steps, workbench, features,
                             guard, review, gallery, closer
 src/components/changelog/   release entries, inline markdown, skeleton
 src/components/ui/          shadcn primitives (button, card, badge,
                             skeleton, empty)
 src/lib/changelog.ts        changelog + release parsing and formatting
+src/lib/downloads.ts        release assets → per-platform download lists
 public/screens/             real app screenshots (window-only)
 ```
 

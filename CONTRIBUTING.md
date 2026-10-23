@@ -96,11 +96,18 @@ fix/sidebar-watcher
 docs/open-source-files
 ```
 
-When a pull request from an outside contributor is merged into `main`,
-`.github/workflows/contributors.yml` appends them to the `### Contributors`
-list under `[Unreleased]` in `CHANGELOG.md`
-(`scripts/changelog-contributors.py`). `scripts/bump-version.sh` rolls that
-list into the release section, so the credit ships with the release notes.
+When a pull request from an outside contributor is merged into `main`, the
+maintainer credits them by adding a bullet to the `### Contributors` list under
+`[Unreleased]` in `CHANGELOG.md`:
+
+```
+python3 scripts/changelog-contributors.py \
+  --pr 63 --login bougieL --title "fix(macos): reopen the window from the Dock"
+```
+
+The script is idempotent (a PR already credited anywhere in the changelog is
+left alone), and `scripts/bump-version.sh` rolls the list into the release
+section, so the credit ships with the release notes.
 
 ## Pull requests
 

@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::app::{file_glyph, icon};
 use crate::review::{self, LineKind};
-use crate::theme::tokens::{IconSize, TextSize};
+use crate::theme::tokens::{DynamicSpacing, IconSize, TextSize};
 use crate::theme::{self, Theme, ThemeMode};
 
 /// Review diff row metrics, shared by every surface that paints rows.
@@ -36,20 +36,24 @@ pub fn render_file_header(
     dark: bool,
     collapsed: bool,
 ) -> Div {
-    let fallback =
-        icon("icons/file.svg", IconSize::Small.px(&theme), theme.text_3).into_any_element();
+    let fallback = icon(
+        "icons/file.svg",
+        IconSize::Small.px(&theme),
+        theme.text_muted,
+    )
+    .into_any_element();
     let glyph = file_glyph(&file.path, dark, nerd, IconSize::Small.px(&theme), fallback);
     div()
         .w_full()
         .min_w_0()
         .h(px(REVIEW_FILE_HEADER_HEIGHT))
-        .px(px(12.))
+        .px(DynamicSpacing::Base12.px(&theme))
         .flex()
         .items_center()
-        .gap(px(8.))
+        .gap(DynamicSpacing::Base08.px(&theme))
         .border_b_1()
         .border_color(theme.border)
-        .bg(theme.bg_raised)
+        .bg(theme.surface_elevated)
         .child(icon(
             if collapsed {
                 "icons/chevron-right.svg"
@@ -57,7 +61,7 @@ pub fn render_file_header(
                 "icons/chevron-down.svg"
             },
             IconSize::Small.px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .child(glyph)
         .child(
@@ -69,16 +73,16 @@ pub fn render_file_header(
                 .font_family(theme::code_font_family())
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(file.path.clone()),
         )
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .text_color(if file.additions > 0 {
-                    theme.add_green
+                    theme.success
                 } else {
-                    theme.text_3
+                    theme.text_muted
                 })
                 .child(format!("+{}", file.additions)),
         )
@@ -86,9 +90,9 @@ pub fn render_file_header(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .text_color(if file.deletions > 0 {
-                    theme.del_red
+                    theme.error
                 } else {
-                    theme.text_3
+                    theme.text_muted
                 })
                 .child(format!("-{}", file.deletions)),
         )
@@ -109,7 +113,7 @@ pub fn render_section_header(
     div()
         .w_full()
         .h(px(REVIEW_SECTION_HEADER_HEIGHT))
-        .px(px(16.))
+        .px(DynamicSpacing::Base16.px(&theme))
         .flex()
         .items_center()
         .gap(px(10.))
@@ -117,15 +121,19 @@ pub fn render_section_header(
         .border_color(theme.border)
         // The section head sits on the page's own black canvas — the raised
         // surface is reserved for the file rows below it.
-        .bg(theme.bg_main)
+        .bg(theme.background)
         .when_some(icon_path, |row, icon_path| {
-            row.child(icon(icon_path, IconSize::Small.px(&theme), theme.text_2))
+            row.child(icon(
+                icon_path,
+                IconSize::Small.px(&theme),
+                theme.text_secondary,
+            ))
         })
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(label.to_string()),
         )
         .child(
@@ -140,7 +148,7 @@ pub fn render_section_header(
                 .bg(theme.overlay)
                 .text_size(TextSize::XSmall.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(count.to_string()),
         )
         .child(div().flex_1())
@@ -153,9 +161,9 @@ pub fn render_section_header(
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(if additions > 0 {
-                    theme.add_green
+                    theme.success
                 } else {
-                    theme.text_3
+                    theme.text_muted
                 })
                 .child(format!("+{additions}")),
         )
@@ -166,9 +174,9 @@ pub fn render_section_header(
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(if deletions > 0 {
-                    theme.del_red
+                    theme.error
                 } else {
-                    theme.text_3
+                    theme.text_muted
                 })
                 .child(format!("-{deletions}")),
         )
@@ -184,7 +192,7 @@ pub fn render_hunk_header(content: &str, theme: Theme, wrap: bool) -> AnyElement
         .font_family(theme::code_font_family())
         .text_size(theme.code_px(DIFF_TEXT_SIZE))
         .line_height(theme.code_px(16.))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(
             div()
                 .w(px(gutter_w))
@@ -198,8 +206,8 @@ pub fn render_hunk_header(content: &str, theme: Theme, wrap: bool) -> AnyElement
             div()
                 .min_w_0()
                 .flex_1()
-                .px(px(12.))
-                .py(px(4.))
+                .px(DynamicSpacing::Base12.px(&theme))
+                .py(DynamicSpacing::Base04.px(&theme))
                 .overflow_hidden()
                 .when(wrap, |body| body.whitespace_normal())
                 .when(!wrap, |body| body.whitespace_nowrap())
@@ -219,7 +227,7 @@ pub fn render_meta(content: &str, theme: Theme, wrap: bool) -> AnyElement {
         .font_family(theme::code_font_family())
         .text_size(theme.code_px(DIFF_TEXT_SIZE))
         .line_height(theme.code_px(16.))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(
             div()
                 .w(px(gutter_w))
@@ -230,7 +238,7 @@ pub fn render_meta(content: &str, theme: Theme, wrap: bool) -> AnyElement {
             div()
                 .min_w_0()
                 .flex_1()
-                .py(px(4.))
+                .py(DynamicSpacing::Base04.px(&theme))
                 .pr(px(10.))
                 .overflow_hidden()
                 .when(wrap, |body| body.whitespace_normal())
@@ -271,18 +279,18 @@ pub fn render_code_row(line: &review::Line, theme: Theme, wrap: bool) -> AnyElem
     let row_height = diff_row_height();
     let (body_bg, gutter_bg, edge, number_color) = match line.kind {
         LineKind::Addition => (
-            Some(theme.add_green.opacity(body_wash(theme))),
-            Some(theme.add_green.opacity(gutter_wash(theme))),
-            Some(theme.add_green),
-            theme.add_green,
+            Some(theme.success.opacity(body_wash(theme))),
+            Some(theme.success.opacity(gutter_wash(theme))),
+            Some(theme.success),
+            theme.success,
         ),
         LineKind::Deletion => (
-            Some(theme.del_red.opacity(body_wash(theme))),
-            Some(theme.del_red.opacity(gutter_wash(theme))),
-            Some(theme.del_red),
-            theme.del_red,
+            Some(theme.error.opacity(body_wash(theme))),
+            Some(theme.error.opacity(gutter_wash(theme))),
+            Some(theme.error),
+            theme.error,
         ),
-        _ => (None, None, None, theme.text_3),
+        _ => (None, None, None, theme.text_muted),
     };
     let shown_line = line.new_line.or(line.old_line);
     let number = shown_line.map(|n| n.to_string()).unwrap_or_default();
@@ -315,7 +323,7 @@ pub fn render_code_row(line: &review::Line, theme: Theme, wrap: bool) -> AnyElem
                 .min_h(px(row_height))
                 .min_w_0()
                 .flex_1()
-                .pl(px(12.))
+                .pl(DynamicSpacing::Base12.px(&theme))
                 .pr(px(10.))
                 .overflow_hidden()
                 .when(wrap, |body| body.whitespace_normal())
@@ -407,16 +415,16 @@ fn split_half(
     };
     let (body_bg, gutter_bg, number_color) = match line.kind {
         LineKind::Addition => (
-            Some(theme.add_green.opacity(body_wash(theme))),
-            Some(theme.add_green.opacity(gutter_wash(theme))),
-            theme.add_green,
+            Some(theme.success.opacity(body_wash(theme))),
+            Some(theme.success.opacity(gutter_wash(theme))),
+            theme.success,
         ),
         LineKind::Deletion => (
-            Some(theme.del_red.opacity(body_wash(theme))),
-            Some(theme.del_red.opacity(gutter_wash(theme))),
-            theme.del_red,
+            Some(theme.error.opacity(body_wash(theme))),
+            Some(theme.error.opacity(gutter_wash(theme))),
+            theme.error,
         ),
-        _ => (None, None, theme.text_3),
+        _ => (None, None, theme.text_muted),
     };
     let shown_line = if old_side {
         line.old_line
@@ -446,7 +454,7 @@ fn split_half(
                 .min_h(px(row_height))
                 .min_w_0()
                 .flex_1()
-                .px(px(12.))
+                .px(DynamicSpacing::Base12.px(&theme))
                 .overflow_hidden()
                 .when(wrap, |body| body.whitespace_normal())
                 .when(!wrap, |body| body.whitespace_nowrap())
@@ -474,7 +482,7 @@ fn gutter_wash(theme: Theme) -> f32 {
 
 /// Build syntax-colored text for one diff line.
 fn code_text(line: &review::Line, theme: Theme) -> StyledText {
-    let base = theme.text_2;
+    let base = theme.text_secondary;
     let font = mono_font();
     let mut runs: Vec<TextRun> = Vec::new();
     let mut offset = 0usize;

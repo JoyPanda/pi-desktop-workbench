@@ -183,7 +183,10 @@ pub fn managed_marker_is_valid(root: &Path) -> bool {
         return false;
     };
     value.get("kind").and_then(serde_json::Value::as_str) == Some("pi-managed-install")
-        && value.get("schemaVersion").and_then(serde_json::Value::as_u64) == Some(1)
+        && value
+            .get("schemaVersion")
+            .and_then(serde_json::Value::as_u64)
+            == Some(1)
         && value.get("layout").and_then(serde_json::Value::as_str) == Some("releases-v1")
 }
 
@@ -779,7 +782,11 @@ mod tests {
 
         // User data that must survive.
         fs::create_dir_all(agent.join("sessions")).unwrap();
-        fs::write(agent.join("auth.json"), r#"{"deepseek":{"type":"api_key"}}"#).unwrap();
+        fs::write(
+            agent.join("auth.json"),
+            r#"{"deepseek":{"type":"api_key"}}"#,
+        )
+        .unwrap();
         fs::write(agent.join("settings.json"), r#"{"theme":"dark"}"#).unwrap();
         fs::write(agent.join("sessions").join("s.jsonl"), "{}\n").unwrap();
 

@@ -354,7 +354,7 @@ impl Render for Dialog {
                 div()
                     .text_size(TextSize::Small.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(SharedString::from("Question")),
             )
             .child(
@@ -363,7 +363,7 @@ impl Render for Dialog {
                     .text_size(modal::HEADLINE.px(&theme))
                     .line_height(modal::HEADLINE.line_height(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(SharedString::from(self.request.title.clone())),
             );
         if let Some(body) = self.request.body.clone() {
@@ -374,7 +374,7 @@ impl Render for Dialog {
                         .mb(theme.rems(0.5))
                         .whitespace_normal()
                         .text_size(TextSize::Default.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(SharedString::from(body)),
                 );
             }
@@ -405,7 +405,7 @@ impl Render for Dialog {
                                     .rounded(input::RADIUS.px(&theme))
                                     .border_1()
                                     .border_color(theme.border_strong)
-                                    .bg(theme.bg_raised)
+                                    .bg(theme.surface_elevated)
                                     .child(input.clone()),
                             ),
                     );
@@ -433,7 +433,7 @@ impl Render for Dialog {
                 .border_t_1()
                 .border_color(theme.border)
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(hint),
         );
 
@@ -446,7 +446,7 @@ impl Render for Dialog {
             .inset_0()
             .occlude()
             .bg(scrim)
-            .px(px(24.))
+            .px(DynamicSpacing::Base24.px(&theme))
             .flex()
             .items_center()
             .justify_center()
@@ -469,7 +469,7 @@ impl Dialog {
                 .px(modal::section_padding_x(&theme, false))
                 .pb(modal::section_padding_bottom(&theme))
                 .text_size(TextSize::Default.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("dialog.no_options_were_provided"))
                 .into_any_element();
         }
@@ -527,15 +527,15 @@ impl Dialog {
                             });
                         }
                     })
-                    .when(highlighted, |row| row.bg(theme.overlay_strong))
+                    .when(highlighted, |row| row.bg(theme.selection))
                     .child(
                         div()
                             .whitespace_normal()
                             .text_size(TextSize::Default.px(&theme))
                             .text_color(if highlighted {
-                                theme.text
+                                theme.text_primary
                             } else {
-                                theme.text_2
+                                theme.text_secondary
                             })
                             .child(SharedString::from(option.clone())),
                     ),
@@ -598,9 +598,13 @@ impl Dialog {
                         }
                     })
                     .when(highlighted, |button| {
-                        button.bg(theme.overlay_strong).text_color(theme.text)
+                        button
+                            .bg(theme.overlay_strong)
+                            .text_color(theme.text_primary)
                     })
-                    .when(!highlighted, |button| button.text_color(theme.text_2))
+                    .when(!highlighted, |button| {
+                        button.text_color(theme.text_secondary)
+                    })
                     .child(if value { "Yes" } else { "No" })
             }))
             .into_any_element()

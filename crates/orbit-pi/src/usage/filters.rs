@@ -83,12 +83,12 @@ pub fn chip_with_menu(
 }
 
 /// A filter chip: a [`TRIGGER_SIZE`] button, hairline, and unmistakably "on"
-/// when it narrows the view (active fill, `active_fg` text — never accent
+/// when it narrows the view (active fill, `selection_fg` text — never accent
 /// alone).
 ///
 /// `inset` picks the resting fill for the surface the chip sits on: a chip on
-/// the canvas takes `bg_raised`, while a chip inside a raised card takes
-/// `bg_main` so it reads as a recessed well instead of vanishing into the card.
+/// the canvas takes `surface_elevated`, while a chip inside a raised card takes
+/// `background` so it reads as a recessed well instead of vanishing into the card.
 ///
 /// `icon_path` is the optional leading icon. A plain picker (rows-per-page)
 /// passes `None`: the trailing chevron already marks it as a dropdown, and a
@@ -103,19 +103,19 @@ pub fn chip(
     on_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
     let foreground = if active {
-        theme.active_fg
+        theme.text_primary
     } else {
-        theme.text_2
+        theme.text_secondary
     };
     let resting = if inset {
-        theme.bg_main
+        theme.background
     } else {
-        theme.bg_raised
+        theme.surface_elevated
     };
     let leading_color = if active {
-        theme.active_fg
+        theme.text_primary
     } else {
-        theme.text_3
+        theme.text_muted
     };
     button_frame(
         div().id(ElementId::Name(SharedString::from(id))),
@@ -128,9 +128,25 @@ pub fn chip(
     } else {
         theme.border
     })
-    .raised(if active { theme.active } else { resting }, &theme)
+    .raised(
+        if active {
+            theme.surface_active
+        } else {
+            resting
+        },
+        &theme,
+    )
     .cursor_pointer()
-    .hover(|style| style.raised(if active { theme.active } else { theme.bg_hover }, &theme))
+    .hover(|style| {
+        style.raised(
+            if active {
+                theme.surface_active
+            } else {
+                theme.surface_hover
+            },
+            &theme,
+        )
+    })
     .on_mouse_down(MouseButton::Left, on_click)
     .children(icon_path.map(|path| {
         icon(
@@ -150,9 +166,9 @@ pub fn chip(
         "icons/chevron-down.svg",
         IconSize::XSmall.px(&theme),
         if active {
-            theme.active_fg
+            theme.text_primary
         } else {
-            theme.text_3
+            theme.text_muted
         },
     ))
 }
@@ -202,7 +218,7 @@ fn search_row(query: &Entity<ComposerInput>, theme: Theme) -> AnyElement {
         .child(icon(
             "icons/search.svg",
             input::ICON.px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .child(div().flex_1().min_w_0().child(query.clone()))
         .into_any_element()
@@ -224,9 +240,9 @@ fn row(
         .h(picker::entry_height(&theme))
         .flex_none()
         .cursor_pointer()
-        .when(highlighted || selected, |row| row.bg(theme.active))
+        .when(highlighted || selected, |row| row.bg(theme.selection))
         .when(!highlighted && !selected, |row| {
-            row.hover(|style| style.bg(theme.overlay))
+            row.hover(|style| style.bg(theme.surface_hover))
         })
         .on_hover(on_hover)
         .on_mouse_down(MouseButton::Left, on_click)
@@ -242,7 +258,7 @@ fn row(
                     icon(
                         "icons/check.svg",
                         context_menu::ICON.px(&theme),
-                        theme.accent,
+                        theme.accent_text,
                     )
                     .into_any_element()
                 } else {
@@ -256,9 +272,9 @@ fn row(
                 .truncate()
                 .when(selected, |text| text.font_weight(FontWeight::MEDIUM))
                 .text_color(if highlighted || selected {
-                    theme.active_fg
+                    theme.text_primary
                 } else {
-                    theme.text_2
+                    theme.text_secondary
                 })
                 .child(label.to_string()),
         )
@@ -269,7 +285,7 @@ fn row(
                 .ml(context_menu::keybinding_gap(&theme) - context_menu::icon_gap(&theme))
                 .truncate()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(sub.to_string())
         }))
         .into_any_element()
@@ -284,8 +300,12 @@ fn footer_row(
     button_frame(div().id(id), &theme, ButtonSize::Medium)
         .flex_1()
         .cursor_pointer()
-        .text_color(theme.text_3)
-        .hover(|style| style.bg(theme.bg_hover).text_color(theme.text_2))
+        .text_color(theme.text_muted)
+        .hover(|style| {
+            style
+                .bg(theme.surface_hover)
+                .text_color(theme.text_secondary)
+        })
         .on_mouse_down(MouseButton::Left, on_click)
         .child(label.to_string())
         .into_any_element()
@@ -398,7 +418,7 @@ pub fn multi_menu(
             picker_entry(div(), &theme)
                 .h(picker::entry_height(&theme))
                 .flex_none()
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(
                     div()
                         .min_w_0()
@@ -934,7 +954,7 @@ fn calendar(page: &UsagePage, cx: &mut gpui::Context<UsagePage>, theme: Theme) -
             icon_button_frame(div().id("usage-cal-prev"), &theme, ButtonSize::Default)
                 .tip(tr!("usage.previous_month"))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.bg_hover))
+                .hover(|style| style.bg(theme.surface_hover))
                 .on_mouse_down(MouseButton::Left, {
                     let entity = cx.entity();
                     let prev = local_month_start(first - 86_400_000);
@@ -945,7 +965,7 @@ fn calendar(page: &UsagePage, cx: &mut gpui::Context<UsagePage>, theme: Theme) -
                 .child(icon(
                     "icons/chevron-left.svg",
                     ButtonSize::Default.icon_size().px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 )),
         )
         .child(
@@ -955,14 +975,14 @@ fn calendar(page: &UsagePage, cx: &mut gpui::Context<UsagePage>, theme: Theme) -
                 .justify_center()
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(dt.format("%B %Y").to_string()),
         )
         .child(
             icon_button_frame(div().id("usage-cal-next"), &theme, ButtonSize::Default)
                 .tip(tr!("usage.next_month"))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.bg_hover))
+                .hover(|style| style.bg(theme.surface_hover))
                 .on_mouse_down(MouseButton::Left, {
                     let entity = cx.entity();
                     let next = next_bucket(first, Granularity::Month);
@@ -973,7 +993,7 @@ fn calendar(page: &UsagePage, cx: &mut gpui::Context<UsagePage>, theme: Theme) -
                 .child(icon(
                     "icons/chevron-right.svg",
                     ButtonSize::Default.icon_size().px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 )),
         );
 
@@ -987,7 +1007,7 @@ fn calendar(page: &UsagePage, cx: &mut gpui::Context<UsagePage>, theme: Theme) -
                 .flex()
                 .justify_center()
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(day)
                 .into_any_element()
         }));
@@ -1029,18 +1049,18 @@ fn calendar(page: &UsagePage, cx: &mut gpui::Context<UsagePage>, theme: Theme) -
                     .flex_1()
                     .cursor_pointer()
                     .when(selected, |cell| {
-                        cell.bg(theme.active).text_color(theme.active_fg)
+                        cell.bg(theme.surface_active).text_color(theme.text_primary)
                     })
                     .when(in_range, |cell| {
-                        cell.bg(theme.overlay).text_color(theme.text)
+                        cell.bg(theme.overlay).text_color(theme.text_primary)
                     })
                     .when(!selected && !in_range, |cell| {
                         cell.text_color(if day_ms == today {
-                            theme.accent
+                            theme.accent_text
                         } else {
-                            theme.text_2
+                            theme.text_secondary
                         })
-                        .hover(|style| style.bg(theme.bg_hover))
+                        .hover(|style| style.bg(theme.surface_hover))
                     })
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         entity.update(cx, |page, cx| page.pick_day(day_ms, cx));
@@ -1071,7 +1091,7 @@ fn calendar(page: &UsagePage, cx: &mut gpui::Context<UsagePage>, theme: Theme) -
                 .px(DynamicSpacing::Base12.px(&theme))
                 .pb(DynamicSpacing::Base06.px(&theme))
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(hint),
         )
         .into_any_element()
@@ -1109,8 +1129,8 @@ pub fn toggle_chip(
     .pr(DynamicSpacing::Base06.px(&theme))
     .border_1()
     .border_color(theme.border_strong)
-    .raised(theme.active, &theme)
-    .text_color(theme.active_fg)
+    .raised(theme.surface_active, &theme)
+    .text_color(theme.text_primary)
     .child(label.into())
     .child(
         icon_button_frame(
@@ -1125,7 +1145,7 @@ pub fn toggle_chip(
         .child(icon(
             "icons/x.svg",
             ButtonSize::None.icon_size().px(&theme),
-            theme.active_fg,
+            theme.text_primary,
         )),
     )
     .into_any_element()
@@ -1141,7 +1161,11 @@ pub fn text_button(
     theme: Theme,
     on_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
-    let color = if enabled { theme.text_2 } else { theme.text_3 };
+    let color = if enabled {
+        theme.text_secondary
+    } else {
+        theme.text_muted
+    };
     button_frame(
         div().id(ElementId::Name(SharedString::from(id))),
         &theme,
@@ -1152,7 +1176,7 @@ pub fn text_button(
     .when(enabled, |button| {
         press(button)
             .cursor_pointer()
-            .hover(|style| style.bg(theme.bg_hover).text_color(theme.text))
+            .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
             .on_mouse_down(MouseButton::Left, on_click)
     })
     .children(icon_path.map(|path| {
@@ -1190,15 +1214,19 @@ pub fn outline_button(
     .group(BUTTON_GROUP)
     .border_1()
     .border_color(theme.border)
-    .text_color(if enabled { theme.text } else { theme.text_3 })
+    .text_color(if enabled {
+        theme.text_primary
+    } else {
+        theme.text_disabled
+    })
     .when(!enabled, |button| button.bg(theme.overlay))
     .when(enabled, |button| {
         press(button)
-            .raised(theme.bg_main, &theme)
+            .raised(theme.background, &theme)
             .cursor_pointer()
             .hover(|style| {
                 style
-                    .raised(theme.bg_hover, &theme)
+                    .raised(theme.surface_hover, &theme)
                     .border_color(theme.border_strong)
             })
             .on_mouse_down(MouseButton::Left, on_click)

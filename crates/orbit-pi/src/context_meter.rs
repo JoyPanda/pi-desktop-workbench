@@ -16,7 +16,7 @@ use orbit_rpc::{ContextUsage, SessionUsage};
 
 use crate::app::{button_frame, icon_button_frame, TipExt};
 use crate::theme::tokens::RaisedExt;
-use crate::theme::tokens::{ButtonSize, IconSize, Radius, StyledExt, TextSize};
+use crate::theme::tokens::{ButtonSize, DynamicSpacing, IconSize, Radius, StyledExt, TextSize};
 use crate::theme::Theme;
 
 const RING: f32 = 16.;
@@ -54,9 +54,9 @@ pub struct ContextSlice {
 /// `tokens` without an explicit `percent`.
 pub fn fill_color(fraction: Option<f32>, theme: &Theme) -> Hsla {
     match fraction {
-        Some(f) if f >= 0.90 => theme.crit,
-        Some(f) if f >= 0.70 => theme.warn,
-        _ => theme.ring_fill,
+        Some(f) if f >= 0.90 => theme.error,
+        Some(f) if f >= 0.70 => theme.warning,
+        _ => theme.accent,
     }
 }
 
@@ -277,8 +277,8 @@ pub fn compact_card(
     let cost = session.and_then(|s| s.cost).map(format_cost);
     div()
         .w_full()
-        .px(px(12.))
-        .py(px(8.))
+        .px(DynamicSpacing::Base12.px(&theme))
+        .py(DynamicSpacing::Base08.px(&theme))
         .elevation_2(&theme)
         .flex()
         .flex_col()
@@ -286,21 +286,21 @@ pub fn compact_card(
         .child(
             div()
                 .text_size(TextSize::Default.px(&theme))
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .whitespace_nowrap()
                 .child(title),
         )
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .whitespace_nowrap()
                 .child(subtitle),
         )
         .children(cost.map(|cost| {
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .whitespace_nowrap()
                 .child(tr!("context_meter.spent", cost = cost))
         }))
@@ -355,8 +355,8 @@ pub fn details_card(
         .flex()
         .flex_col()
         .px(px(14.))
-        .pt(px(12.))
-        .pb(px(12.))
+        .pt(DynamicSpacing::Base12.px(&theme))
+        .pb(DynamicSpacing::Base12.px(&theme))
         .gap(px(10.))
         .child(
             div()
@@ -366,19 +366,19 @@ pub fn details_card(
                     div()
                         .flex_1()
                         .text_size(TextSize::Default.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(tr!("context_meter.context_usage")),
                 )
                 .child(
                     icon_button_frame(div().id("context-close"), &theme, ButtonSize::Compact)
                         .tip(tr!("common.close"))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.overlay))
+                        .hover(|s| s.bg(theme.surface_hover))
                         .on_click(on_close)
                         .child(glyph(
                             "icons/x.svg",
                             ButtonSize::Compact.icon_size().px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         )),
                 ),
         )
@@ -390,7 +390,7 @@ pub fn details_card(
                     div()
                         .flex_1()
                         .text_size(TextSize::Default.px(&theme))
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(
                             percent
                                 .map(|p| tr!("context_meter.percent_full", percent = p))
@@ -400,7 +400,7 @@ pub fn details_card(
                 .children(totals.map(|label| {
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(label)
                 })),
         )
@@ -418,19 +418,19 @@ fn compact_action(is_compacting: bool, on_compact: Rc<ActionClick>, theme: Theme
         .w_full()
         .border_1()
         .border_color(theme.border)
-        .raised(theme.bg_raised, &theme)
+        .raised(theme.surface_elevated, &theme)
         .font_weight(FontWeight::MEDIUM);
     if is_compacting {
         button
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .cursor_default()
             .child(tr!("context_meter.compacting"))
             .into_any_element()
     } else {
         button
-            .text_color(theme.text_2)
+            .text_color(theme.text_secondary)
             .cursor_pointer()
-            .hover(|s| s.raised(theme.bg_hover, &theme))
+            .hover(|s| s.raised(theme.surface_hover, &theme))
             .on_click(move |event, window, cx| on_compact(event, window, cx))
             .child(tr!("context_meter.compact_now"))
             .into_any_element()
@@ -443,7 +443,7 @@ fn segmented_bar(slices: &[ContextSlice], window: u64, theme: Theme) -> impl Int
         .h(px(6.))
         .rounded_full()
         .overflow_hidden()
-        .bg(theme.trough)
+        .bg(theme.surface_secondary)
         .flex();
     if window > 0 {
         for slice in slices {
@@ -462,19 +462,19 @@ fn legend(slices: &[ContextSlice], theme: Theme) -> impl IntoElement + use<> {
     if slices.is_empty() {
         return div()
             .text_size(TextSize::Small.px(&theme))
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .child(tr!("context_meter.no_usage_reported_for_this_session_yet"))
             .into_any_element();
     }
     div()
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap(DynamicSpacing::Base06.px(&theme))
         .children(slices.iter().map(|slice| {
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(DynamicSpacing::Base08.px(&theme))
                 .child(
                     div()
                         .size(px(8.))
@@ -485,13 +485,13 @@ fn legend(slices: &[ContextSlice], theme: Theme) -> impl IntoElement + use<> {
                     div()
                         .flex_1()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(slice.label.clone()),
                 )
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(format_tokens(slice.tokens)),
                 )
         }))
@@ -508,12 +508,12 @@ pub fn session_usage_section(usage: &SessionUsage, theme: Theme) -> AnyElement {
     div()
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap(DynamicSpacing::Base06.px(&theme))
         .child(div().w_full().h(px(1.)).bg(theme.border))
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("context_meter.session_usage")),
         )
         .child(session_row(
@@ -584,20 +584,24 @@ fn session_row(
         .flex()
         .items_center()
         .gap(px(7.))
-        .child(glyph(icon_path, IconSize::Small.px(&theme), theme.text_3))
+        .child(glyph(
+            icon_path,
+            IconSize::Small.px(&theme),
+            theme.text_muted,
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.))
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .whitespace_nowrap()
                 .child(label),
         )
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .whitespace_nowrap()
                 .child(value),
         )
@@ -714,7 +718,7 @@ pub fn context_control<V: 'static>(
         .id("context-meter")
         .flex()
         .items_center()
-        .gap(px(6.))
+        .gap(DynamicSpacing::Base06.px(&theme))
         .cursor_pointer()
         .on_hover(move |hovered, _, cx| {
             this.update(cx, |app, cx| on_hover(app, *hovered, cx));
@@ -736,7 +740,7 @@ pub fn context_control<V: 'static>(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(context_ring(fraction, fill, theme.ring_track))
+                .child(context_ring(fraction, fill, theme.surface_elevated))
                 .children(popup_el),
         )
 }
@@ -776,10 +780,10 @@ mod tests {
     #[test]
     fn fill_color_tracks_fraction() {
         let theme = Theme::dark();
-        assert_eq!(fill_color(Some(0.5), &theme), theme.ring_fill);
-        assert_eq!(fill_color(Some(0.75), &theme), theme.warn);
-        assert_eq!(fill_color(Some(0.95), &theme), theme.crit);
-        assert_eq!(fill_color(None, &theme), theme.ring_fill);
+        assert_eq!(fill_color(Some(0.5), &theme), theme.accent);
+        assert_eq!(fill_color(Some(0.75), &theme), theme.warning);
+        assert_eq!(fill_color(Some(0.95), &theme), theme.error);
+        assert_eq!(fill_color(None, &theme), theme.accent);
     }
 
     #[test]

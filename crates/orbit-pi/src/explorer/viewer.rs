@@ -392,26 +392,6 @@ impl FileViewer {
         }
     }
 
-    /// The app syncs this each render with the page leading: with the sidebar
-    /// open the surface starts after it and only needs the normal page padding;
-    /// collapsed, it owns the window's left edge and must clear the overlaid
-    /// titlebar controls.
-    pub fn set_chrome_leading(&mut self, leading: f32, cx: &mut Context<Self>) {
-        if (self.chrome_leading - leading).abs() > 0.5 {
-            self.chrome_leading = leading;
-            cx.notify();
-        }
-    }
-
-    /// Reserve the window-control inset in the tab strip (Windows only, and
-    /// only while this surface is the window's rightmost column).
-    pub fn set_reserve_controls(&mut self, reserve: bool, cx: &mut Context<Self>) {
-        if reserve != self.reserve_controls {
-            self.reserve_controls = reserve;
-            cx.notify();
-        }
-    }
-
     pub fn is_open(&self) -> bool {
         self.open
     }
@@ -831,10 +811,11 @@ impl FileViewer {
                         .rounded(Radius::Large.px(&theme))
                         .cursor_pointer()
                         .text_size(TextSize::Small.px(&theme))
-                        .when(active, |el| el.bg(theme.active))
+                        .when(active, |el| el.bg(theme.surface_active))
                         .when(!active, |el| {
-                            el.text_color(theme.text_3)
-                                .hover(|el| el.bg(theme.bg_hover).text_color(theme.text_2))
+                            el.text_color(theme.text_muted).hover(|el| {
+                                el.bg(theme.surface_hover).text_color(theme.text_secondary)
+                            })
                         }),
                 )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -854,9 +835,9 @@ impl FileViewer {
                             FontWeight::NORMAL
                         })
                         .text_color(if active {
-                            theme.active_fg
+                            theme.text_primary
                         } else {
-                            theme.text_3
+                            theme.text_muted
                         })
                         .child(name),
                 )
@@ -879,7 +860,7 @@ impl FileViewer {
                     )
                     .tip(tr!("explorer.close_tab"))
                     .cursor_pointer()
-                    .hover(|el| el.bg(theme.overlay))
+                    .hover(|el| el.bg(theme.surface_hover))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         this.close_tab(index, cx);
                         // Click handlers bubble: without this the tab's
@@ -892,9 +873,9 @@ impl FileViewer {
                         "icons/x.svg",
                         ButtonSize::None.icon_size().px(&theme),
                         if active {
-                            theme.active_fg
+                            theme.text_primary
                         } else {
-                            theme.text_3
+                            theme.text_muted
                         },
                     )),
                 ),
@@ -923,7 +904,7 @@ impl FileViewer {
                 icon_button_frame(div().id("viewer-close"), &theme, ButtonSize::Default)
                     .tip(tr!("common.close"))
                     .cursor_pointer()
-                    .hover(|el| el.bg(theme.bg_hover))
+                    .hover(|el| el.bg(theme.surface_hover))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         // Close here — this listener already holds the viewer's
                         // lease, so the app callback must not re-enter `update`
@@ -935,7 +916,7 @@ impl FileViewer {
                     .child(icon(
                         "icons/x.svg",
                         ButtonSize::Default.icon_size().px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     )),
             )
             .into_any_element()
@@ -956,18 +937,18 @@ impl FileViewer {
             .px(DynamicSpacing::Base16.px(&theme))
             .flex()
             .items_center()
-            .gap(px(12.))
+            .gap(DynamicSpacing::Base12.px(&theme))
             .border_b_1()
             .border_color(theme.border)
             .font_family(theme::code_font_family())
             .text_size(TextSize::Small.px(&theme))
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .child(
                 div()
                     .min_w_0()
                     .flex_1()
                     .truncate()
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(content.display.clone()),
             )
             .child(div().flex_none().child(size))
@@ -979,20 +960,20 @@ impl FileViewer {
                 el.child(
                     div()
                         .flex_none()
-                        .text_color(theme.warn)
+                        .text_color(theme.warning)
                         .child(tr!("explorer.truncated")),
                 )
             })
             .when(content.mode == Mode::Markdown && content.editable(), |el| {
                 el.child(
                     button_frame(div().id("viewer-md-toggle"), &theme, ButtonSize::Compact)
-                        .raised(theme.bg_raised, &theme)
+                        .raised(theme.surface_elevated, &theme)
                         .border_1()
                         .border_color(theme.border)
                         .font_family(theme::ui_font_family())
                         .cursor_pointer()
-                        .text_color(theme.text_2)
-                        .hover(|el| el.raised(theme.bg_hover, &theme))
+                        .text_color(theme.text_secondary)
+                        .hover(|el| el.raised(theme.surface_hover, &theme))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.toggle_markdown_preview(cx)
                         }))
@@ -1010,37 +991,37 @@ impl FileViewer {
     /// Read-only lock for non-editable modes; autosave status for editable ones.
     fn status_chip(&self, theme: Theme, tab: &Tab) -> AnyElement {
         let (label, color) = if !tab.editable() {
-            (tr!("explorer.read_only"), theme.text_3)
+            (tr!("explorer.read_only"), theme.text_muted)
         } else if tab.conflict {
-            (tr!("explorer.changed_on_disk"), theme.warn)
+            (tr!("explorer.changed_on_disk"), theme.warning)
         } else {
             match &tab.save {
-                SaveState::Saved => (tr!("explorer.saved"), theme.text_3),
-                SaveState::Unsaved => (tr!("explorer.unsaved"), theme.text_2),
-                SaveState::Saving => (tr!("explorer.saving"), theme.text_3),
+                SaveState::Saved => (tr!("explorer.saved"), theme.text_muted),
+                SaveState::Unsaved => (tr!("explorer.unsaved"), theme.text_secondary),
+                SaveState::Saving => (tr!("explorer.saving"), theme.text_muted),
                 SaveState::Failed(error) => (
                     format!("{}: {error}", tr!("explorer.save_failed")),
-                    theme.warn,
+                    theme.warning,
                 ),
             }
         };
         div()
             .flex_none()
             .h(px(20.))
-            .px(px(6.))
+            .px(DynamicSpacing::Base06.px(&theme))
             .rounded(Radius::Small.px(&theme))
-            .bg(theme.bg_raised)
+            .bg(theme.surface_elevated)
             .border_1()
             .border_color(theme.border)
             .font_family(theme::ui_font_family())
             .flex()
             .items_center()
-            .gap(px(4.))
+            .gap(DynamicSpacing::Base04.px(&theme))
             .when(!tab.editable(), |el| {
                 el.child(icon(
                     "icons/lock.svg",
                     IconSize::Indicator.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
             })
             .child(div().text_color(color).child(label))
@@ -1215,7 +1196,7 @@ impl FileViewer {
                     .justify_end()
                     .border_r_1()
                     .border_color(theme.border)
-                    .text_color(theme.text_3.opacity(0.7))
+                    .text_color(theme.text_muted)
                     .child((index + 1).to_string()),
             )
             .child(
@@ -1223,7 +1204,7 @@ impl FileViewer {
                     .flex_1()
                     .min_w_0()
                     .pl(px(10.))
-                    .pr(px(12.))
+                    .pr(DynamicSpacing::Base12.px(&theme))
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .child(line_text(line, tokens, theme)),
@@ -1275,17 +1256,17 @@ fn loading_state(theme: &Theme) -> AnyElement {
         .flex()
         .items_center()
         .justify_center()
-        .gap(px(8.))
+        .gap(DynamicSpacing::Base08.px(theme))
         .child(crate::app::spinner(
             "viewer-loading",
             IconSize::Small.px(theme),
-            theme.text_3,
+            theme.text_muted,
             *theme,
         ))
         .child(
             div()
                 .text_size(TextSize::Small.px(theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("explorer.loading")),
         )
         .into_any_element()
@@ -1316,7 +1297,7 @@ fn run(len: usize, color: Hsla, font: &Font) -> TextRun {
 /// computed off-thread when the file loaded.
 fn line_text(text: &str, tokens: &[Token], theme: Theme) -> StyledText {
     let font = mono_font();
-    let base = theme.text_2;
+    let base = theme.text_secondary;
     if tokens.is_empty() {
         return StyledText::new(text.to_string()).with_runs(vec![run(text.len(), base, &font)]);
     }
@@ -1404,20 +1385,29 @@ impl Render for FileViewer {
             return div().into_any_element();
         }
         if self.focus_pending {
-            self.focus_pending = false;
-            // Only focus the editor when it is actually painted. Focusing an
-            // editor that a read-only/preview tab does not render drops focus —
-            // and with it the `Files` key context, so `cmd-w` would stop
-            // working. Otherwise the viewer root holds focus.
-            let handle = self
-                .tabs
-                .get(self.active)
-                .filter(|tab| editor_shown(tab))
-                .map(|tab| tab.editor.read(cx).focus_handle(cx));
-            match handle {
-                Some(handle) => window.focus(&handle),
-                None => window.focus(&self.focus),
-            }
+            let viewer = cx.entity();
+            // Claim focus after this frame's effects have settled: the target
+            // depends on the active tab actually rendering an editor, which
+            // only holds once the frame is built.
+            window.defer(cx, move |window, cx| {
+                let target = viewer.update(cx, |viewer, cx| {
+                    if !viewer.focus_pending {
+                        return None;
+                    }
+                    viewer.focus_pending = false;
+                    let target = viewer
+                        .tabs
+                        .get(viewer.active)
+                        .filter(|tab| editor_shown(tab))
+                        .map(|tab| tab.editor.read(cx).focus_handle(cx))
+                        .unwrap_or_else(|| viewer.focus.clone());
+                    cx.notify();
+                    Some(target)
+                });
+                if let Some(target) = target {
+                    window.focus(&target);
+                }
+            });
         }
         let theme = *theme::get(cx);
         div()
@@ -1431,7 +1421,7 @@ impl Render for FileViewer {
             .min_h_0()
             .flex()
             .flex_col()
-            .bg(theme.bg_main)
+            .bg(theme.background)
             .child(self.tab_strip(theme, cx))
             .child(self.toolbar(theme, cx))
             .child(self.body(theme, cx))

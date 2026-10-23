@@ -68,11 +68,11 @@ type TintFn = fn(&Theme) -> Hsla;
 /// follows the active palette. `syn_*` tokens are reused as a dependable
 /// spread of hues that every palette tunes to stay legible.
 pub(crate) const TINTS: &[(&str, TintFn)] = &[
-    ("default", |theme| theme.text_3),
+    ("default", |theme| theme.text_muted),
     ("accent", |theme| theme.accent),
-    ("green", |theme| theme.ok_green),
-    ("red", |theme| theme.stop_red),
-    ("yellow", |theme| theme.warn),
+    ("green", |theme| theme.success),
+    ("red", |theme| theme.error),
+    ("yellow", |theme| theme.warning),
     ("blue", |theme| theme.syn_function),
     ("purple", |theme| theme.syn_type),
     ("pink", |theme| theme.syn_string),
@@ -86,7 +86,7 @@ pub(crate) fn tint_color(theme: &Theme, key: Option<&str>) -> Hsla {
             .find(|(name, _)| *name == key)
             .map(|(_, color)| color(theme))
     })
-    .unwrap_or(theme.text_3)
+    .unwrap_or(theme.text_muted)
 }
 
 /// The asset path for a persisted icon stem, falling back to the folder
@@ -151,8 +151,8 @@ mod tests {
         );
 
         let theme = crate::theme::Theme::default();
-        assert_eq!(tint_color(&theme, Some("nonsense")), theme.text_3);
-        assert_eq!(tint_color(&theme, None), theme.text_3);
+        assert_eq!(tint_color(&theme, Some("nonsense")), theme.text_muted);
+        assert_eq!(tint_color(&theme, None), theme.text_muted);
         assert_eq!(tint_color(&theme, Some("accent")), theme.accent);
     }
 

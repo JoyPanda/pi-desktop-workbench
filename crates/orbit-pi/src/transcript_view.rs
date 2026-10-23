@@ -980,10 +980,14 @@ fn selection_menu_item(
     picker_entry(div().id(id), &theme)
         .h(picker::entry_height(&theme))
         .flex_none()
-        .text_color(if enabled { theme.text_2 } else { theme.text_3 })
+        .text_color(if enabled {
+            theme.text_secondary
+        } else {
+            theme.text_muted
+        })
         .when(enabled, |item| {
             item.cursor_pointer()
-                .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     on_click(window, cx);
                 })
@@ -991,7 +995,7 @@ fn selection_menu_item(
         .child(crate::app::icon(
             icon_path,
             context_menu::ICON.px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .child(div().flex_1().min_w_0().truncate().child(label))
         .into_any_element()
@@ -1208,7 +1212,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                     .w_full()
                     .flex()
                     .justify_center()
-                    .px(px(20.))
+                    .px(DynamicSpacing::Base20.px(&theme))
                     .pb(px(14.))
                     .child(
                         div()
@@ -1255,24 +1259,27 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 .borrow()
                 .get(last_ix)
                 .and_then(|message| message.generation_time());
-            let footer = div().mt(px(10.)).px(px(4.)).child(render_message_footer(
-                copy_text,
-                last_ix,
-                stamp,
-                summary_usage.clone(),
-                summary_generation,
-                copied_last,
-                false,
-                theme,
-                copied.clone(),
-                hovered_usage.clone(),
-            ));
+            let footer = div()
+                .mt(px(10.))
+                .px(DynamicSpacing::Base04.px(&theme))
+                .child(render_message_footer(
+                    copy_text,
+                    last_ix,
+                    stamp,
+                    summary_usage.clone(),
+                    summary_generation,
+                    copied_last,
+                    false,
+                    theme,
+                    copied.clone(),
+                    hovered_usage.clone(),
+                ));
             return div()
                 .id(ElementId::NamedInteger("transcript-row".into(), ix as u64))
                 .w_full()
                 .flex()
                 .justify_center()
-                .px(px(20.))
+                .px(DynamicSpacing::Base20.px(&theme))
                 .pb(px(22.))
                 .child(
                     div()
@@ -1452,9 +1459,9 @@ fn render_navigation_rail(
             let prominent = emphasized_turn == Some(user_ix) || active_turn == Some(user_ix);
             let width = NAVIGATION_RAIL_TICK_WIDTH * scale;
             let color = if prominent {
-                theme.text
+                theme.text_primary
             } else {
-                theme.text_3.opacity(NAVIGATION_RAIL_INACTIVE_OPACITY)
+                theme.text_muted.opacity(NAVIGATION_RAIL_INACTIVE_OPACITY)
             };
             (user_ix, width, color)
         })
@@ -1481,67 +1488,63 @@ fn render_navigation_rail(
                 .track_scroll(&rail_scroll)
                 .flex()
                 .flex_col()
-                .children(
-                    ticks
-                        .into_iter()
-                        .map(move |(user_ix, width, color)| {
-                            let scroller = scroller.clone();
-                            let hover_state = hovered.clone();
-                            let tick_hint_dismissed = tick_hint_dismissed.clone();
-                            let tick_hint_shown_at = tick_hint_shown_at.clone();
+                .children(ticks.into_iter().map(move |(user_ix, width, color)| {
+                    let scroller = scroller.clone();
+                    let hover_state = hovered.clone();
+                    let tick_hint_dismissed = tick_hint_dismissed.clone();
+                    let tick_hint_shown_at = tick_hint_shown_at.clone();
+                    div()
+                        .id(ElementId::NamedInteger("nav-tick".into(), user_ix as u64))
+                        .w(px(NAVIGATION_RAIL_WIDTH))
+                        .h(px(NAVIGATION_RAIL_TURN_HEIGHT))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .on_hover({
+                            let hover_state = hover_state.clone();
+                            move |hovering: &bool, _, cx| {
+                                // On leave, clear only when this tick
+                                // owns the hover state (moving between
+                                // ticks hands it to the next one).
+                                let next = if *hovering {
+                                    Some(user_ix)
+                                } else if hover_state.get() == Some(user_ix) {
+                                    None
+                                } else {
+                                    hover_state.get()
+                                };
+                                if hover_state.get() != next {
+                                    hover_state.set(next);
+                                    cx.refresh_windows();
+                                }
+                            }
+                        })
+                        .on_click({
+                            move |_, _, cx| {
+                                // Using the rail is the lesson — dismiss the
+                                // one-time hint (persists per install).
+                                crate::transcript::dismiss_rail_hint_state(
+                                    &tick_hint_dismissed,
+                                    &tick_hint_shown_at,
+                                );
+                                scroller.scroll_to_item(user_ix);
+                                cx.refresh_windows();
+                            }
+                        })
+                        .child(
                             div()
-                                .id(ElementId::NamedInteger("nav-tick".into(), user_ix as u64))
-                                .w(px(NAVIGATION_RAIL_WIDTH))
-                                .h(px(NAVIGATION_RAIL_TURN_HEIGHT))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .cursor_pointer()
-                                .on_hover({
-                                    let hover_state = hover_state.clone();
-                                    move |hovering: &bool, _, cx| {
-                                        // On leave, clear only when this tick
-                                        // owns the hover state (moving between
-                                        // ticks hands it to the next one).
-                                        let next = if *hovering {
-                                            Some(user_ix)
-                                        } else if hover_state.get() == Some(user_ix) {
-                                            None
-                                        } else {
-                                            hover_state.get()
-                                        };
-                                        if hover_state.get() != next {
-                                            hover_state.set(next);
-                                            cx.refresh_windows();
-                                        }
-                                    }
-                                })
-                                .on_click({
-                                    move |_, _, cx| {
-                                        // Using the rail is the lesson — dismiss the
-                                        // one-time hint (persists per install).
-                                        crate::transcript::dismiss_rail_hint_state(
-                                            &tick_hint_dismissed,
-                                            &tick_hint_shown_at,
-                                        );
-                                        scroller.scroll_to_item(user_ix);
-                                        cx.refresh_windows();
-                                    }
-                                })
-                                .child(
-                                    div()
-                                        .id(ElementId::NamedInteger(
-                                            "nav-tick-bar".into(),
-                                            user_ix as u64,
-                                        ))
-                                        .h(px(NAVIGATION_RAIL_TICK_HEIGHT))
-                                        .w(px(width))
-                                        .rounded_full()
-                                        .bg(color)
-                                        .hover(|style| style.bg(theme.text)),
-                                )
-                        }),
-                ),
+                                .id(ElementId::NamedInteger(
+                                    "nav-tick-bar".into(),
+                                    user_ix as u64,
+                                ))
+                                .h(px(NAVIGATION_RAIL_TICK_HEIGHT))
+                                .w(px(width))
+                                .rounded_full()
+                                .bg(color)
+                                .hover(|style| style.bg(theme.text_primary)),
+                        )
+                })),
         )
         .when(!at_top, |rail| rail.child(render_rail_fade(true, theme)))
         .when(!at_bottom, |rail| {
@@ -1608,15 +1611,15 @@ fn render_rail_fade(top: bool, theme: Theme) -> impl IntoElement {
         .h(px(20.))
         .bg(linear_gradient(
             180.,
-            linear_color_stop(theme.bg_main.opacity(0.), 0.),
-            linear_color_stop(theme.bg_main, 1.),
+            linear_color_stop(theme.background.opacity(0.), 0.),
+            linear_color_stop(theme.background, 1.),
         ));
     if top {
         // Solid at the top edge, fading down: flip the stop order.
         base.top_0().bg(linear_gradient(
             180.,
-            linear_color_stop(theme.bg_main, 0.),
-            linear_color_stop(theme.bg_main.opacity(0.), 1.),
+            linear_color_stop(theme.background, 0.),
+            linear_color_stop(theme.background.opacity(0.), 1.),
         ))
     } else {
         base.bottom_0()
@@ -1643,7 +1646,7 @@ fn render_rail_preview(
         .overflow_hidden()
         .elevation_2(&theme)
         .px(px(15.))
-        .py(px(12.))
+        .py(DynamicSpacing::Base12.px(&theme))
         .flex()
         .flex_col()
         .gap(px(7.))
@@ -1651,7 +1654,7 @@ fn render_rail_preview(
             div()
                 .text_size(TextSize::XSmall.px(&theme))
                 .line_height(theme.ui_px(14.))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!(
                     "transcript_view.turn_of_total_hint",
                     current = turn_number,
@@ -1665,7 +1668,7 @@ fn render_rail_preview(
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(theme.ui_px(20.))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(prompt.to_string()),
         )
         .when(!response.is_empty(), |card| {
@@ -1677,7 +1680,7 @@ fn render_rail_preview(
                     .whitespace_normal()
                     .text_size(TextSize::Default.px(&theme))
                     .line_height(theme.ui_px(20.))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(response.to_string()),
             )
         })
@@ -1702,21 +1705,21 @@ fn render_rail_hint(
         .py(px(10.))
         .flex()
         .flex_col()
-        .gap(px(3.))
+        .gap(DynamicSpacing::Base03.px(&theme))
         .cursor_pointer()
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(16.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(tr!("transcript_view.jump_between_turns")),
         )
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(16.))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!(
                     "transcript_view.click_a_line_or_press_to_revisit_any_prompt"
                 )),
@@ -1848,12 +1851,12 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
                 cx.refresh_windows();
             }
         })
-        .child(activity_badge(icon, theme.accent, theme))
+        .child(activity_badge(icon, theme.accent_text, theme))
         .child(
             div()
                 .flex_none()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(label),
         )
         .when(has_detail, |header| {
@@ -1864,7 +1867,7 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(detail),
             )
         })
@@ -1876,7 +1879,7 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
                 "icons/chevron-right.svg"
             },
             IconSize::XSmall.px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ));
 
     let mut card = div()
@@ -1951,7 +1954,7 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint) -> impl IntoEleme
                             .border_1()
                             .border_color(theme.border)
                             .overflow_hidden()
-                            .bg(theme.bg_raised)
+                            .bg(theme.surface_elevated)
                             .when(opener.is_some(), |tile| {
                                 tile.cursor_pointer()
                                     .hover(|s| s.border_color(theme.border_strong))
@@ -1974,8 +1977,8 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint) -> impl IntoEleme
                 div()
                     .max_w(px(USER_BUBBLE_MAX_WIDTH))
                     .rounded(Radius::XLarge.px(&theme))
-                    .bg(theme.bg_raised)
-                    .text_color(theme.text)
+                    .bg(theme.surface_elevated)
+                    .text_color(theme.text_primary)
                     .px(DynamicSpacing::Base12.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
                     .text_size(TextSize::Default.px(&theme))
@@ -2106,17 +2109,23 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
             // Live rows never collapse code blocks — a growing block's tail
             // edge must stay visible while it streams.
             let prose = step.text.as_str();
-            content = content.child(div().w_full().min_w_0().pt(px(4.)).child(render_prose(
-                prose,
-                ix,
-                (step_ix as u64 + 1) * 4096,
-                theme,
-                paint.copied_sections.clone(),
-                paint.expanded_blocks.clone(),
-                !paint.live,
-                paint.scroller.clone(),
-                Some(paint.table_breakout),
-            )));
+            content = content.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .pt(DynamicSpacing::Base04.px(&theme))
+                    .child(render_prose(
+                        prose,
+                        ix,
+                        (step_ix as u64 + 1) * 4096,
+                        theme,
+                        paint.copied_sections.clone(),
+                        paint.expanded_blocks.clone(),
+                        !paint.live,
+                        paint.scroller.clone(),
+                        Some(paint.table_breakout),
+                    )),
+            );
         }
 
         // Work in a step that FOLLOWS answer text (the assistant spoke,
@@ -2233,9 +2242,9 @@ fn render_assistant_error(error: &str, ix: usize, theme: Theme) -> AnyElement {
         .w_full()
         .max_w_full()
         .min_w_0()
-        .bg(theme.crit.opacity(0.1))
+        .bg(theme.error.opacity(0.1))
         .border_1()
-        .border_color(theme.crit.opacity(0.45))
+        .border_color(theme.error.opacity(0.45))
         .rounded(Radius::XLarge.px(&theme))
         .px(DynamicSpacing::Base12.px(&theme))
         .py(DynamicSpacing::Base08.px(&theme))
@@ -2245,7 +2254,7 @@ fn render_assistant_error(error: &str, ix: usize, theme: Theme) -> AnyElement {
         .child(glyph(
             "icons/info.svg",
             IconSize::Medium.px(&theme),
-            theme.crit,
+            theme.error,
         ))
         .child(
             div()
@@ -2258,13 +2267,13 @@ fn render_assistant_error(error: &str, ix: usize, theme: Theme) -> AnyElement {
                     div()
                         .text_size(TextSize::Small.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(tr!("transcript_view.agent_error")),
                 )
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .whitespace_normal()
                         .child({
                             let text: SharedString = error.to_string().into();
@@ -2274,7 +2283,7 @@ fn render_assistant_error(error: &str, ix: usize, theme: Theme) -> AnyElement {
                                 .as_ref()
                                 .and_then(|scope| scope.state.borrow().range_for(&key, &text));
                             let runs = highlight_runs(
-                                vec![code_run(text.len(), theme.text_2, &ui_font())],
+                                vec![code_run(text.len(), theme.text_secondary, &ui_font())],
                                 range,
                                 selection_color(theme),
                             );
@@ -2413,13 +2422,13 @@ fn render_activity_group(
         .sum::<usize>()
         .saturating_sub(1);
     let key = (ix, range.start);
-    // State color for the glyph cluster: danger when anything failed, ember
+    // State color for the glyph cluster: danger when anything failed, accent
     // while the group streams. Settled clusters tint per work kind instead
     // (see `work_tint`).
     let cluster_state = if any_failed {
-        Some(theme.del_red)
+        Some(theme.error)
     } else if live {
-        Some(theme.accent)
+        Some(theme.accent_text)
     } else {
         None
     };
@@ -2429,7 +2438,7 @@ fn render_activity_group(
         .min_w_0()
         .flex()
         .flex_col()
-        .gap(px(4.))
+        .gap(DynamicSpacing::Base04.px(&theme))
         // Let the summary chip hug its content so it reads as a control
         // instead of a full-width band across the answer column.
         .items_start()
@@ -2446,7 +2455,7 @@ fn render_activity_group(
             .max_w_full()
             // Raised fill + hairline = DESIGN.md's chip treatment: the
             // open state steps the border up for emphasis.
-            .raised(theme.bg_raised, &theme)
+            .raised(theme.surface_elevated, &theme)
             .border_1()
             .border_color(if open {
                 theme.border_strong
@@ -2454,7 +2463,11 @@ fn render_activity_group(
                 theme.border
             })
             .cursor_pointer()
-            .hover(|style| style.raised(theme.bg_hover, &theme).text_color(theme.text))
+            .hover(|style| {
+                style
+                    .raised(theme.surface_hover, &theme)
+                    .text_color(theme.text_primary)
+            })
             .child(
                 div()
                     .flex_none()
@@ -2467,7 +2480,7 @@ fn render_activity_group(
                         glyph(
                             icon,
                             IconSize::XSmall.px(&theme),
-                            cluster_state.unwrap_or(theme.text_2),
+                            cluster_state.unwrap_or(theme.text_secondary),
                         )
                     })),
             )
@@ -2476,7 +2489,7 @@ fn render_activity_group(
                     .min_w_0()
                     .truncate()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(title),
             )
             .child(glyph(
@@ -2486,7 +2499,7 @@ fn render_activity_group(
                     "icons/chevron-right.svg"
                 },
                 IconSize::XSmall.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .on_click({
                 let expanded_activities = expanded_activities.clone();
@@ -2505,14 +2518,14 @@ fn render_activity_group(
         let mut body = div()
             .w_full()
             .min_w_0()
-            .ml(px(6.))
-            .pl(px(12.))
+            .ml(DynamicSpacing::Base06.px(&theme))
+            .pl(DynamicSpacing::Base12.px(&theme))
             .pb(px(2.))
             .border_l_1()
             .border_color(theme.border)
             .flex()
             .flex_col()
-            .gap(px(8.));
+            .gap(DynamicSpacing::Base08.px(&theme));
         let mut tool_base = tool_base;
         for (step_ix, step) in steps.iter().enumerate() {
             if !step.thinking.is_empty() {
@@ -2661,7 +2674,7 @@ fn render_thinking_body(
             .child(glyph(
                 "icons/tools/thinking.svg",
                 IconSize::Small.px(&theme),
-                theme.accent,
+                theme.accent_text,
             ))
             .with_animation(
                 ElementId::NamedInteger("thought-icon".into(), id),
@@ -2673,7 +2686,11 @@ fn render_thinking_body(
         glyph(
             "icons/tools/thinking.svg",
             IconSize::Small.px(&theme),
-            if live { theme.accent } else { theme.text_3 },
+            if live {
+                theme.accent_text
+            } else {
+                theme.text_muted
+            },
         )
         .into_any_element()
     };
@@ -2683,8 +2700,8 @@ fn render_thinking_body(
         .border_1()
         .border_color(theme.border)
         .bg(theme.overlay)
-        .px(px(12.))
-        .py(px(8.))
+        .px(DynamicSpacing::Base12.px(&theme))
+        .py(DynamicSpacing::Base08.px(&theme))
         .flex()
         .flex_col()
         .gap(px(5.))
@@ -2696,11 +2713,11 @@ fn render_thinking_body(
                 .min_w_0()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(DynamicSpacing::Base08.px(&theme))
                 .cursor_pointer()
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(theme.ui_px(17.))
-                .hover(|style| style.text_color(theme.text))
+                .hover(|style| style.text_color(theme.text_primary))
                 .child(thought_icon)
                 .child(
                     div()
@@ -2713,7 +2730,7 @@ fn render_thinking_body(
                             div()
                                 .flex_none()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.accent)
+                                .text_color(theme.accent_text)
                                 .child(label),
                         )
                         .when_some(timing, |row, timing| {
@@ -2722,7 +2739,7 @@ fn render_thinking_body(
                                     .min_w_0()
                                     .truncate()
                                     .font_weight(FontWeight::NORMAL)
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(timing),
                             )
                         }),
@@ -2734,7 +2751,7 @@ fn render_thinking_body(
                         "icons/chevron-down.svg"
                     },
                     IconSize::XSmall.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .on_click({
                     let collapsed_thoughts = collapsed_thoughts.clone();
@@ -2793,7 +2810,7 @@ fn render_thinking_body(
                 .font_family(theme::code_font_family())
                 .text_size(theme.code_px(12.))
                 .line_height(theme.code_px(18.))
-                .text_color(theme.tool_meta)
+                .text_color(theme.text_secondary)
                 .whitespace_normal()
                 .child({
                     let body_key = ElementId::NamedInteger(
@@ -2805,7 +2822,7 @@ fn render_thinking_body(
                         .as_ref()
                         .and_then(|scope| scope.state.borrow().range_for(&body_key, &detail));
                     let runs = highlight_runs(
-                        vec![code_run(detail.len(), theme.tool_meta, &mono_font())],
+                        vec![code_run(detail.len(), theme.text_secondary, &mono_font())],
                         range,
                         selection_color(theme),
                     );
@@ -2943,13 +2960,13 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
         .child(glyph(
             "icons/task.svg",
             IconSize::Small.px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .child(
             div()
                 .flex_none()
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.accent)
+                .text_color(theme.accent_text)
                 .child(tr!("transcript_view.question")),
         );
     if questions.len() > 1 {
@@ -2957,7 +2974,7 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
             div()
                 .flex_none()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("transcript.asked", count = questions.len())),
         );
     }
@@ -2968,14 +2985,14 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                 .flex()
                 .justify_end()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("transcript_view.no_answer")),
         );
     } else if tool.failed {
         header = header.child(div().flex_1().flex().justify_end().child(glyph(
             "icons/stop.svg",
             IconSize::XSmall.px(&theme),
-            theme.del_red,
+            theme.error,
         )));
     }
     card = card.child(header);
@@ -2983,20 +3000,26 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
     // ── body: one block per question ──
     let mut body = div().px(px(10.)).pb(px(10.)).flex().flex_col().gap(px(10.));
     for question in &questions {
-        let mut block = div().flex().flex_col().gap(px(4.));
-        let mut head = div().flex().items_center().gap(px(6.));
+        let mut block = div()
+            .flex()
+            .flex_col()
+            .gap(DynamicSpacing::Base04.px(&theme));
+        let mut head = div()
+            .flex()
+            .items_center()
+            .gap(DynamicSpacing::Base06.px(&theme));
         if !question.header.trim().is_empty() {
             head = head.child(
                 div()
                     .flex_none()
-                    .px(px(6.))
+                    .px(DynamicSpacing::Base06.px(&theme))
                     .py(px(1.))
                     .rounded(Radius::Small.px(&theme))
                     .bg(theme.overlay_strong)
                     .text_size(TextSize::XSmall.px(&theme))
                     .line_height(theme.ui_px(14.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(SharedString::from(question.header.clone())),
             );
         }
@@ -3008,7 +3031,7 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(theme.ui_px(18.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(SharedString::from(question.question.clone())),
         );
         block = block.child(head);
@@ -3028,18 +3051,22 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                 .min_w_0()
                 .flex()
                 .items_center()
-                .gap(px(8.))
-                .px(px(8.))
-                .py(px(4.))
+                .gap(DynamicSpacing::Base08.px(&theme))
+                .px(DynamicSpacing::Base08.px(&theme))
+                .py(DynamicSpacing::Base04.px(&theme))
                 .rounded(Radius::Medium.px(&theme))
-                .when(chosen, |row| row.bg(theme.accent.opacity(0.10)));
+                .when(chosen, |row| row.bg(theme.selection));
             // A plain number keeps the list readable at a glance.
             row = row.child(
                 div()
                     .flex_none()
                     .text_size(TextSize::Small.px(&theme))
                     .line_height(theme.ui_px(17.))
-                    .text_color(if chosen { theme.accent } else { theme.text_3 })
+                    .text_color(if chosen {
+                        theme.accent_text
+                    } else {
+                        theme.text_muted
+                    })
                     .child(format!("{}.", ix + 1)),
             );
             row = row.child(
@@ -3049,14 +3076,18 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                     .whitespace_normal()
                     .text_size(TextSize::Small.px(&theme))
                     .line_height(theme.ui_px(17.))
-                    .text_color(if chosen { theme.text } else { theme.text_2 })
+                    .text_color(if chosen {
+                        theme.text_primary
+                    } else {
+                        theme.text_secondary
+                    })
                     .child(SharedString::from(option.label.clone())),
             );
             if chosen {
                 row = row.child(glyph(
                     "icons/check.svg",
                     IconSize::XSmall.px(&theme),
-                    theme.accent,
+                    theme.accent_text,
                 ));
             }
             list = list.child(row);
@@ -3068,9 +3099,9 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                     .min_w_0()
                     .flex()
                     .items_center()
-                    .gap(px(8.))
-                    .px(px(8.))
-                    .py(px(4.))
+                    .gap(DynamicSpacing::Base08.px(&theme))
+                    .px(DynamicSpacing::Base08.px(&theme))
+                    .py(DynamicSpacing::Base04.px(&theme))
                     .rounded(Radius::Medium.px(&theme))
                     .bg(theme.accent.opacity(0.10))
                     .child(
@@ -3078,7 +3109,7 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                             .flex_none()
                             .text_size(TextSize::Small.px(&theme))
                             .line_height(theme.ui_px(17.))
-                            .text_color(theme.accent)
+                            .text_color(theme.accent_text)
                             .child("A."),
                     )
                     .child(
@@ -3088,7 +3119,7 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                             .whitespace_normal()
                             .text_size(TextSize::Small.px(&theme))
                             .line_height(theme.ui_px(17.))
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(SharedString::from(answer.to_string())),
                     ),
             );
@@ -3098,10 +3129,10 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
         if waiting {
             block = block.child(
                 div()
-                    .px(px(8.))
+                    .px(DynamicSpacing::Base08.px(&theme))
                     .text_size(TextSize::Small.px(&theme))
                     .line_height(theme.ui_px(15.))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("transcript_view.waiting_for_an_answer")),
             );
         }
@@ -3147,11 +3178,11 @@ fn render_activity_card(
     // per-kind hue was decoration that spent the accent budget and turned a
     // long transcript into a field of tinted badges.
     let tone = if tool.failed {
-        theme.del_red
+        theme.error
     } else if pulse {
-        theme.accent
+        theme.accent_text
     } else {
-        theme.text_2
+        theme.text_secondary
     };
     let is_command = tool_command(tool).is_some();
     let has_diff = tool.added > 0 || tool.removed > 0;
@@ -3209,7 +3240,7 @@ fn render_activity_card(
                     div()
                         .flex_none()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(action),
                 )
                 .when(!detail.is_empty(), |row| {
@@ -3225,16 +3256,16 @@ fn render_activity_card(
                                 .overflow_hidden()
                                 .flex()
                                 .items_center()
-                                .gap(px(6.))
+                                .gap(DynamicSpacing::Base06.px(&theme))
                                 .font_family(theme::code_font_family())
                                 .text_size(theme.code_px(12.))
-                                .child(div().flex_none().text_color(theme.text_3).child("$"))
+                                .child(div().flex_none().text_color(theme.text_muted).child("$"))
                                 .child(
                                     div().min_w_0().overflow_hidden().whitespace_nowrap().child(
                                         syntax_styled(
                                             &detail,
                                             tokens.first().map(Vec::as_slice),
-                                            theme.tool_meta,
+                                            theme.text_secondary,
                                             theme,
                                         ),
                                     ),
@@ -3254,20 +3285,20 @@ fn render_activity_card(
                                 .min_w_0()
                                 .flex()
                                 .items_center()
-                                .gap(px(4.))
+                                .gap(DynamicSpacing::Base04.px(&theme))
                                 .cursor_pointer()
                                 .child(
                                     div()
                                         .min_w_0()
                                         .truncate()
-                                        .text_color(theme.accent)
+                                        .text_color(theme.accent_text)
                                         .underline()
                                         .child(display_url(&url).to_string()),
                                 )
                                 .child(glyph(
                                     "icons/arrow-up-right.svg",
                                     IconSize::XSmall.px(&theme),
-                                    theme.accent,
+                                    theme.accent_text,
                                 ))
                                 .on_click(move |_, _, cx| {
                                     cx.open_url(&url);
@@ -3275,8 +3306,12 @@ fn render_activity_card(
                                 }),
                         )
                     } else {
-                        let mut preview =
-                            div().flex_1().min_w_0().flex().items_center().gap(px(6.));
+                        let mut preview = div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(DynamicSpacing::Base06.px(&theme));
                         if let Some(path) = file_path {
                             preview = preview.child(file_glyph(
                                 path,
@@ -3291,7 +3326,7 @@ fn render_activity_card(
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_color(theme.tool_meta)
+                                    .text_color(theme.text_secondary)
                                     .child(detail),
                             ),
                         )
@@ -3310,7 +3345,7 @@ fn render_activity_card(
                             (key.0 as u64) << 16 | key.1 as u64,
                         ),
                         IconSize::XSmall.px(&theme),
-                        theme.accent,
+                        theme.accent_text,
                         theme,
                     ))
                 })
@@ -3318,14 +3353,14 @@ fn render_activity_card(
                     row.child(glyph(
                         "icons/stop.svg",
                         IconSize::XSmall.px(&theme),
-                        theme.del_red,
+                        theme.error,
                     ))
                 })
                 .when(complete && !tool.failed, |row| {
                     row.child(glyph(
                         "icons/check.svg",
                         IconSize::XSmall.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     ))
                 })
                 .when_some(diff.clone(), |row, rows| {
@@ -3354,7 +3389,11 @@ fn render_activity_card(
                                 "icons/copy.svg"
                             },
                             ButtonSize::Compact.icon_size().px(&theme),
-                            if copied { theme.ok_green } else { theme.text_3 },
+                            if copied {
+                                theme.success
+                            } else {
+                                theme.text_muted
+                            },
                         ))
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(patch.clone()));
@@ -3377,9 +3416,9 @@ fn render_activity_card(
                     },
                     IconSize::XSmall.px(&theme),
                     if has_detail {
-                        theme.text_3
+                        theme.text_muted
                     } else {
-                        theme.text_3.opacity(0.)
+                        theme.text_muted.opacity(0.)
                     },
                 )),
         );
@@ -3439,14 +3478,14 @@ fn truncation_chip(facts: &ToolFacts, theme: Theme) -> Option<AnyElement> {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(3.))
+            .gap(DynamicSpacing::Base03.px(&theme))
             .text_size(TextSize::Small.px(&theme))
             .line_height(theme.ui_px(15.))
-            .text_color(theme.warn)
+            .text_color(theme.warning)
             .child(glyph(
                 "icons/tools/truncated.svg",
                 IconSize::XSmall.px(&theme),
-                theme.warn,
+                theme.warning,
             ))
             .child(label)
             .into_any_element(),
@@ -3470,11 +3509,7 @@ fn first_error_line(value: &Value) -> Option<String> {
 /// One-line error strip on a failed tool card: red-washed, drawn stop
 /// glyph, and the actual error text (never invented — the fallback says
 /// when nothing was captured).
-fn render_tool_error_strip(
-    tool: &ToolCall,
-    round_bottom: bool,
-    theme: Theme,
-) -> impl IntoElement {
+fn render_tool_error_strip(tool: &ToolCall, round_bottom: bool, theme: Theme) -> impl IntoElement {
     let snippet = tool
         .output
         .as_ref()
@@ -3484,7 +3519,7 @@ fn render_tool_error_strip(
         .w_full()
         .border_t_1()
         .border_color(theme.border)
-        .bg(theme.del_red.opacity(0.07))
+        .bg(theme.error.opacity(0.07))
         .when(round_bottom, |s| s.rounded_b(Radius::XLarge.px(&theme)))
         .px(DynamicSpacing::Base08.px(&theme))
         .py(DynamicSpacing::Base04.px(&theme))
@@ -3495,7 +3530,7 @@ fn render_tool_error_strip(
         .child(glyph(
             "icons/stop.svg",
             IconSize::XSmall.px(&theme),
-            theme.del_red,
+            theme.error,
         ))
         .child(
             div()
@@ -3504,7 +3539,7 @@ fn render_tool_error_strip(
                 .truncate()
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(BufferLineHeight::Standard.relative())
-                .text_color(theme.del_red)
+                .text_color(theme.error)
                 .child(snippet),
         )
 }
@@ -3599,12 +3634,15 @@ fn render_tool_detail(
             .rounded_b(Radius::XLarge.px(&theme))
             // Without a diff above it, the surface owns the rule that
             // separates it from the card header.
-            .when(diff.is_none(), |s| s.border_t_1().border_color(theme.border));
+            .when(diff.is_none(), |s| {
+                s.border_t_1().border_color(theme.border)
+            });
         for (section_ix, (section, label, content, lang, prompt)) in
             sections.into_iter().enumerate()
         {
             if section_ix > 0 {
-                surface = surface.child(div().w_full().h(BORDER_WIDTH).flex_none().bg(theme.border));
+                surface =
+                    surface.child(div().w_full().h(BORDER_WIDTH).flex_none().bg(theme.border));
             }
             surface = surface.child(render_detail_section(
                 key,
@@ -3693,7 +3731,7 @@ fn render_detail_section(
                         .font_weight(FontWeight::MEDIUM)
                         .text_size(TextSize::Small.px(&theme))
                         .line_height(theme.ui_px(15.))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(label.to_string()),
                 )
                 .child(
@@ -3715,7 +3753,11 @@ fn render_detail_section(
                             "icons/copy.svg"
                         },
                         ButtonSize::Default.icon_size().px(&theme),
-                        if copied { theme.ok_green } else { theme.text_3 },
+                        if copied {
+                            theme.success
+                        } else {
+                            theme.text_muted
+                        },
                     ))
                     .on_click(move |_, _, cx| {
                         cx.write_to_clipboard(ClipboardItem::new_string(copy_content.clone()));
@@ -3742,7 +3784,7 @@ fn render_detail_section(
                             .font_family(theme::code_font_family())
                             .text_size(theme.term_px(13.))
                             .line_height(theme.term_px(20.))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child("$"),
                     )
                 })
@@ -3774,8 +3816,8 @@ fn render_detail_section(
             .justify_start()
             .cursor_pointer()
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.text_3)
-            .hover(|style| style.text_color(theme.text))
+            .text_color(theme.text_muted)
+            .hover(|style| style.text_color(theme.text_primary))
             .child(glyph(
                 if expanded {
                     "icons/chevron-down.svg"
@@ -3783,7 +3825,7 @@ fn render_detail_section(
                     "icons/chevron-right.svg"
                 },
                 IconSize::XSmall.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(toggle_label)
             .when(paint_clipped, |toggle| {
@@ -3793,7 +3835,7 @@ fn render_detail_section(
                         .flex_1()
                         .truncate()
                         .font_weight(FontWeight::NORMAL)
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!(
                             "transcript.showing_first_output",
                             count = OUTPUT_EXPANDED_PAINT_LINES
@@ -4106,7 +4148,7 @@ fn render_edit_diff(
     let mut body = div()
         .w_full()
         .min_w_0()
-        .py(px(4.))
+        .py(DynamicSpacing::Base04.px(&theme))
         .flex()
         .flex_col()
         .children(
@@ -4136,8 +4178,8 @@ fn render_edit_diff(
             .justify_start()
             .cursor_pointer()
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.text_3)
-            .hover(|style| style.text_color(theme.text))
+            .text_color(theme.text_muted)
+            .hover(|style| style.text_color(theme.text_primary))
             .child(glyph(
                 if expanded {
                     "icons/chevron-down.svg"
@@ -4145,7 +4187,7 @@ fn render_edit_diff(
                     "icons/chevron-right.svg"
                 },
                 IconSize::XSmall.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(label)
             .when(clipped, |toggle| {
@@ -4155,7 +4197,7 @@ fn render_edit_diff(
                         .flex_1()
                         .truncate()
                         .font_weight(FontWeight::NORMAL)
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!(
                             "transcript.showing_first_diff",
                             count = EDIT_DIFF_PAINT_LINES
@@ -4201,20 +4243,20 @@ fn render_edit_diff_row(
     );
     let (body_bg, gutter_bg, edge, marker_color, marker) = match row.kind {
         DiffRowKind::Addition => (
-            Some(theme.add_green.opacity(diff_body_wash(theme))),
-            Some(theme.add_green.opacity(diff_gutter_wash(theme))),
-            Some(theme.add_green),
-            theme.add_green,
+            Some(theme.success.opacity(diff_body_wash(theme))),
+            Some(theme.success.opacity(diff_gutter_wash(theme))),
+            Some(theme.success),
+            theme.success,
             "+",
         ),
         DiffRowKind::Deletion => (
-            Some(theme.del_red.opacity(diff_body_wash(theme))),
-            Some(theme.del_red.opacity(diff_gutter_wash(theme))),
-            Some(theme.del_red),
-            theme.del_red,
+            Some(theme.error.opacity(diff_body_wash(theme))),
+            Some(theme.error.opacity(diff_gutter_wash(theme))),
+            Some(theme.error),
+            theme.error,
             "-",
         ),
-        _ => (None, None, None, theme.text_3, ""),
+        _ => (None, None, None, theme.text_muted, ""),
     };
     div()
         .w_full()
@@ -4240,7 +4282,7 @@ fn render_edit_diff_row(
             div()
                 .min_w_0()
                 .flex_1()
-                .pr(px(12.))
+                .pr(DynamicSpacing::Base12.px(&theme))
                 .overflow_hidden()
                 // A long line wraps to the next row instead of being clipped —
                 // the diff must stay readable at any pane width.
@@ -4315,7 +4357,7 @@ fn footer_time_stamp(text: String, theme: Theme) -> AnyElement {
         .items_center()
         .text_size(TextSize::Small.px(&theme))
         .line_height(BufferLineHeight::Standard.relative())
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(text)
         .into_any_element()
 }
@@ -4351,7 +4393,11 @@ fn render_message_footer(
             "icons/copy.svg"
         },
         FOOTER_BUTTON.icon_size().px(&theme),
-        if copied { theme.ok_green } else { theme.text_3 },
+        if copied {
+            theme.success
+        } else {
+            theme.text_muted
+        },
     ))
     .on_click(move |_, _, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()));
@@ -4426,7 +4472,7 @@ fn usage_metric(
         .items_center()
         .text_size(TextSize::Small.px(&theme))
         .line_height(BufferLineHeight::Standard.relative())
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(label)
         .on_hover(move |is_hovered, _, cx| {
             let next = if *is_hovered { Some(ix) } else { None };
@@ -4470,7 +4516,7 @@ fn usage_breakdown_card(
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("transcript_view.message_usage")),
         )
         .child(usage_metric_row(
@@ -4533,20 +4579,24 @@ fn usage_metric_row(
         .flex()
         .items_center()
         .gap(DynamicSpacing::Base06.px(&theme))
-        .child(glyph(icon_path, IconSize::Small.px(&theme), theme.text_3))
+        .child(glyph(
+            icon_path,
+            IconSize::Small.px(&theme),
+            theme.text_muted,
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w(px(0.))
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .whitespace_nowrap()
                 .child(label),
         )
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .whitespace_nowrap()
                 .child(value),
         )
@@ -4672,8 +4722,8 @@ fn render_turn_fold(
             .group(BUTTON_GROUP)
             .cursor_pointer()
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.text_3)
-            .hover(|style| style.text_color(theme.text_2))
+            .text_color(theme.text_muted)
+            .hover(|style| style.text_color(theme.text_secondary))
             .child(label)
             .child(glyph(
                 if expanded {
@@ -4682,7 +4732,7 @@ fn render_turn_fold(
                     "icons/chevron-right.svg"
                 },
                 IconSize::XSmall.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .on_click(move |_, _, cx| {
                 toggle_index(&expanded_turns, ix);
@@ -4697,7 +4747,7 @@ fn working_wave_dots(theme: Theme, elapsed_ms: u128) -> impl IntoElement {
     div()
         .flex()
         .items_center()
-        .gap(px(3.))
+        .gap(DynamicSpacing::Base03.px(&theme))
         .children((0..3).map(move |i| {
             let phase = ((elapsed_ms / 180) + i as u128 * 2) % 6;
             let on = phase < 3;
@@ -4751,18 +4801,18 @@ fn render_stopped_marker(theme: Theme) -> impl IntoElement {
         .h(px(22.))
         .flex()
         .items_center()
-        .gap(px(8.))
+        .gap(DynamicSpacing::Base08.px(&theme))
         .child(glyph(
             "icons/stop.svg",
             IconSize::XSmall.px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .child(
             div()
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(theme.ui_px(18.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("transcript_view.stopped")),
         )
 }
@@ -4794,7 +4844,7 @@ fn render_working_indicator(
     let label_size = theme.ui_px(13.5);
     let label_line = theme.ui_px(18.);
     // The live label carries the sidebar's running-session shimmer — the same
-    // ember band sweeping across the ink. Reduce-motion keeps the accent
+    // accent band sweeping across the ink. Reduce-motion keeps the accent
     // signal without the perpetual sweep.
     let label_el: AnyElement = if theme.ui.reduce_motion {
         div()
@@ -4803,11 +4853,11 @@ fn render_working_indicator(
             .text_size(label_size)
             .line_height(label_line)
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.accent)
+            .text_color(theme.accent_text)
             .child(label)
             .into_any_element()
     } else {
-        ShimmerText::new(label, theme.text_3, theme.accent)
+        ShimmerText::new(label, theme.text_muted, theme.accent)
             .with_animation(
                 ElementId::NamedInteger("working-shimmer".into(), 0),
                 Animation::new(Duration::from_millis(2000)).repeat(),
@@ -4827,7 +4877,7 @@ fn render_working_indicator(
         .h(px(22.))
         .flex()
         .items_center()
-        .gap(px(8.))
+        .gap(DynamicSpacing::Base08.px(&theme))
         .child(working_wave_dots(theme, elapsed.as_millis()))
         .child(
             div()
@@ -5053,19 +5103,19 @@ fn render_line_delta(added: u64, removed: u64, theme: Theme, size: f32) -> impl 
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(6.))
+        .gap(DynamicSpacing::Base06.px(&theme))
         .text_size(theme.ui_px(size))
         .line_height(theme.ui_px(size + 3.))
         .child(
             div()
                 .flex_none()
-                .text_color(theme.add_green)
+                .text_color(theme.success)
                 .child(format!("+{added}")),
         )
         .child(
             div()
                 .flex_none()
-                .text_color(theme.del_red)
+                .text_color(theme.error)
                 .child(format!("-{removed}")),
         )
 }
@@ -5323,10 +5373,10 @@ fn inline_runs(
         }
         // Only links take the accent — they are the interactive token. Inline
         // code keeps the body ink and is marked by the mono face and its wash
-        // instead; tinting it too made a code-heavy answer a field of ember
+        // instead; tinting it too made a code-heavy answer a field of accent
         // (violating DESIGN.md's One Accent Rule) and blurred it into links.
         let color = if span.link.is_some() {
-            theme.accent
+            theme.accent_text
         } else {
             base_color
         };
@@ -5446,7 +5496,7 @@ fn paragraph_text(
                     links,
                     Some(scope),
                 )
-                .with_marks(marks, theme.accent, IconSize::Small.px(&theme)),
+                .with_marks(marks, theme.accent_text, IconSize::Small.px(&theme)),
             )
             .into_any_element()
     } else {
@@ -5550,10 +5600,10 @@ impl AlertKind {
 
     fn color(self, theme: Theme) -> Hsla {
         match self {
-            Self::Note | Self::Important => theme.accent,
-            Self::Tip => theme.ok_green,
-            Self::Warning => theme.warn,
-            Self::Caution => theme.crit,
+            Self::Note | Self::Important => theme.accent_text,
+            Self::Tip => theme.success,
+            Self::Warning => theme.warning,
+            Self::Caution => theme.error,
         }
     }
 }
@@ -6148,11 +6198,11 @@ fn render_block(
         .into_any_element(),
         Block::Heading(level, text) => {
             let (size, line_height, color) = match level {
-                1 => (20., 30., theme.text),
-                2 => (18., 28., theme.text),
-                3 => (16., 26., theme.text),
-                4 => (15., 24., theme.text),
-                _ => (14., 24., theme.text_2),
+                1 => (20., 30., theme.text_primary),
+                2 => (18., 28., theme.text_primary),
+                3 => (16., 26., theme.text_primary),
+                4 => (15., 24., theme.text_primary),
+                _ => (14., 24., theme.text_secondary),
             };
             paragraph_text(
                 text,
@@ -6186,15 +6236,15 @@ fn render_block(
             .w_full()
             .min_w_0()
             .border_l_2()
-            .border_color(theme.text_3)
+            .border_color(theme.text_muted)
             .bg(theme.overlay)
             .rounded_r(Radius::Large.px(&theme))
             .pl(px(14.))
-            .pr(px(12.))
-            .py(px(8.))
+            .pr(DynamicSpacing::Base12.px(&theme))
+            .py(DynamicSpacing::Base08.px(&theme))
             .flex()
             .flex_col()
-            .gap(px(4.))
+            .gap(DynamicSpacing::Base04.px(&theme))
             .children(lines.iter().enumerate().map(move |(sub, line)| {
                 render_container_line(
                     line,
@@ -6205,7 +6255,7 @@ fn render_block(
                     14.,
                     26.,
                     FontWeight::NORMAL,
-                    theme.text_2,
+                    theme.text_secondary,
                     theme,
                 )
             }))
@@ -6215,7 +6265,7 @@ fn render_block(
             .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(8.))
+            .gap(DynamicSpacing::Base08.px(&theme))
             .children(
                 items
                     .iter()
@@ -6289,7 +6339,7 @@ fn markdown_image_fallback(alt: &str, theme: Theme) -> AnyElement {
         .border_color(theme.border)
         .bg(theme.overlay)
         .text_size(TextSize::Small.px(&theme))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(label)
         .into_any_element()
 }
@@ -6311,16 +6361,16 @@ fn render_alert(
         .min_w_0()
         .rounded(Radius::XLarge.px(&theme))
         .bg(color.opacity(0.08))
-        .px(px(12.))
+        .px(DynamicSpacing::Base12.px(&theme))
         .py(px(10.))
         .flex()
         .flex_col()
-        .gap(px(6.))
+        .gap(DynamicSpacing::Base06.px(&theme))
         .child(
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(DynamicSpacing::Base08.px(&theme))
                 .child(glyph(kind.icon(), IconSize::Small.px(&theme), color))
                 .child(
                     div()
@@ -6401,9 +6451,9 @@ fn render_list_item(
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(theme.ui_px(26.))
                 .text_color(if item.ordered {
-                    theme.text
+                    theme.text_primary
                 } else {
-                    theme.text_3
+                    theme.text_muted
                 })
                 .child(text)
                 .into_any_element()
@@ -6411,7 +6461,7 @@ fn render_list_item(
     };
     // Completed tasks recede but stay above the 4.5:1 body-contrast floor.
     let text_color = if item.checked == Some(true) {
-        theme.text_2
+        theme.text_secondary
     } else {
         theme.assistant_text
     };
@@ -6446,7 +6496,7 @@ fn render_list_item(
 }
 
 /// GFM task-list checkbox: accent-filled check when done, hairline empty box
-/// when open. The `send_fg` check color stays legible on the accent in both
+/// when open. The `action_fg` check color stays legible on the fill in both
 /// appearances.
 fn task_checkbox(checked: bool, theme: Theme) -> AnyElement {
     let size = 14.0;
@@ -6461,7 +6511,7 @@ fn task_checkbox(checked: bool, theme: Theme) -> AnyElement {
         box_ = box_.bg(theme.accent).child(glyph(
             "icons/check.svg",
             IconSize::Indicator.px(&theme),
-            theme.send_fg,
+            theme.accent_fg,
         ));
     } else {
         box_ = box_.border_1().border_color(theme.border_strong);
@@ -6527,7 +6577,11 @@ fn render_code_block(
             "icons/copy.svg"
         },
         CODE_COPY_BUTTON.icon_size().px(&theme),
-        if copied { theme.ok_green } else { theme.text_3 },
+        if copied {
+            theme.success
+        } else {
+            theme.text_muted
+        },
     ))
     .on_click(move |_, _, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
@@ -6542,10 +6596,10 @@ fn render_code_block(
         .w_full()
         .min_w_0()
         .h(px(34.))
-        .px(px(12.))
+        .px(DynamicSpacing::Base12.px(&theme))
         .flex()
         .items_center()
-        .gap(px(8.))
+        .gap(DynamicSpacing::Base08.px(&theme))
         .bg(theme.overlay)
         // The title strip is the card's first child; gpui clips children to a
         // rectangle, so the strip carries the card's top radius itself.
@@ -6560,7 +6614,7 @@ fn render_code_block(
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(15.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(label),
         )
         .child(copy_button);
@@ -6600,9 +6654,9 @@ fn render_code_block(
                         .flex()
                         .flex_col()
                         .flex_none()
-                        .px(px(16.))
-                        .pt(px(8.))
-                        .pb(px(12.))
+                        .px(DynamicSpacing::Base16.px(&theme))
+                        .pt(DynamicSpacing::Base08.px(&theme))
+                        .pb(DynamicSpacing::Base12.px(&theme))
                         .font_family(theme::code_font_family())
                         .text_size(theme.code_px(13.))
                         .line_height(theme.code_px(21.))
@@ -6640,17 +6694,17 @@ fn render_code_block(
                 ))
                 .w_full()
                 .h(px(30.))
-                .px(px(12.))
+                .px(DynamicSpacing::Base12.px(&theme))
                 .border_t_1()
                 .border_color(theme.border)
                 .flex()
                 .items_center()
-                .gap(px(6.))
+                .gap(DynamicSpacing::Base06.px(&theme))
                 .cursor_pointer()
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_2)
-                .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                .text_color(theme.text_secondary)
+                .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
                 .child(label)
                 .child(div().flex_1())
                 .child(glyph(
@@ -6660,7 +6714,7 @@ fn render_code_block(
                         "icons/chevron-right.svg"
                     },
                     IconSize::XSmall.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .on_click(move |_, _, cx| {
                     let key = (ix, salt, block_ix);
@@ -6851,8 +6905,8 @@ fn render_table(
             .flex_none()
             .w(px(widths[col]))
             .min_w_0()
-            .px(px(12.))
-            .py(px(8.))
+            .px(DynamicSpacing::Base12.px(&theme))
+            .py(DynamicSpacing::Base08.px(&theme))
             .text_align(align.text_align())
             .child(paragraph_text(
                 text,
@@ -7024,7 +7078,7 @@ pub(crate) fn render_changed_files(
         .flex()
         .flex_col()
         .border_t_1()
-        .border_color(theme.tool_border);
+        .border_color(theme.border_subtle);
     for (path, added, removed) in files.iter().take(visible) {
         let label = workspace_relative_path(path, workspace);
         rows = rows.child(
@@ -7033,7 +7087,7 @@ pub(crate) fn render_changed_files(
                 .px(px(14.))
                 .flex()
                 .items_center()
-                .gap(px(8.))
+                .gap(DynamicSpacing::Base08.px(&theme))
                 .child(file_glyph(
                     path,
                     theme.mode == ThemeMode::Dark,
@@ -7048,21 +7102,21 @@ pub(crate) fn render_changed_files(
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
                         .line_height(theme.ui_px(16.))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(label),
                 )
                 .child(
                     div()
                         .flex_none()
                         .text_size(TextSize::XSmall.px(&theme))
-                        .text_color(theme.add_green)
+                        .text_color(theme.success)
                         .child(format!("+{added}")),
                 )
                 .child(
                     div()
                         .flex_none()
                         .text_size(TextSize::XSmall.px(&theme))
-                        .text_color(theme.del_red)
+                        .text_color(theme.error)
                         .child(format!("-{removed}")),
                 ),
         );
@@ -7081,15 +7135,19 @@ pub(crate) fn render_changed_files(
         )
         .border_1()
         .border_color(theme.border)
-        .raised(theme.bg_raised, &theme)
+        .raised(theme.surface_elevated, &theme)
         .cursor_pointer()
         .font_weight(FontWeight::MEDIUM)
-        .text_color(theme.text_2)
-        .hover(|style| style.raised(theme.bg_hover, &theme).text_color(theme.text))
+        .text_color(theme.text_secondary)
+        .hover(|style| {
+            style
+                .raised(theme.surface_hover, &theme)
+                .text_color(theme.text_primary)
+        })
         .child(glyph(
             "icons/file-diff.svg",
             ButtonSize::Medium.icon_size().px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .child(tr!("transcript_view.review"))
         .on_click(move |_, window, cx| review(window, cx))
@@ -7107,7 +7165,7 @@ pub(crate) fn render_changed_files(
                 .size(px(28.))
                 .flex_none()
                 .rounded(Radius::Large.px(&theme))
-                .bg(theme.bg_raised)
+                .bg(theme.surface_elevated)
                 .border_1()
                 .border_color(theme.border)
                 .flex()
@@ -7116,7 +7174,7 @@ pub(crate) fn render_changed_files(
                 .child(glyph(
                     "icons/file-diff.svg",
                     IconSize::Small.px(&theme),
-                    theme.text_2,
+                    theme.text_secondary,
                 )),
         )
         .child(
@@ -7131,26 +7189,22 @@ pub(crate) fn render_changed_files(
                         .text_size(TextSize::Default.px(&theme))
                         .line_height(theme.ui_px(17.))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(title),
                 )
                 .child(
                     div()
                         .mt(px(2.))
                         .flex()
-                        .gap(px(6.))
+                        .gap(DynamicSpacing::Base06.px(&theme))
                         .text_size(TextSize::Small.px(&theme))
                         .line_height(theme.ui_px(14.))
                         .child(
                             div()
-                                .text_color(theme.add_green)
+                                .text_color(theme.success)
                                 .child(format!("+{additions}")),
                         )
-                        .child(
-                            div()
-                                .text_color(theme.del_red)
-                                .child(format!("-{deletions}")),
-                        ),
+                        .child(div().text_color(theme.error).child(format!("-{deletions}"))),
                 ),
         );
     if let Some(review) = review {
@@ -7163,7 +7217,7 @@ pub(crate) fn render_changed_files(
         .rounded(Radius::XLarge.px(&theme))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.bg_main)
+        .bg(theme.background)
         .overflow_hidden()
         .child(header)
         .child(rows);
@@ -7189,12 +7243,12 @@ pub(crate) fn render_changed_files(
             .border_color(theme.border)
             .flex()
             .items_center()
-            .gap(px(6.))
+            .gap(DynamicSpacing::Base06.px(&theme))
             .cursor_pointer()
             .text_size(TextSize::Small.px(&theme))
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.text_2)
-            .hover(|style| style.bg(theme.bg_hover).text_color(theme.text))
+            .text_color(theme.text_secondary)
+            .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
             .child(label);
         if clipped {
             toggle = toggle.child(
@@ -7204,7 +7258,7 @@ pub(crate) fn render_changed_files(
                     .truncate()
                     .font_weight(FontWeight::NORMAL)
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!(
                         "transcript_view.showing_first_of",
                         limit = EXPANDED_PREVIEW_LIMIT,
@@ -7222,7 +7276,7 @@ pub(crate) fn render_changed_files(
                         "icons/chevron-right.svg"
                     },
                     IconSize::XSmall.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .on_click(move |_, _, cx| {
                     toggle_index(&expanded_files, message_ix);
@@ -8542,7 +8596,8 @@ mod tests {
     fn inline_runs_pairs_link_ranges_with_urls() {
         let theme = Theme::dark();
         let spans = parse_inline("see [docs](https://pi.dev) now");
-        let (body, runs, links, marks) = inline_runs(&spans, FontWeight::NORMAL, theme.text, theme);
+        let (body, runs, links, marks) =
+            inline_runs(&spans, FontWeight::NORMAL, theme.text_primary, theme);
         assert_eq!(body.as_ref(), "see docs now");
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].1, "https://pi.dev");
@@ -8592,7 +8647,8 @@ mod tests {
     fn autolink_range_covers_the_rendered_url() {
         let theme = Theme::dark();
         let spans = parse_inline("go https://pi.dev/x now");
-        let (body, runs, links, marks) = inline_runs(&spans, FontWeight::NORMAL, theme.text, theme);
+        let (body, runs, links, marks) =
+            inline_runs(&spans, FontWeight::NORMAL, theme.text_primary, theme);
         assert_eq!(body.as_ref(), "go https://pi.dev/x \u{2197} now");
         assert_eq!(links.len(), 1);
         // The range covers the URL and its external-link mark.

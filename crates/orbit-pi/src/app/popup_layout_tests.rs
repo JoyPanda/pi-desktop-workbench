@@ -286,10 +286,7 @@ fn worktree_advanced_button_click_toggles_the_menu_closed(cx: &mut gpui::TestApp
         app.update(cx, |app, cx| {
             // The first click opens it.
             app.toggle_worktree_advanced(cx);
-            assert!(
-                app.worktree_advanced_open,
-                "the first click opens the menu"
-            );
+            assert!(app.worktree_advanced_open, "the first click opens the menu");
 
             // A click outside the menu (the button sits outside the occluded
             // popup) dismisses it on mouse-down and stamps the gesture...
@@ -305,10 +302,7 @@ fn worktree_advanced_button_click_toggles_the_menu_closed(cx: &mut gpui::TestApp
             // A later, deliberate click opens it again.
             app.menu_dismissed_at = None;
             app.toggle_worktree_advanced(cx);
-            assert!(
-                app.worktree_advanced_open,
-                "a later click reopens the menu"
-            );
+            assert!(app.worktree_advanced_open, "a later click reopens the menu");
         });
     });
 }

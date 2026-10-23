@@ -7,30 +7,27 @@ import { OsDownloadButton } from "@/components/download-button";
 import { Shot } from "@/components/shot";
 import { Band, ButtonLink, Shell } from "@/components/ui";
 import { getLatestRelease, LATEST_RELEASE_URL } from "@/lib/releases";
+import { NO_DOWNLOADS, preferredDownload } from "@/lib/downloads";
 
 export async function Hero() {
   const release = await getLatestRelease();
-  const assets = {
-    macos: release?.macos,
-    windows: release?.windows,
-    linux: release?.linux,
-  };
+  const downloads = release?.downloads ?? NO_DOWNLOADS;
 
   const platforms = [
     {
       icon: <MacosIcon className="size-3.5" />,
       label: "macOS 13+",
-      href: release?.macos,
+      href: preferredDownload(downloads, "macos")?.url,
     },
     {
       icon: <WindowsIcon className="size-3.5" />,
       label: "Windows",
-      href: release?.windows,
+      href: preferredDownload(downloads, "windows")?.url,
     },
     {
       icon: <LinuxIcon className="size-3.5" />,
       label: "Linux",
-      href: release?.linux,
+      href: preferredDownload(downloads, "linux")?.url,
     },
   ];
 
@@ -78,7 +75,7 @@ export async function Hero() {
             style={{ animationDelay: "200ms" }}
           >
             <OsDownloadButton
-              assets={assets}
+              downloads={downloads}
               fallback={LATEST_RELEASE_URL}
               className="min-h-12 px-6 text-sm sm:min-w-[208px]"
             />
@@ -138,7 +135,6 @@ export async function Hero() {
           />
           <div className="rise-window relative mx-auto w-full max-w-[1180px]">
             <Shot
-              variant="product"
               src="/screens/session.png"
               srcLight="/screens/session-light.png"
               priority

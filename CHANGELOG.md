@@ -9,6 +9,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Orbit Azure** and **Orbit Azure Light** are new themes, and they are the
+  appearance default: a charcoal (or cool near-white) canvas with a restrained
+  blue accent and accent-filled primary buttons. The original ember palette
+  stays available as **Orbit** / **Orbit Light**, unchanged in identity —
+  near-black canvas, ember accent, light primary buttons with dark ink. Saved
+  preferences keep working: `orbit` still resolves to the ember palette and the
+  old theme keys migrate as before.
+- Primary buttons now read a dedicated fill role (`action`) rather than the
+  accent, so a palette can use a neutral button fill without giving up its
+  accent for selection washes, focus, tints, and accent-colored text.
+- **Settings → Privacy → Temporary files** lists Orbit's scratch entries in
+  its `orbit-pi` folder inside the system temp directory, with each file's size
+  and age, an **Open folder** action, and **Clean up now**. The list covers
+  bug-report screenshots, update downloads, and helper scripts, plus older
+  top-level `orbit-*` leftovers, except entries a live Orbit process still
+  needs.
+- A separate **AI scratch files** group lists pi's own `pi-*` entries (shell
+  output, codemode images, share/editor working files) and removes only those
+  last used more than an hour ago. Neither section touches your workspace or
+  pi's session store.
+- **Linux arm64 builds** ship next to the x86_64 ones: a native `arm64` `.deb`
+  and an `aarch64` `.tar.gz`, built on the same release run and published as
+  their own update feed, so Orbit installs and updates natively on Arm machines
+  instead of only on x86_64.
+
+### Removed
+
+- **Thirty-six ported editor themes** are gone from Settings → Appearance.
+  Orbit's six palettes and **Flexoki** / **Flexoki Light** remain (plus the new
+  **Orbit Azure** pair), and the theme
+  dropdown now lists every palette for the mode in effect instead of hiding most
+  of them behind an "All themes…" disclosure. A saved preference that names a
+  retired theme still loads: dark keys fall back to Orbit, light keys to Orbit
+  Light.
+
+### Changed
+
+- Color is a single semantic vocabulary now. `Theme` exposes the design system's
+  complete surface/text/accent/status roles (`background`, `surface`,
+  `surface_secondary`, `surface_elevated`, `surface_hover`, `surface_active`,
+  `border`, `border_subtle`, `text_primary`, `text_secondary`, `text_muted`,
+  `text_disabled`, `accent`, `accent_hover`, `accent_pressed`, `accent_fg`,
+  `accent_text`, `selection`, `selection_fg`, `focus_ring`, `success`, `warning`,
+  `error`, `error_fg`, `info`), and every component paints through them instead of
+  the old per-palette names. The raw palette layer uses the same names, so a
+  palette edit touches one place.
+- Accent-colored text and icons read `accent_text` (a legible blue: `#6EA0FF` on
+  charcoal, `#1F5DD8` on light) while `accent` stays the fill role; selected
+  navigation and list rows paint `selection`, pressed/open controls paint
+  `surface_active`, and keyboard focus paints `focus_ring` (with `button_frame` /
+  `icon_button_frame` gaining a visible focus ring).
+- Status colors are checked as text: light success/warning/error and dark
+  Flexoki/Azure error were stepped until they clear 4.5:1 on the raised card, and
+  `text_muted` was lifted in every palette so metadata on a card stops falling
+  below AA. The default dark selection wash is `#2F3949` (one step below the
+  reference `#303A4B`) so accent labels on the active row clear AA too.
+- Disabled controls use `text_disabled` instead of a component-level
+  `opacity(0.5)`, so a dimmed control's label stays predictable in both themes.
+- The design-token spacing sweep is finished: every on-scale hard-coded
+  padding / margin / gap in the app's chrome (top-level view, transcript row
+  chrome, session strip, Sidepane, diff view, context meter, Explorer panel
+  and viewer, update dialog, Skills page, custom-UI surfaces, Git panel
+  widgets, dialogs) now resolves through `DynamicSpacing`, so all of it scales
+  with the UI font size and Spacing Density setting like the already-migrated
+  surfaces did. Optical 1–2px nudges, off-scale legacy rhythm values
+  (10/14/18/22px), and bespoke geometry keep their fixed px.
+- Repeated popover-width magic numbers became named constants (`BRANCH_MENU_W`,
+  `ACTION_MENU_W` in the Git panel; `MODE_POPUP_W` for the Access / Workflow
+  pickers), and a legacy NaN font-size value no longer panics startup — it
+  migrates to the default UI font size.
+
+### Added
+
 - **Image attachments are compressed at ingest.** A large PNG/JPEG attached to a
   prompt is downscaled (longest edge 1400 px, never upscaled) and re-encoded as
   JPEG (quality steps down to fit a 512 KiB base64 payload), while images with an

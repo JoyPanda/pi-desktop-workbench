@@ -5,18 +5,24 @@ import { OrbitIcon } from "@/components/brand";
 import { OsDownloadButton } from "@/components/download-button";
 import { Band, ButtonLink, Shell } from "@/components/ui";
 import { getLatestRelease, LATEST_RELEASE_URL } from "@/lib/releases";
+import { NO_DOWNLOADS, preferredDownload } from "@/lib/downloads";
 
 export async function Closer() {
   const release = await getLatestRelease();
-  const assets = {
-    macos: release?.macos,
-    windows: release?.windows,
-    linux: release?.linux,
-  };
+  const downloads = release?.downloads ?? NO_DOWNLOADS;
   const platforms = [
-    { label: "macOS", href: release?.macos ?? LATEST_RELEASE_URL },
-    { label: "Windows", href: release?.windows ?? LATEST_RELEASE_URL },
-    { label: "Linux", href: release?.linux ?? LATEST_RELEASE_URL },
+    {
+      label: "macOS",
+      href: preferredDownload(downloads, "macos")?.url ?? LATEST_RELEASE_URL,
+    },
+    {
+      label: "Windows",
+      href: preferredDownload(downloads, "windows")?.url ?? LATEST_RELEASE_URL,
+    },
+    {
+      label: "Linux",
+      href: preferredDownload(downloads, "linux")?.url ?? LATEST_RELEASE_URL,
+    },
   ];
 
   return (
@@ -44,7 +50,7 @@ export async function Closer() {
 
         <div className="mt-9 flex w-full flex-col items-stretch justify-center gap-3 sm:w-auto sm:flex-row sm:items-center">
           <OsDownloadButton
-            assets={assets}
+            downloads={downloads}
             fallback={LATEST_RELEASE_URL}
             className="min-h-12 px-6 text-sm sm:min-w-[208px]"
           />

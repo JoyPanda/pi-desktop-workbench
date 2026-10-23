@@ -193,8 +193,21 @@ its own component rather than an `InputField`. Every search box in the app share
 picker search row (`picker_search_frame`): the command palette, all pickers, the Explorer /
 Sidepane filters, the settings / Git / Usage searches, and the transcript find bar. The Git
 panel's tab strip and branch row are on the tokens too (one shared `tab_bar` for Changes /
-History / Graph / Issues / Pulls). The transcript's inner content (activity bodies, thinking,
-edit diffs, detail sections) still carries bespoke layout px.
+History / Graph / Issues / Pulls). The 2026-10 spacing sweep finished the holdout chrome: the
+top-level view (sidebar / onboarding / popovers), the transcript's row chrome, the session
+strip, the Sidepane review rows, diff view, the context meter, the Explorer panel and viewer,
+the update dialog, the Skills page, the custom-UI surfaces, the Git panel widgets, and the
+dialogs — every on-scale `p/px/py/pl/pr/pt/pb/m*/gap(px(N))` site in the app now resolves through
+`DynamicSpacing`. What stays px on purpose: 1–2px optical nudges (dot / badge insets), the
+legacy 6–10px rhythm values with no token equivalent (10/14/18/22 — folded into the scale or
+retired by design, pending), and bespoke geometry (widths, heights, icon and dot sizes).
+The palette set is ten: the blue design holds **Orbit Azure** / **Orbit Azure Light** and is the
+appearance default, while **Orbit** / **Orbit Light** carry the original ember identity. Primary
+buttons fill from a role separate from the identity accent — `action` / `action_hover` /
+`action_pressed` with `action_fg` ink — because the ember palettes key their buttons to a light
+neutral with dark ink while Azure keys them to its accent; `accent` / `accent_hover` /
+`accent_pressed` stay the identity hue for selection washes, focus, tints, and accent text
+(see DESIGN.md, *The Primary-Action Role*).
 
 ### D12 — Default session model: Orbit-owned config, applied at spawn and session birth
 **Choice:** one optional default model (`provider` + `modelId`) and thinking level for new
@@ -284,7 +297,7 @@ legacy app today:
 
 ### Implementation status (living)
 
-Done: streaming transcript + virtualization; markdown + highlighting; composer with steering, follow-ups, cancel, autocomplete, attachments; extension dialogs; diff/Review + Git page + GitHub issues/PRs (where `gh` is available); sessions (list/switch/new/delete/clone/cross-workspace) over an Orbit-owned project list (only folders the user added; removing one never touches pi) whose groups sort by activity, added date, name, or session count, with a **warm process pool** so re-opening a recent session is a resume, not a Node spawn; Git worktrees as first-class workspaces (`worktree.rs` + the Worktrees page: discovery, create from a new/existing branch, open/rename/move/lock/remove/prune/repair, configurable `.wt` root, optional async setup script with `ORBIT_ROOT_PATH`/`ORBIT_WORKTREE_PATH`, sessions rooted in and restored to the worktree — D14); Explorer project panel + editable Files surface; integrated terminal (⌘J); usage, skills, plugins, models, providers, settings pages; transcript find; image lightbox; theming (dark/light/system, 43 palettes) + reduce-motion; localization (ten locales + System, D9); in-app signed updater + Version History; notifications; open-in-editor; signed/notarizable macOS packaging + best-effort Windows/Linux bundles (D5); CI; access modes (a guard, not a sandbox), workflow modes (Plan/Build/Ask per D8), and the auto-title / quota extension bridges (D10); Zed design tokens (D11) with context menus, the tooltip, the extension dialog, the floating modal cards (provider usage / API-key / editor, update dialog, custom UI), the sidebar session / workspace rows, the transcript's message / card chrome, the settings section / group / row chrome, UI type on `TextSize` across every surface, corner radii on `Radius`, and one-shot motion on `AnimationDuration` migrated onto them.
+Done: streaming transcript + virtualization; markdown + highlighting; composer with steering, follow-ups, cancel, autocomplete, attachments; extension dialogs; diff/Review + Git page + GitHub issues/PRs (where `gh` is available); sessions (list/switch/new/delete/clone/cross-workspace) over an Orbit-owned project list (only folders the user added; removing one never touches pi) whose groups sort by activity, added date, name, or session count, with a **warm process pool** so re-opening a recent session is a resume, not a Node spawn; Git worktrees as first-class workspaces (`worktree.rs` + the Worktrees page: discovery, create from a new/existing branch, open/rename/move/lock/remove/prune/repair, configurable `.wt` root, optional async setup script with `ORBIT_ROOT_PATH`/`ORBIT_WORKTREE_PATH`, sessions rooted in and restored to the worktree — D14); Explorer project panel + editable Files surface; integrated terminal (⌘J); usage, skills, plugins, models, providers, settings pages; transcript find; image lightbox; theming (dark/light/system, ten palettes) + reduce-motion; localization (ten locales + System, D9); in-app signed updater + Version History; notifications; open-in-editor; signed/notarizable macOS packaging + best-effort Windows/Linux bundles (D5); CI; access modes (a guard, not a sandbox), workflow modes (Plan/Build/Ask per D8), and the auto-title / quota extension bridges (D10); Zed design tokens (D11) with context menus, the tooltip, the extension dialog, the floating modal cards (provider usage / API-key / editor, update dialog, custom UI), the sidebar session / workspace rows, the transcript's message / card chrome, the settings section / group / row chrome, UI type on `TextSize` across every surface, corner radii on `Radius`, and one-shot motion on `AnimationDuration` migrated onto them.
 
 Attached images are compressed when they are queued (`attachments.rs`): the
 longest edge is capped at 1400 px (never upscaled), opaque images are re-encoded
@@ -340,6 +353,23 @@ version, and the signed-in `gh` account — through `gh issue create --repo` whe
 the CLI is installed and authenticated, falling back to GitHub's new-issue page
 with the title, body, and label prefilled. `gh` keeps ownership of the token:
 Orbit still never stores one (`bug_report.rs`).
+
+Settings → Privacy pairs session retention with a **Temporary files** section.
+Orbit groups its scratch files under `<system temp>/orbit-pi/` — bug-report
+screenshots, update downloads, and login helpers — and the section lists that
+folder's contents plus older `orbit-*` entries left directly in the temp root,
+showing each file's size and age, with **Open folder** and **Clean up now**.
+Cleanup skips entries a live Orbit process may still be using — the current
+process's own update staging and `.command` files, plus any embedded pid that
+is still alive on Unix — and reports removed, skipped, and failed counts as one
+toast (`temp_files.rs`, `temp_ui.rs`).
+
+A second **AI scratch files** group covers pi's own `pi-*` temp entries written
+directly into the temp root: shell output logs, codemode images, MCP output,
+and share/editor working files. Its cleanup removes only entries last modified
+more than an hour ago, so a live run keeps its logs and image paths. The two
+groups have independent cleanup actions and neither touches pi's session store
+or anything in the workspace.
 
 Composer sending is configurable in Settings → Agent → Behavior: Enter queues a follow-up
 by default or steers the running task, with Alt/Option+Enter selecting the opposite mode.

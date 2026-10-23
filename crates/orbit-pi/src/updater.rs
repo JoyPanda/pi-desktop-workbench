@@ -1138,7 +1138,7 @@ where
             anyhow::anyhow!("the update feed does not declare a valid artifact length")
         })?;
 
-    let directory = unique_temp_directory("orbit-update")?;
+    let directory = unique_temp_directory("update")?;
     let archive = directory.join(artifact_name());
     download_to(&item.url, &archive, 600, MAX_ARTIFACT_BYTES)?;
     let actual_length = std::fs::metadata(&archive)?.len();
@@ -1536,9 +1536,9 @@ fn take_update_error(layout: &InstallLayout) -> Option<String> {
 // ── small utilities ─────────────────────────────────────────────────────
 
 fn unique_temp_directory(kind: &str) -> anyhow::Result<PathBuf> {
+    let root = crate::temp_files::ensure_dir()?;
     for _ in 0..100 {
-        let candidate =
-            std::env::temp_dir().join(format!("{kind}-{}-{}", std::process::id(), unique_nonce()));
+        let candidate = root.join(format!("{kind}-{}-{}", std::process::id(), unique_nonce()));
         match std::fs::create_dir(&candidate) {
             Ok(()) => return Ok(candidate),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,

@@ -38,7 +38,7 @@ impl OrbitApp {
                 (!self.model_label.is_empty() && self.model_label != "…").then(|| {
                     div()
                         .text_size(TextSize::XSmall.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!(
                             "bug_report.using_model",
                             model = self.model_label.clone()
@@ -52,7 +52,7 @@ impl OrbitApp {
                     icon(
                         "icons/spark.svg",
                         ButtonSize::Medium.icon_size().px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     )
                     .into_any_element(),
                 ),
@@ -113,9 +113,9 @@ impl OrbitApp {
                     .px(DynamicSpacing::Base12.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
                     .rounded(Radius::Large.px(&theme))
-                    .bg(theme.stop_red.opacity(0.10))
+                    .bg(theme.error.opacity(0.10))
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.stop_red)
+                    .text_color(theme.error)
                     .child(error.to_string())
                     .into_any_element(),
             );
@@ -142,12 +142,12 @@ impl OrbitApp {
                         .child(icon(
                             "icons/github.svg",
                             IconSize::Small.px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         ))
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .child(tr!(
                                     "bug_report.diagnostics",
                                     version = env!("CARGO_PKG_VERSION")
@@ -175,7 +175,7 @@ impl OrbitApp {
                                 icon(
                                     "icons/github.svg",
                                     ButtonSize::Medium.icon_size().px(&theme),
-                                    theme.send_fg,
+                                    theme.action_fg,
                                 )
                                 .into_any_element(),
                             ),
@@ -207,14 +207,14 @@ impl OrbitApp {
             )
             .cursor_pointer();
             let seg = if selected {
-                seg.bg(theme.active)
-                    .text_color(theme.text)
+                seg.bg(theme.surface_active)
+                    .text_color(theme.text_primary)
                     .border_color(theme.border)
             } else {
-                seg.bg(theme.bg_raised)
-                    .text_color(theme.text_2)
+                seg.bg(theme.surface_elevated)
+                    .text_color(theme.text_secondary)
                     .border_color(theme.border)
-                    .hover(|style| style.bg(theme.bg_hover))
+                    .hover(|style| style.bg(theme.surface_hover))
             };
             row = row.child(
                 press(seg)
@@ -241,7 +241,7 @@ impl OrbitApp {
                 icon(
                     "icons/image.svg",
                     ButtonSize::Medium.icon_size().px(&theme),
-                    theme.text_2,
+                    theme.text_secondary,
                 )
                 .into_any_element(),
             ),
@@ -268,7 +268,7 @@ impl OrbitApp {
                         div()
                             .text_size(input::LABEL.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("bug_report.screenshots")),
                     )
                     .child(add),
@@ -280,7 +280,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("bug_report.screenshot_hint")),
             )
             .into_any_element()
@@ -310,10 +310,12 @@ impl OrbitApp {
                                         .object_fit(ObjectFit::Cover),
                                 )
                                 .into_any_element(),
-                            None => {
-                                icon("icons/image.svg", IconSize::XSmall.px(&theme), theme.text_3)
-                                    .into_any_element()
-                            }
+                            None => icon(
+                                "icons/image.svg",
+                                IconSize::XSmall.px(&theme),
+                                theme.text_muted,
+                            )
+                            .into_any_element(),
                         };
                         button_frame(
                             div().id(ElementId::NamedInteger("bug-screenshot".into(), ix as u64)),
@@ -322,7 +324,7 @@ impl OrbitApp {
                         )
                         .border_1()
                         .border_color(theme.border)
-                        .raised(theme.bg_raised, &theme)
+                        .raised(theme.surface_elevated, &theme)
                         .cursor_pointer()
                         .hover(|style| style.raised(theme.overlay, &theme))
                         .child(visual)
@@ -330,13 +332,13 @@ impl OrbitApp {
                             div()
                                 .max_w(px(160.))
                                 .truncate()
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(shot.name.clone()),
                         )
                         .child(icon(
                             "icons/x.svg",
                             ButtonSize::Medium.icon_size().px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         ))
                         .on_mouse_up(
                             MouseButton::Left,
@@ -582,7 +584,7 @@ fn bug_row(theme: Theme, label: String, control: AnyElement) -> AnyElement {
             div()
                 .text_size(TextSize::Default.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(label),
         )
         .child(div().flex_none().child(control))
@@ -618,7 +620,7 @@ fn bug_field(
                     div()
                         .text_size(input::LABEL.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(label),
                 )
                 .children(action),
@@ -627,7 +629,7 @@ fn bug_field(
             stretch(input_field_frame(div(), &theme))
                 .w_full()
                 .min_h(min_h.max(input::min_height(&theme)))
-                .bg(theme.bg_composer)
+                .bg(theme.surface_secondary)
                 .child(div().flex_1().min_w_0().flex().flex_col().child(input)),
         )
         .into_any_element()

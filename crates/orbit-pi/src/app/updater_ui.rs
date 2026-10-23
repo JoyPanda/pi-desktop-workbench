@@ -327,13 +327,13 @@ impl OrbitApp {
             let label = tr!("updater_ui.updating");
             let button = icon_button_frame(div().id("sidebar-update"), &theme, ButtonSize::Compact)
                 .rounded_full()
-                .raised(theme.accent, &theme)
+                .raised(theme.action, &theme)
                 .cursor_default()
                 .tooltip(move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into())
                 .child(crate::app::spinner(
                     ElementId::NamedInteger("update-spin".into(), 0),
                     ButtonSize::Compact.icon_size().px(&theme),
-                    theme.bg_main,
+                    theme.action_fg,
                     theme,
                 ));
             return Some(button.into_any_element());
@@ -344,8 +344,8 @@ impl OrbitApp {
             .overflow_hidden()
             .rounded_full()
             .relative()
-            .raised(theme.accent, &theme)
-            .text_color(theme.bg_main)
+            .raised(theme.action, &theme)
+            .text_color(theme.action_fg)
             .text_size(button::label_size(ButtonSize::Compact).px(&theme))
             .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
@@ -484,7 +484,9 @@ impl OrbitApp {
             .items_center()
             .cursor_pointer()
             .when(on, |track| track.bg(theme.accent).justify_end())
-            .when(!on, |track| track.bg(theme.bg_raised).justify_start())
+            .when(!on, |track| {
+                track.bg(theme.surface_elevated).justify_start()
+            })
             .hover(|track| track.border_color(theme.border_strong))
             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                 this.update(cx, |app, cx| {
@@ -510,9 +512,10 @@ impl OrbitApp {
                     ButtonSize::Medium,
                 )
                 .group(BUTTON_GROUP)
-                .raised(theme.send_bg, &theme)
+                .raised(theme.action, &theme)
                 .cursor_pointer()
-                .hover(|s| s.raised(theme.send_bg_hover, &theme))
+                .hover(|s| s.raised(theme.action_hover, &theme))
+                .active(|s| s.raised(theme.action_pressed, &theme))
                 .tooltip(move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into())
                 .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                     this.update(cx, |app, cx| app.open_staged_update_dialog(cx));
@@ -520,7 +523,7 @@ impl OrbitApp {
                 .child(icon(
                     "icons/arrow-down.svg",
                     ButtonSize::Medium.icon_size().px(&theme),
-                    theme.send_fg,
+                    theme.action_fg,
                 ))
                 .into_any_element()
             }
@@ -532,8 +535,8 @@ impl OrbitApp {
             .font_weight(FontWeight::MEDIUM)
             .border_1()
             .border_color(theme.border)
-            .bg(theme.bg_raised)
-            .text_color(theme.text_3)
+            .bg(theme.surface_elevated)
+            .text_color(theme.text_muted)
             .cursor_default()
             .child(tr!("updater_ui.updating"))
             .into_any_element(),
@@ -545,10 +548,10 @@ impl OrbitApp {
             .font_weight(FontWeight::MEDIUM)
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
-            .text_color(theme.text_2)
+            .raised(theme.surface_elevated, &theme)
+            .text_color(theme.text_secondary)
             .cursor_pointer()
-            .hover(|s| s.raised(theme.bg_hover, &theme))
+            .hover(|s| s.raised(theme.surface_hover, &theme))
             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                 this.update(cx, |app, cx| app.begin_update_check(cx));
             })
@@ -601,7 +604,7 @@ impl OrbitApp {
                     .text_size(modal::HEADLINE.px(&theme))
                     .line_height(modal::HEADLINE.line_height(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(title),
             );
 
@@ -617,7 +620,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(tr!("updater_ui.searching_for_new_version")),
                     )
                     .child(update_progress_bar(theme))
@@ -633,7 +636,7 @@ impl OrbitApp {
                     Some(notes) if !notes.trim().is_empty() => release_notes_view(notes, theme),
                     _ => div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("updater_ui.no_release_notes"))
                         .into_any_element(),
                 };
@@ -647,7 +650,7 @@ impl OrbitApp {
                         div()
                             .whitespace_normal()
                             .text_size(TextSize::Default.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(intro),
                     );
                 if !can_install {
@@ -655,7 +658,7 @@ impl OrbitApp {
                         div()
                             .whitespace_normal()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(tr!("updater_ui.check_only")),
                     );
                 }
@@ -666,7 +669,7 @@ impl OrbitApp {
                             div()
                                 .text_size(TextSize::Small.px(&theme))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .child(tr!("updater_ui.whats_new")),
                         )
                         .child(
@@ -686,7 +689,7 @@ impl OrbitApp {
                     .min_w_0()
                     .whitespace_normal()
                     .text_size(TextSize::Default.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(tr!(
                         "updater_ui.up_to_date_detail",
                         version = env!("CARGO_PKG_VERSION")
@@ -700,7 +703,7 @@ impl OrbitApp {
                     .min_w_0()
                     .whitespace_normal()
                     .text_size(TextSize::Default.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(error.clone())
                     .into_any_element(),
             ),
@@ -711,7 +714,7 @@ impl OrbitApp {
                     .min_w_0()
                     .whitespace_normal()
                     .text_size(TextSize::Default.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(tr!("updater_ui.update_unavailable_detail"))
                     .into_any_element(),
             ),
@@ -793,7 +796,7 @@ impl OrbitApp {
                 .inset_0()
                 .occlude()
                 .bg(scrim)
-                .px(px(24.))
+                .px(DynamicSpacing::Base24.px(&theme))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -903,27 +906,30 @@ fn inline_notes_text(text: &str) -> String {
 
 /// The changelog column in the update modal.
 fn release_notes_view(notes: &str, theme: Theme) -> AnyElement {
-    let mut column = div().flex().flex_col().gap(px(6.));
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .gap(DynamicSpacing::Base06.px(&theme));
     for block in parse_release_notes(notes) {
         column = column.child(match block {
             NoteBlock::Heading(text) => div()
-                .pt(px(6.))
+                .pt(DynamicSpacing::Base06.px(&theme))
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(inline_notes_text(&text))
                 .into_any_element(),
             NoteBlock::Bullet(text) => div()
                 .flex()
                 .items_start()
-                .gap(px(8.))
+                .gap(DynamicSpacing::Base08.px(&theme))
                 .child(
                     div()
-                        .mt(px(6.))
+                        .mt(DynamicSpacing::Base06.px(&theme))
                         .size(px(4.))
                         .flex_none()
                         .rounded_full()
-                        .bg(theme.text_3),
+                        .bg(theme.text_muted),
                 )
                 .child(
                     div()
@@ -931,14 +937,14 @@ fn release_notes_view(notes: &str, theme: Theme) -> AnyElement {
                         .min_w_0()
                         .whitespace_normal()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(inline_notes_text(&text)),
                 )
                 .into_any_element(),
             NoteBlock::Paragraph(text) => div()
                 .whitespace_normal()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(inline_notes_text(&text))
                 .into_any_element(),
         });
@@ -956,23 +962,27 @@ fn version_history_view(
 ) -> AnyElement {
     let mut entries = div().flex().flex_col().gap(px(14.));
     for release in history {
-        let mut heading = div().flex().items_center().gap(px(8.)).child(
-            div()
-                .text_size(TextSize::Default.px(&theme))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text)
-                .child(format!("v{}", release.version)),
-        );
+        let mut heading = div()
+            .flex()
+            .items_center()
+            .gap(DynamicSpacing::Base08.px(&theme))
+            .child(
+                div()
+                    .text_size(TextSize::Default.px(&theme))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text_primary)
+                    .child(format!("v{}", release.version)),
+            );
         if release.version == current {
             heading = heading.child(
                 div()
-                    .px(px(6.))
+                    .px(DynamicSpacing::Base06.px(&theme))
                     .py(px(1.))
                     .rounded_full()
-                    .bg(theme.bg_hover)
+                    .bg(theme.surface_hover)
                     .text_size(TextSize::XSmall.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("updater_ui.current")),
             );
         }
@@ -980,7 +990,7 @@ fn version_history_view(
             Some(notes) if !notes.trim().is_empty() => release_notes_view(notes, theme),
             _ => div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("updater_ui.no_release_notes"))
                 .into_any_element(),
         };
@@ -988,7 +998,7 @@ fn version_history_view(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(6.))
+                .gap(DynamicSpacing::Base06.px(&theme))
                 .child(heading)
                 .child(notes),
         );
@@ -998,7 +1008,7 @@ fn version_history_view(
         .max_h(px(360.))
         .overflow_y_scroll()
         .px(px(18.))
-        .pb(px(16.))
+        .pb(DynamicSpacing::Base16.px(&theme))
         .child(entries)
         .into_any_element()
 }
@@ -1019,16 +1029,17 @@ fn dialog_button(
         .on_mouse_up(MouseButton::Left, on_mouse_up);
     let button = if primary {
         button
-            .raised(theme.send_bg, &theme)
-            .text_color(theme.send_fg)
-            .hover(|s| s.raised(theme.send_bg_hover, &theme))
+            .raised(theme.action, &theme)
+            .text_color(theme.action_fg)
+            .hover(|s| s.raised(theme.action_hover, &theme))
+            .active(|s| s.raised(theme.action_pressed, &theme))
     } else {
         button
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
-            .text_color(theme.text_2)
-            .hover(|s| s.raised(theme.bg_hover, &theme))
+            .raised(theme.surface_elevated, &theme)
+            .text_color(theme.text_secondary)
+            .hover(|s| s.raised(theme.surface_hover, &theme))
     };
     press(button).child(label).into_any_element()
 }
@@ -1050,7 +1061,7 @@ fn updater_pill_content(theme: Theme, label: String, reveal: f32) -> impl IntoEl
                 .child(icon(
                     "icons/arrow-down.svg",
                     IconSize::XSmall.px(&theme),
-                    theme.bg_main,
+                    theme.background,
                 )),
         )
         .child(
@@ -1111,7 +1122,7 @@ fn update_progress_bar(theme: Theme) -> impl IntoElement {
         .w_full()
         .h(px(3.))
         .rounded_full()
-        .bg(theme.bg_hover)
+        .bg(theme.surface_hover)
         .overflow_hidden()
         .child(
             div()

@@ -371,6 +371,16 @@ const SETTINGS_SEARCH_INDEX: &[(SettingsSection, &str, &str)] = &[
         "privacy session retention cleanup local data",
     ),
     (
+        SettingsSection::Privacy,
+        "settings.temporary_files",
+        "temporary temp cache scratch files cleanup remove folder",
+    ),
+    (
+        SettingsSection::Privacy,
+        "settings.ai_scratch_files",
+        "ai pi agent scratch logs codemode images share editor cleanup temp",
+    ),
+    (
         SettingsSection::About,
         "settings.about",
         "about version updates source github",
@@ -438,7 +448,7 @@ impl OrbitApp {
             .min_h_0()
             .flex()
             .relative()
-            .bg(theme.bg_main)
+            .bg(theme.background)
             .font_family(theme::ui_font_family())
             // ── nav column ──
             .child(
@@ -446,7 +456,7 @@ impl OrbitApp {
                     .w(px(240.))
                     .h_full()
                     .flex_shrink_0()
-                    .bg(theme.bg_sidebar)
+                    .bg(theme.surface)
                     .border_r_1()
                     .border_color(theme.border)
                     .flex()
@@ -479,18 +489,18 @@ impl OrbitApp {
                                         .items_center()
                                         .gap(DynamicSpacing::Base08.px(&theme))
                                         .cursor_pointer()
-                                        .hover(|s| s.bg(theme.bg_hover)),
+                                        .hover(|s| s.bg(theme.surface_hover)),
                                 )
                                 .on_mouse_up(MouseButton::Left, cx.listener(Self::on_settings_back))
                                 .child(icon(
                                     "icons/arrow-left.svg",
                                     IconSize::Small.px(&theme),
-                                    theme.text_3,
+                                    theme.text_muted,
                                 ))
                                 .child(
                                     div()
                                         .text_size(TextSize::Default.px(&theme))
-                                        .text_color(theme.text_2)
+                                        .text_color(theme.text_secondary)
                                         .child(tr!("settings.back")),
                                 ),
                             ),
@@ -512,7 +522,7 @@ impl OrbitApp {
                                 div()
                                     .text_size(TextSize::XSmall.px(&theme))
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(tr!("settings.settings")),
                             ),
                     )
@@ -561,10 +571,11 @@ impl OrbitApp {
                                         .gap(DynamicSpacing::Base08.px(&theme))
                                         .cursor_pointer()
                                         .when(selected, |row| {
-                                            row.bg(theme.accent.opacity(0.10))
-                                                .hover(|s| s.bg(theme.accent.opacity(0.14)))
+                                            row.bg(theme.selection).hover(|s| s.bg(theme.selection))
                                         })
-                                        .when(!selected, |row| row.hover(|s| s.bg(theme.bg_hover)))
+                                        .when(!selected, |row| {
+                                            row.hover(|s| s.bg(theme.surface_hover))
+                                        })
                                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                                             this.update(cx, |app, cx| {
                                                 app.set_settings_section(section, cx);
@@ -573,14 +584,18 @@ impl OrbitApp {
                                         .child(icon(
                                             section_icon,
                                             IconSize::Small.px(&theme),
-                                            if selected { theme.accent } else { theme.text_3 },
+                                            if selected {
+                                                theme.accent_text
+                                            } else {
+                                                theme.text_muted
+                                            },
                                         ))
                                         .child(
                                             div()
                                                 .text_color(if selected {
-                                                    theme.text
+                                                    theme.selection_fg
                                                 } else {
-                                                    theme.text_2
+                                                    theme.text_secondary
                                                 })
                                                 .child(label.to_string()),
                                         );
@@ -621,14 +636,14 @@ impl OrbitApp {
                                 div()
                                     .text_size(TextSize::Small.px(&theme))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(tr!("app.name")),
                             )
                             .child(
                                 div()
                                     .text_size(TextSize::Small.px(&theme))
                                     .font(crate::usage::view::num_font())
-                                    .text_color(theme.text_3.opacity(0.7))
+                                    .text_color(theme.text_muted)
                                     .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
                             ),
                     ),
@@ -733,7 +748,7 @@ impl OrbitApp {
             .child(icon(
                 "icons/search.svg",
                 input::ICON.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(div().flex_1().min_w_0().child(self.settings_search.clone()));
         div()
@@ -813,7 +828,7 @@ impl OrbitApp {
                 .items_center()
                 .gap(DynamicSpacing::Base12.px(&theme))
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.bg_hover)),
+                .hover(|s| s.bg(theme.surface_hover)),
         )
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| {
@@ -821,21 +836,25 @@ impl OrbitApp {
                 app.set_settings_section(section, cx);
             });
         })
-        .child(icon(section_icon, IconSize::Small.px(&theme), theme.text_3))
+        .child(icon(
+            section_icon,
+            IconSize::Small.px(&theme),
+            theme.text_muted,
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
                 .text_size(TextSize::Default.px(&theme))
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(tr!(label_key).to_string()),
         )
         .child(
             div()
                 .flex_none()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!(section_key).to_string()),
         )
         .into_any_element()
@@ -896,13 +915,13 @@ impl OrbitApp {
                     .text_size(TextSize::Large.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
                     .line_height(BufferLineHeight::Standard.relative())
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(title.to_string()),
             )
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(subtitle.to_string()),
             )
     }
@@ -983,7 +1002,7 @@ impl OrbitApp {
                     Some(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(format!("v{}", env!("CARGO_PKG_VERSION")))
                             .into_any_element(),
                     ),
@@ -1002,7 +1021,7 @@ impl OrbitApp {
                         Some(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child("0.2.2")
                                 .into_any_element(),
                         ),
@@ -1071,7 +1090,7 @@ impl OrbitApp {
             .child(icon(
                 "icons/search.svg",
                 input::ICON.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(div().flex_1().min_w_0().child(self.models_filter.clone()));
 
@@ -1100,8 +1119,8 @@ impl OrbitApp {
         let filtered =
             self.models_favorites_only || !needle.is_empty() || provider_filter.is_some();
 
-        // A filter chip in the toolbar's button language: `bg_raised` + a
-        // hairline when off, the standard `active` fill when on — never an
+        // A filter chip in the toolbar's button language: `surface_elevated` + a
+        // hairline when off, the standard `selection` fill when on — never an
         // accent wash, which is reserved for the favorite stars themselves.
         let favorites_button = button_frame(
             div().id("models-favorites-filter"),
@@ -1113,13 +1132,13 @@ impl OrbitApp {
         .cursor_pointer()
         .when(self.models_favorites_only, |button| {
             button
-                .raised(theme.active, &theme)
-                .text_color(theme.active_fg)
+                .raised(theme.surface_active, &theme)
+                .text_color(theme.text_primary)
         })
         .when(!self.models_favorites_only, |button| {
             button
-                .raised(theme.bg_raised, &theme)
-                .hover(|s| s.raised(theme.bg_hover, &theme))
+                .raised(theme.surface_elevated, &theme)
+                .hover(|s| s.raised(theme.surface_hover, &theme))
         })
         .on_mouse_up(MouseButton::Left, {
             let this = this.clone();
@@ -1131,18 +1150,18 @@ impl OrbitApp {
             "icons/star.svg",
             ButtonSize::Large.icon_size().px(&theme),
             if self.models_favorites_only {
-                theme.active_fg
+                theme.text_primary
             } else {
-                theme.text_2
+                theme.text_secondary
             },
         ))
         .child(
             div()
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(if self.models_favorites_only {
-                    theme.active_fg
+                    theme.text_primary
                 } else {
-                    theme.text_2
+                    theme.text_secondary
                 })
                 .child(tr!("settings.favorites")),
         );
@@ -1154,11 +1173,11 @@ impl OrbitApp {
             .group(BUTTON_GROUP)
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
+            .raised(theme.surface_elevated, &theme)
             .cursor_pointer()
             .when(self.models_refreshing, |button| button.opacity(0.6))
-            .hover(|style| style.raised(theme.bg_hover, &theme))
-            .active(|style| style.raised(theme.active, &theme))
+            .hover(|style| style.raised(theme.surface_hover, &theme))
+            .active(|style| style.raised(theme.surface_active, &theme))
             .on_mouse_up(MouseButton::Left, {
                 let this = this.clone();
                 move |_, _, cx| {
@@ -1169,13 +1188,13 @@ impl OrbitApp {
                 "models-update-spin",
                 ButtonSize::Large.icon_size().px(&theme),
                 self.models_refreshing,
-                theme.text_2,
+                theme.text_secondary,
                 theme,
             ))
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(tr!("settings.models_update")),
             );
 
@@ -1207,7 +1226,7 @@ impl OrbitApp {
                             .flex_1()
                             .min_w_0()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(model_count_label(total, shown, favorite_count, filtered)),
                     )
                     .children(provider_select)
@@ -1232,7 +1251,7 @@ impl OrbitApp {
             .rounded(Radius::Large.px(&theme))
             .border_1()
             .border_color(theme.border)
-            .bg(theme.bg_raised)
+            .bg(theme.surface_elevated)
             .overflow_hidden()
             .child(self.setting_row(
                 theme,
@@ -1302,17 +1321,13 @@ impl OrbitApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         if self.available_models.is_empty() {
-            return button_frame(
-                div().id("active-model-select"),
-                &theme,
-                SELECT_CHIP_SIZE,
-            )
-            .border_1()
-            .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
-            .text_color(theme.text_3)
-            .child(tr!("settings.no_models_reported"))
-            .into_any_element();
+            return button_frame(div().id("active-model-select"), &theme, SELECT_CHIP_SIZE)
+                .border_1()
+                .border_color(theme.border)
+                .raised(theme.surface_elevated, &theme)
+                .text_color(theme.text_muted)
+                .child(tr!("settings.no_models_reported"))
+                .into_any_element();
         }
         let options: Vec<String> = self
             .available_models
@@ -1444,8 +1459,7 @@ impl OrbitApp {
 
         // The active-selection row leads: a page-level "current model"
         // control, then the browsable catalog groups.
-        let mut sections: Vec<AnyElement> =
-            vec![self.active_model_row(theme, this.clone(), cx)];
+        let mut sections: Vec<AnyElement> = vec![self.active_model_row(theme, this.clone(), cx)];
         for provider in providers {
             let models: Vec<&ModelEntry> = self
                 .available_models
@@ -1493,7 +1507,7 @@ impl OrbitApp {
                             .child(icon_dyn(
                                 provider_icon(&provider),
                                 IconSize::Small.px(&theme),
-                                provider_mark_color(&provider, &theme, theme.text_3),
+                                provider_mark_color(&provider, &theme, theme.text_muted),
                             ))
                             .child(
                                 div()
@@ -1502,14 +1516,14 @@ impl OrbitApp {
                                     .truncate()
                                     .text_size(TextSize::Small.px(&theme))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text_2)
+                                    .text_color(theme.text_secondary)
                                     .child(crate::providers::provider_display_name(&provider)),
                             )
                             .child(
                                 div()
                                     .flex_none()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(tr!("settings.n_models", count = models.len())),
                             ),
                     )
@@ -1554,13 +1568,13 @@ impl OrbitApp {
         let (provider, id) = (model.provider.clone(), model.id.clone());
         let active = self.model_id == model.id && self.model_provider == model.provider;
         let is_favorite = favorites.contains(&model.provider, &model.id);
-        // Ink on the active fill comes from `active_fg`, stepped down for the
-        // secondary lines — `text_3` is authored for the canvas, not a
+        // Ink on the active fill comes from `selection_fg`, stepped down for the
+        // secondary lines — `text_muted` is authored for the canvas, not a
         // selected card.
         let meta_ink = if active {
-            theme.active_fg.opacity(0.72)
+            theme.text_primary.opacity(0.72)
         } else {
-            theme.text_3
+            theme.text_muted
         };
 
         let star = icon_button_frame(
@@ -1576,7 +1590,7 @@ impl OrbitApp {
             tr!("settings.favorite")
         })
         .cursor_pointer()
-        .hover(|s| s.bg(theme.overlay))
+        .hover(|s| s.bg(theme.surface_hover))
         .on_mouse_up(MouseButton::Left, {
             let this = this.clone();
             let (provider, id) = (provider.clone(), id.clone());
@@ -1591,7 +1605,11 @@ impl OrbitApp {
         .child(icon(
             "icons/star.svg",
             ButtonSize::Default.icon_size().px(&theme),
-            if is_favorite { theme.accent } else { meta_ink },
+            if is_favorite {
+                theme.accent_text
+            } else {
+                meta_ink
+            },
         ));
 
         let mut footer = div()
@@ -1630,13 +1648,13 @@ impl OrbitApp {
                     .child(icon(
                         "icons/check.svg",
                         IconSize::XSmall.px(&theme),
-                        theme.active_fg,
+                        theme.text_primary,
                     ))
                     .child(
                         div()
                             .text_size(TextSize::XSmall.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.active_fg)
+                            .text_color(theme.text_primary)
                             .child(tr!("settings.active")),
                     ),
             );
@@ -1652,7 +1670,7 @@ impl OrbitApp {
                     .group_hover("model-card", |s| s.opacity(1.))
                     .text_size(TextSize::XSmall.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("settings.set_active")),
             );
         }
@@ -1665,9 +1683,9 @@ impl OrbitApp {
             .w_full()
             .min_w_0()
             .bg(if active {
-                theme.active
+                theme.surface_active
             } else {
-                theme.bg_composer
+                theme.surface_secondary
             })
             .border_1()
             .border_color(if active {
@@ -1682,7 +1700,7 @@ impl OrbitApp {
             .gap(DynamicSpacing::Base08.px(&theme))
             .cursor_pointer()
             .when(!active, |card| {
-                card.hover(|s| s.bg(theme.bg_hover).border_color(theme.border_strong))
+                card.hover(|s| s.bg(theme.surface_hover).border_color(theme.border_strong))
             })
             .on_mouse_up(MouseButton::Left, {
                 let this = this.clone();
@@ -1705,7 +1723,7 @@ impl OrbitApp {
                             .truncate()
                             .text_size(TextSize::Default.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(if active { theme.active_fg } else { theme.text })
+                            .text_color(theme.text_primary)
                             .child(model.name.clone()),
                     )
                     .child(star),
@@ -1787,7 +1805,7 @@ impl OrbitApp {
                 div()
                     .w_full()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!(
                         "settings.plugins_shown_installed",
                         shown = visible.len(),
@@ -1823,20 +1841,20 @@ impl OrbitApp {
             .pl(DynamicSpacing::Base40.px(&theme))
             .child(self.provider_badge(
                 package.scope.label(),
-                theme.text_3,
+                theme.text_muted,
                 theme.overlay_strong,
                 theme,
             ))
             .child(self.provider_badge(
                 package.kind.label(),
-                theme.text_3,
+                theme.text_muted,
                 theme.overlay_strong,
                 theme,
             ));
         if let Some(version) = &package.version {
             badges = badges.child(self.provider_badge(
                 &format!("v{version}"),
-                theme.text_3,
+                theme.text_muted,
                 theme.overlay_strong,
                 theme,
             ));
@@ -1844,8 +1862,8 @@ impl OrbitApp {
         if !package.installed {
             badges = badges.child(self.provider_badge(
                 &tr!("settings.not_installed"),
-                theme.crit,
-                theme.crit.opacity(0.12),
+                theme.error,
+                theme.error.opacity(0.12),
                 theme,
             ));
         }
@@ -1858,7 +1876,7 @@ impl OrbitApp {
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.crit)
+                        .text_color(theme.error)
                         .child(tr!("settings.remove_this_plugin")),
                 )
                 .child(self.plugin_button(
@@ -1950,7 +1968,7 @@ impl OrbitApp {
                             .child(icon(
                                 "icons/extensions.svg",
                                 IconSize::Small.px(&theme),
-                                theme.text_2,
+                                theme.text_secondary,
                             )),
                     )
                     .child(
@@ -1964,7 +1982,7 @@ impl OrbitApp {
                                 div()
                                     .text_size(TextSize::Default.px(&theme))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
+                                    .text_color(theme.text_primary)
                                     .truncate()
                                     .child(package.name.clone()),
                             )
@@ -1972,7 +1990,7 @@ impl OrbitApp {
                                 div()
                                     .font_family(theme::code_font_family())
                                     .text_size(theme.code_px(10.5))
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .truncate()
                                     .child(source),
                             ),
@@ -1986,7 +2004,7 @@ impl OrbitApp {
                         .pl(DynamicSpacing::Base40.px(&theme))
                         .font_family(theme::code_font_family())
                         .text_size(theme.code_px(10.5))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .truncate()
                         .child(package.install_path.to_string_lossy().into_owned()),
                 )
@@ -2005,11 +2023,11 @@ impl OrbitApp {
         let field = input_field_frame(div(), &theme)
             .flex_1()
             .min_w_0()
-            .bg(theme.bg_main)
+            .bg(theme.background)
             .child(icon(
                 "icons/extensions.svg",
                 IconSize::Small.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(
                 div()
@@ -2064,7 +2082,7 @@ impl OrbitApp {
         let plugin_spinner: AnyElement = crate::app::spinner(
             "plugin-action-spin",
             IconSize::Small.px(&theme),
-            theme.text_2,
+            theme.text_secondary,
             theme,
         );
         let status: AnyElement = match &self.plugin_action {
@@ -2075,7 +2093,7 @@ impl OrbitApp {
                 .items_center()
                 .gap(DynamicSpacing::Base08.px(&theme))
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(plugin_spinner)
                 .child(action.clone())
                 .into_any_element(),
@@ -2083,7 +2101,7 @@ impl OrbitApp {
                 .flex_1()
                 .min_w_0()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("settings.n_packages", count = self.plugins.len()))
                 .into_any_element(),
         };
@@ -2093,7 +2111,7 @@ impl OrbitApp {
             .child(icon(
                 "icons/search.svg",
                 input::ICON.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(div().flex_1().min_w_0().child(self.plugins_filter.clone()));
 
@@ -2147,14 +2165,14 @@ impl OrbitApp {
         .cursor_pointer()
         .font_weight(FontWeight::MEDIUM);
         chip = if active {
-            chip.raised(theme.active, &theme)
-                .text_color(theme.active_fg)
+            chip.raised(theme.surface_active, &theme)
+                .text_color(theme.text_primary)
         } else {
             chip.border_1()
                 .border_color(theme.border)
-                .raised(theme.bg_raised, &theme)
-                .text_color(theme.text_3)
-                .hover(|style| style.raised(theme.bg_hover, &theme))
+                .raised(theme.surface_elevated, &theme)
+                .text_color(theme.text_muted)
+                .hover(|style| style.raised(theme.surface_hover, &theme))
         };
         chip.on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| {
@@ -2190,19 +2208,20 @@ impl OrbitApp {
             .font_weight(FontWeight::MEDIUM);
         let (button, icon_color) = if primary {
             (
-                base.raised(theme.send_bg, &theme)
-                    .text_color(theme.send_fg)
-                    .hover(|style| style.raised(theme.send_bg_hover, &theme)),
-                theme.send_fg,
+                base.raised(theme.action, &theme)
+                    .text_color(theme.action_fg)
+                    .hover(|style| style.raised(theme.action_hover, &theme))
+                    .active(|style| style.raised(theme.action_pressed, &theme)),
+                theme.action_fg,
             )
         } else {
             (
                 base.border_1()
                     .border_color(theme.border)
-                    .raised(theme.bg_raised, &theme)
-                    .text_color(theme.text_2)
-                    .hover(|style| style.raised(theme.bg_hover, &theme)),
-                theme.text_2,
+                    .raised(theme.surface_elevated, &theme)
+                    .text_color(theme.text_secondary)
+                    .hover(|style| style.raised(theme.surface_hover, &theme)),
+                theme.text_secondary,
             )
         };
         press(button)
@@ -2232,7 +2251,7 @@ impl OrbitApp {
     ) -> AnyElement {
         div()
             .w_full()
-            .bg(theme.bg_composer)
+            .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
             .rounded(Radius::XLarge.px(&theme))
@@ -2247,14 +2266,14 @@ impl OrbitApp {
                 div()
                     .text_size(TextSize::Default.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(title.to_string()),
             )
             .child(
                 div()
                     .max_w(px(420.))
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(body.to_string()),
             )
             .into_any_element()
@@ -2279,7 +2298,7 @@ impl OrbitApp {
             .child(icon(
                 "icons/search.svg",
                 input::ICON.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(div().flex_1().min_w_0().child(self.provider_filter.clone()));
 
@@ -2287,18 +2306,18 @@ impl OrbitApp {
             "providers-refresh-spin",
             ButtonSize::Large.icon_size().px(&theme),
             self.providers_refreshing,
-            theme.text_2,
+            theme.text_secondary,
             theme,
         );
         let refresh_button = button_frame(div().id("providers-refresh"), &theme, ButtonSize::Large)
             .group(BUTTON_GROUP)
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
+            .raised(theme.surface_elevated, &theme)
             .cursor_pointer()
             .when(self.providers_refreshing, |button| button.opacity(0.6))
-            .hover(|style| style.raised(theme.bg_hover, &theme))
-            .active(|style| style.raised(theme.active, &theme))
+            .hover(|style| style.raised(theme.surface_hover, &theme))
+            .active(|style| style.raised(theme.surface_active, &theme))
             .on_mouse_up(MouseButton::Left, {
                 let this = this.clone();
                 move |_, _, cx| {
@@ -2309,14 +2328,15 @@ impl OrbitApp {
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(tr!("settings.refresh")),
             );
 
         let add_button = button_frame(div().id("providers-add"), &theme, ButtonSize::Large)
-            .raised(theme.send_bg, &theme)
+            .raised(theme.action, &theme)
             .cursor_pointer()
-            .hover(|style| style.raised(theme.send_bg_hover, &theme))
+            .hover(|style| style.raised(theme.action_hover, &theme))
+            .active(|style| style.raised(theme.action_pressed, &theme))
             .on_mouse_up(MouseButton::Left, {
                 let this = this.clone();
                 move |_, window, cx| {
@@ -2326,12 +2346,12 @@ impl OrbitApp {
             .child(icon(
                 "icons/plus.svg",
                 ButtonSize::Large.icon_size().px(&theme),
-                theme.send_fg,
+                theme.action_fg,
             ))
             .child(
                 div()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.send_fg)
+                    .text_color(theme.action_fg)
                     .child(tr!("settings.add_provider")),
             );
 
@@ -2345,7 +2365,7 @@ impl OrbitApp {
                     .flex_1()
                     .min_w_0()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!(
                         "settings.providers_active_connected",
                         all = all.len(),
@@ -2425,7 +2445,7 @@ impl OrbitApp {
                     .child(icon(
                         "icons/info.svg",
                         IconSize::Medium.px(&theme),
-                        theme.accent,
+                        theme.accent_text,
                     ))
                     .child(
                         div()
@@ -2438,13 +2458,13 @@ impl OrbitApp {
                                 div()
                                     .text_size(TextSize::Small.px(&theme))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
+                                    .text_color(theme.text_primary)
                                     .child(tr!("settings.credentials_changed")),
                             )
                             .child(
                                 div()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .text_color(theme.text_2)
+                                    .text_color(theme.text_secondary)
                                     .child(tr!("settings.restart_pi_credentials_hint")),
                             ),
                     )
@@ -2480,7 +2500,7 @@ impl OrbitApp {
             rows.push(
                 div()
                     .w_full()
-                    .bg(theme.bg_composer)
+                    .bg(theme.surface_secondary)
                     .border_1()
                     .border_color(theme.border)
                     .rounded(Radius::XLarge.px(&theme))
@@ -2493,19 +2513,19 @@ impl OrbitApp {
                     .child(icon(
                         "icons/search.svg",
                         IconSize::Custom(26. / 16.).px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     ))
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("settings.no_providers_match")),
                     )
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(tr!("settings.try_a_different_search")),
                     )
                     .into_any_element(),
@@ -2533,9 +2553,9 @@ impl OrbitApp {
     pub(super) fn provider_error_card(&self, theme: Theme, title: &str, error: &str) -> AnyElement {
         div()
             .w_full()
-            .bg(theme.crit.opacity(0.08))
+            .bg(theme.error.opacity(0.08))
             .border_1()
-            .border_color(theme.crit.opacity(0.35))
+            .border_color(theme.error.opacity(0.35))
             .rounded(Radius::XLarge.px(&theme))
             .px(DynamicSpacing::Base12.px(&theme))
             .py(DynamicSpacing::Base12.px(&theme))
@@ -2545,7 +2565,7 @@ impl OrbitApp {
             .child(icon(
                 "icons/info.svg",
                 IconSize::Medium.px(&theme),
-                theme.crit,
+                theme.error,
             ))
             .child(
                 div()
@@ -2558,19 +2578,19 @@ impl OrbitApp {
                         div()
                             .text_size(TextSize::Default.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(title.to_string()),
                     )
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(error.to_string()),
                     )
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(tr!(
                                 "settings.fix_or_remove_the_file_before_editing_providers_"
                             )),
@@ -2745,21 +2765,25 @@ impl OrbitApp {
     ) -> Option<AnyElement> {
         let session = self.auth.login_for(&view.id)?;
         let (headline, detail, tint) = match session.phase {
-            LoginPhase::Connecting => (tr!("status.connecting"), tr!("auth.asking_pi"), theme.warn),
+            LoginPhase::Connecting => (
+                tr!("status.connecting"),
+                tr!("auth.asking_pi"),
+                theme.warning,
+            ),
             LoginPhase::AwaitingBrowser => (
                 tr!("auth.waiting_browser"),
                 tr!("auth.finish_in_browser"),
-                theme.accent,
+                theme.accent_text,
             ),
             LoginPhase::AwaitingDeviceCode => (
                 tr!("auth.enter_device_code"),
                 tr!("auth.approve_in_browser"),
-                theme.accent,
+                theme.accent_text,
             ),
             LoginPhase::Succeeded => (
                 tr!("status.connected"),
                 tr!("auth.credential_saved"),
-                theme.ok_green,
+                theme.success,
             ),
             LoginPhase::Error => (
                 tr!("status.sign_in_failed"),
@@ -2769,7 +2793,7 @@ impl OrbitApp {
                     .map(|(_, message)| message.clone())
                     .filter(|message| !message.is_empty())
                     .unwrap_or_else(|| tr!("auth.sign_in_incomplete")),
-                theme.crit,
+                theme.error,
             ),
             LoginPhase::Cancelled => (
                 tr!("status.cancelled"),
@@ -2777,7 +2801,7 @@ impl OrbitApp {
                     .message
                     .clone()
                     .unwrap_or_else(|| tr!("auth.sign_in_cancelled")),
-                theme.text_3,
+                theme.text_muted,
             ),
         };
 
@@ -2803,7 +2827,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(detail),
             );
 
@@ -2816,14 +2840,14 @@ impl OrbitApp {
                     .rounded(Radius::Large.px(&theme))
                     .border_1()
                     .border_color(theme.border)
-                    .bg(theme.bg_main)
+                    .bg(theme.background)
                     .flex()
                     .flex_col()
                     .gap(DynamicSpacing::Base04.px(&theme))
                     .child(
                         div()
                             .text_size(TextSize::XSmall.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(tr!("settings.device_code")),
                     )
                     .child(
@@ -2831,14 +2855,14 @@ impl OrbitApp {
                             .font_family(theme::code_font_family())
                             .text_size(theme.code_px(16.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(device.user_code.clone()),
                     )
                     .child(
                         div()
                             .font_family(theme::code_font_family())
                             .text_size(theme.code_px(10.5))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .truncate()
                             .child(device.verification_uri.clone()),
                     ),
@@ -2851,7 +2875,7 @@ impl OrbitApp {
                         .truncate()
                         .font_family(theme::code_font_family())
                         .text_size(theme.code_px(10.5))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(url.clone()),
                 );
             }
@@ -2969,13 +2993,13 @@ impl OrbitApp {
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("settings.usage")),
             );
         if let Some(plan) = &report.plan {
             head = head.child(self.provider_badge(
                 plan,
-                theme.accent,
+                theme.accent_text,
                 theme.accent.opacity(0.12),
                 theme,
             ));
@@ -2991,7 +3015,7 @@ impl OrbitApp {
             .rounded(Radius::XLarge.px(&theme))
             .border_1()
             .border_color(theme.border)
-            .bg(theme.bg_main)
+            .bg(theme.background)
             .child(head);
 
         for window in &report.windows {
@@ -3028,25 +3052,25 @@ impl OrbitApp {
                                 .min_w_0()
                                 .truncate()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(window.label.clone()),
                         )
                         .child(
                             div()
                                 .flex_none()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text)
+                                .text_color(theme.text_primary)
                                 .child(value),
                         ),
                 );
 
             if let Some(fraction) = window.fraction() {
                 let tint = if fraction >= 0.9 {
-                    theme.crit
+                    theme.error
                 } else if fraction >= 0.75 {
-                    theme.warn
+                    theme.warning
                 } else {
-                    theme.ok_green
+                    theme.success
                 };
                 row = row.child(
                     div()
@@ -3062,7 +3086,7 @@ impl OrbitApp {
                 row = row.child(
                     div()
                         .text_size(TextSize::XSmall.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(reset_label(resets_at)),
                 );
             }
@@ -3086,14 +3110,14 @@ impl OrbitApp {
                             .min_w_0()
                             .truncate()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(balance.label.clone()),
                     )
                     .child(
                         div()
                             .flex_none()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(text),
                     ),
             );
@@ -3103,7 +3127,7 @@ impl OrbitApp {
             body = body.child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .text_color(theme.crit)
+                    .text_color(theme.error)
                     .child(error.to_string()),
             );
         } else if note_should_render(report) {
@@ -3111,7 +3135,7 @@ impl OrbitApp {
                 body = body.child(
                     div()
                         .text_size(TextSize::XSmall.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(note.to_string()),
                 );
             }
@@ -3140,29 +3164,29 @@ impl OrbitApp {
         let session = self.auth.login_for(&view.id);
         let (status_label, status_color) = if let Some(session) = session {
             match session.phase {
-                LoginPhase::Connecting => (tr!("status.connecting"), theme.warn),
+                LoginPhase::Connecting => (tr!("status.connecting"), theme.warning),
                 LoginPhase::AwaitingBrowser | LoginPhase::AwaitingDeviceCode => {
-                    (tr!("status.connecting"), theme.accent)
+                    (tr!("status.connecting"), theme.accent_text)
                 }
-                LoginPhase::Succeeded => (tr!("status.connected"), theme.ok_green),
-                LoginPhase::Error => (tr!("status.sign_in_failed"), theme.crit),
-                LoginPhase::Cancelled => (tr!("status.cancelled"), theme.text_3),
+                LoginPhase::Succeeded => (tr!("status.connected"), theme.success),
+                LoginPhase::Error => (tr!("status.sign_in_failed"), theme.error),
+                LoginPhase::Cancelled => (tr!("status.cancelled"), theme.text_muted),
             }
         } else if view.active {
-            (tr!("status.active"), theme.ok_green)
+            (tr!("status.active"), theme.success)
         } else if view.connected() {
-            (tr!("status.connected"), theme.accent)
+            (tr!("status.connected"), theme.accent_text)
         } else if view.custom {
-            (tr!("status.not_loaded"), theme.warn)
+            (tr!("status.not_loaded"), theme.warning)
         } else {
-            (tr!("status.not_configured"), theme.text_3)
+            (tr!("status.not_configured"), theme.text_muted)
         };
 
         let tile = div()
             .size(px(52.))
             .flex_none()
             .rounded(Radius::XLarge.px(&theme))
-            .bg(theme.bg_raised)
+            .bg(theme.surface_elevated)
             .border_1()
             .border_color(theme.border)
             .flex()
@@ -3175,9 +3199,9 @@ impl OrbitApp {
                     &view.id,
                     &theme,
                     if view.active || view.connected() {
-                        theme.text
+                        theme.text_primary
                     } else {
-                        theme.text_2
+                        theme.text_secondary
                     },
                 ),
             ));
@@ -3216,7 +3240,7 @@ impl OrbitApp {
                         div()
                             .text_size(TextSize::Default.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .truncate()
                             .child(view.name.clone()),
                     )
@@ -3224,7 +3248,7 @@ impl OrbitApp {
                         div()
                             .font_family(theme::code_font_family())
                             .text_size(theme.code_px(10.5))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .truncate()
                             .child(view.id.clone()),
                     ),
@@ -3242,7 +3266,7 @@ impl OrbitApp {
         if view.oauth {
             badges = badges.child(self.provider_badge(
                 "OAuth",
-                theme.accent,
+                theme.accent_text,
                 theme.accent.opacity(0.12),
                 theme,
             ));
@@ -3250,7 +3274,7 @@ impl OrbitApp {
         if view.api_key {
             badges = badges.child(self.provider_badge(
                 &tr!("settings.api_key"),
-                theme.text_3,
+                theme.text_muted,
                 theme.overlay_strong,
                 theme,
             ));
@@ -3264,9 +3288,9 @@ impl OrbitApp {
                 "Provider"
             },
             if view.custom {
-                theme.accent
+                theme.accent_text
             } else {
-                theme.text_3
+                theme.text_muted
             },
             if view.custom {
                 theme.accent.opacity(0.12)
@@ -3288,11 +3312,11 @@ impl OrbitApp {
             .items_center()
             .gap(DynamicSpacing::Base06.px(&theme))
             .text_size(TextSize::Small.px(&theme))
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .child(count_label);
         if let Some(kind) = view.credential_kind() {
             facts = facts
-                .child(div().size(px(3.)).rounded_full().bg(theme.text_3))
+                .child(div().size(px(3.)).rounded_full().bg(theme.text_muted))
                 .child(match kind {
                     "oauth" => tr!("settings.cred_oauth"),
                     "api_key" => tr!("settings.cred_api_key"),
@@ -3302,12 +3326,12 @@ impl OrbitApp {
             if let Some(status) = &view.live_status {
                 if let Some(account) = &status.account {
                     facts = facts
-                        .child(div().size(px(3.)).rounded_full().bg(theme.text_3))
+                        .child(div().size(px(3.)).rounded_full().bg(theme.text_muted))
                         .child(account.clone());
                 }
                 if let Some(expires_at) = status.expires_at {
                     facts = facts
-                        .child(div().size(px(3.)).rounded_full().bg(theme.text_3))
+                        .child(div().size(px(3.)).rounded_full().bg(theme.text_muted))
                         .child(tr!(
                             "settings.expires_at",
                             time = format_epoch_ms(expires_at)
@@ -3316,12 +3340,12 @@ impl OrbitApp {
             }
         } else if let Some(env_var) = &view.env_var {
             facts = facts
-                .child(div().size(px(3.)).rounded_full().bg(theme.text_3))
+                .child(div().size(px(3.)).rounded_full().bg(theme.text_muted))
                 .child(tr!("settings.via_env_var", env_var = env_var));
         }
         if view.has_api_key {
             facts = facts
-                .child(div().size(px(3.)).rounded_full().bg(theme.text_3))
+                .child(div().size(px(3.)).rounded_full().bg(theme.text_muted))
                 .child(tr!("settings.models_json_key"));
         }
 
@@ -3340,7 +3364,7 @@ impl OrbitApp {
             .truncate()
             .font_family(theme::code_font_family())
             .text_size(theme.code_px(10.5))
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .child(endpoint);
 
         let actions: AnyElement = if confirming {
@@ -3354,7 +3378,7 @@ impl OrbitApp {
                         .flex_1()
                         .min_w_0()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.crit)
+                        .text_color(theme.error)
                         .child(tr!("settings.remove_this_provider")),
                 )
                 .child(self.provider_button(
@@ -3432,7 +3456,7 @@ impl OrbitApp {
                     primary = primary.child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(tr!("settings.no_sign_in_methods_available")),
                     );
                 }
@@ -3575,7 +3599,7 @@ impl OrbitApp {
         div()
             .w_full()
             .min_w_0()
-            .bg(theme.bg_composer)
+            .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
             .rounded(Radius::XLarge.px(&theme))
@@ -3641,30 +3665,31 @@ impl OrbitApp {
         .font_weight(FontWeight::MEDIUM);
         button = match style {
             ProviderButtonStyle::Primary => button
-                .raised(theme.send_bg, &theme)
-                .text_color(theme.send_fg)
-                .hover(|style| style.raised(theme.send_bg_hover, &theme)),
+                .raised(theme.action, &theme)
+                .text_color(theme.action_fg)
+                .hover(|style| style.raised(theme.action_hover, &theme))
+                .active(|style| style.raised(theme.action_pressed, &theme)),
             ProviderButtonStyle::Ghost => button
                 .border_1()
                 .border_color(theme.border)
-                .raised(theme.bg_raised, &theme)
-                .text_color(theme.text_2)
-                .hover(|style| style.raised(theme.bg_hover, &theme)),
+                .raised(theme.surface_elevated, &theme)
+                .text_color(theme.text_secondary)
+                .hover(|style| style.raised(theme.surface_hover, &theme)),
             ProviderButtonStyle::Danger => button
                 .border_1()
                 .border_color(theme.border)
-                .raised(theme.bg_raised, &theme)
-                .text_color(theme.crit)
+                .raised(theme.surface_elevated, &theme)
+                .text_color(theme.error)
                 .hover(|style| {
                     style
-                        .border_color(theme.crit.opacity(0.6))
-                        .raised(theme.crit.opacity(0.08), &theme)
+                        .border_color(theme.error.opacity(0.6))
+                        .raised(theme.error.opacity(0.08), &theme)
                 }),
         };
         let icon_color = match style {
-            ProviderButtonStyle::Primary => theme.send_fg,
-            ProviderButtonStyle::Danger => theme.crit,
-            ProviderButtonStyle::Ghost => theme.text_2,
+            ProviderButtonStyle::Primary => theme.action_fg,
+            ProviderButtonStyle::Danger => theme.error,
+            ProviderButtonStyle::Ghost => theme.text_secondary,
         };
         press(button)
             .when_some(icon_path, |button, path| {
@@ -3786,9 +3811,9 @@ impl OrbitApp {
         let close = button_frame(div().id("provider-usage-close"), &theme, ButtonSize::Large)
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
+            .raised(theme.surface_elevated, &theme)
             .cursor_pointer()
-            .hover(|style| style.raised(theme.bg_hover, &theme))
+            .hover(|style| style.raised(theme.surface_hover, &theme))
             .on_mouse_up(MouseButton::Left, {
                 let this = this.clone();
                 move |_, _, cx| {
@@ -3798,7 +3823,11 @@ impl OrbitApp {
                     });
                 }
             })
-            .child(div().text_color(theme.text_2).child(tr!("settings.close")));
+            .child(
+                div()
+                    .text_color(theme.text_secondary)
+                    .child(tr!("settings.close")),
+            );
 
         let card = div()
             .w_full()
@@ -3828,14 +3857,14 @@ impl OrbitApp {
                             .text_size(modal::HEADLINE.px(&theme))
                             .line_height(modal::HEADLINE.line_height(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("settings.usage_for", name = view.name)),
                     )
                     .child(
                         div()
                             .font_family(theme::code_font_family())
                             .text_size(theme.code_px(11.))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(view.id.clone()),
                     ),
             )
@@ -3923,18 +3952,18 @@ impl OrbitApp {
                     .child(
                         input_label(field_label, &theme)
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text_2),
+                            .text_color(theme.text_secondary),
                     )
                     .child(
                         input_field_frame(div(), &theme)
                             .w_full()
-                            .bg(theme.bg_main)
+                            .bg(theme.background)
                             .child(editor.key.clone()),
                     )
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(hint),
                     ),
             );
@@ -3942,7 +3971,7 @@ impl OrbitApp {
             body = body.child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(providers::localize_note(editor.note)),
             );
         }
@@ -3959,7 +3988,7 @@ impl OrbitApp {
                         div()
                             .flex_1()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(tr!(
                                 "settings.prefer_a_subscription_sign_in_with_oauth_instead"
                             )),
@@ -3980,9 +4009,9 @@ impl OrbitApp {
                     .px(DynamicSpacing::Base08.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
                     .rounded(Radius::Large.px(&theme))
-                    .bg(theme.crit.opacity(0.1))
+                    .bg(theme.error.opacity(0.1))
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.crit)
+                    .text_color(theme.error)
                     .child(error.clone()),
             );
         }
@@ -3990,9 +4019,9 @@ impl OrbitApp {
         let cancel = button_frame(div().id("provider-key-close"), &theme, ButtonSize::Large)
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
+            .raised(theme.surface_elevated, &theme)
             .cursor_pointer()
-            .hover(|style| style.raised(theme.bg_hover, &theme))
+            .hover(|style| style.raised(theme.surface_hover, &theme))
             .on_mouse_up(MouseButton::Left, {
                 let this = this.clone();
                 move |_, _, cx| {
@@ -4002,7 +4031,11 @@ impl OrbitApp {
                     });
                 }
             })
-            .child(div().text_color(theme.text_2).child(tr!("settings.cancel")));
+            .child(
+                div()
+                    .text_color(theme.text_secondary)
+                    .child(tr!("settings.cancel")),
+            );
         let save = self.provider_button(
             "provider-key-save".into(),
             &tr!("settings.save_key"),
@@ -4041,14 +4074,14 @@ impl OrbitApp {
                             .text_size(modal::HEADLINE.px(&theme))
                             .line_height(modal::HEADLINE.line_height(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("settings.api_key_for", name = editor.provider_name)),
                     )
                     .child(
                         div()
                             .font_family(theme::code_font_family())
                             .text_size(theme.code_px(11.))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(editor.provider_id.clone()),
                     ),
             )
@@ -4136,19 +4169,19 @@ impl OrbitApp {
                 .child(
                     input_label(label.to_string(), &theme)
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_2),
+                        .text_color(theme.text_secondary),
                 )
                 .child(
                     input_field_frame(div(), &theme)
                         .w_full()
-                        .bg(theme.bg_main)
+                        .bg(theme.background)
                         .child(input),
                 );
             if let Some(hint) = hint {
                 column = column.child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(hint.to_string()),
                 );
             }
@@ -4179,12 +4212,12 @@ impl OrbitApp {
                     if selected {
                         theme.accent.opacity(0.12)
                     } else {
-                        theme.bg_raised
+                        theme.surface_elevated
                     },
                     &theme,
                 )
                 .cursor_pointer()
-                .hover(|style| style.raised(theme.bg_hover, &theme))
+                .hover(|style| style.raised(theme.surface_hover, &theme))
                 .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                     this.update(cx, |app, cx| {
                         if let Some(editor) = app.provider_editor.as_mut() {
@@ -4196,7 +4229,11 @@ impl OrbitApp {
                 .child(
                     div()
                         .font_family(theme::code_font_family())
-                        .text_color(if selected { theme.accent } else { theme.text_3 })
+                        .text_color(if selected {
+                            theme.accent_text
+                        } else {
+                            theme.text_muted
+                        })
                         .child(api),
                 ),
             );
@@ -4211,13 +4248,13 @@ impl OrbitApp {
                 .child(
                     input_label(tr!("settings.provider_id"), &theme)
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_2),
+                        .text_color(theme.text_secondary),
                 )
                 .child(
                     div()
                         .font_family(theme::code_font_family())
                         .text_size(theme.code_px(12.))
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(editor.original_id.clone().unwrap_or_default()),
                 )
                 .into_any_element()
@@ -4261,7 +4298,7 @@ impl OrbitApp {
                     .child(
                         input_label(tr!("settings.api_type"), &theme)
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text_2),
+                            .text_color(theme.text_secondary),
                     )
                     .child(api_chips),
             )
@@ -4309,7 +4346,7 @@ impl OrbitApp {
                             .text_size(modal::HEADLINE.px(&theme))
                             .line_height(modal::HEADLINE.line_height(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(if editing {
                                 tr!("settings.configure_provider")
                             } else {
@@ -4319,7 +4356,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(subtitle),
                     ),
             )
@@ -4342,9 +4379,9 @@ impl OrbitApp {
                     .px(DynamicSpacing::Base06.px(&theme))
                     .py(DynamicSpacing::Base04.px(&theme))
                     .rounded(Radius::Large.px(&theme))
-                    .bg(theme.crit.opacity(0.1))
+                    .bg(theme.error.opacity(0.1))
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.crit)
+                    .text_color(theme.error)
                     .child(error.clone()),
             );
         }
@@ -4358,30 +4395,35 @@ impl OrbitApp {
             )
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
+            .raised(theme.surface_elevated, &theme)
             .cursor_pointer()
-            .hover(|style| style.raised(theme.bg_hover, &theme))
+            .hover(|style| style.raised(theme.surface_hover, &theme))
             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                 this.update(cx, |app, cx| {
                     app.provider_editor = None;
                     cx.notify();
                 });
             })
-            .child(div().text_color(theme.text_2).child(tr!("settings.cancel")))
+            .child(
+                div()
+                    .text_color(theme.text_secondary)
+                    .child(tr!("settings.cancel")),
+            )
         };
         let save = {
             let this = this.clone();
             button_frame(div().id("provider-editor-save"), &theme, ButtonSize::Large)
-                .raised(theme.send_bg, &theme)
+                .raised(theme.action, &theme)
                 .cursor_pointer()
-                .hover(|style| style.raised(theme.send_bg_hover, &theme))
+                .hover(|style| style.raised(theme.action_hover, &theme))
+                .active(|style| style.raised(theme.action_pressed, &theme))
                 .on_mouse_up(MouseButton::Left, move |_, window, cx| {
                     this.update(cx, |app, cx| app.provider_save(window, cx));
                 })
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.send_fg)
+                        .text_color(theme.action_fg)
                         .child(if editing {
                             tr!("settings.save_changes")
                         } else {
@@ -4471,13 +4513,13 @@ impl OrbitApp {
                         div()
                             .text_size(TextSize::XSmall.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(label.to_uppercase()),
                     )
                     .children(desc.map(|desc| {
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(desc.to_string())
                     })),
             )
@@ -4493,7 +4535,7 @@ impl OrbitApp {
         let last = rows.len().saturating_sub(1);
         let mut board = div()
             .w_full()
-            .bg(theme.bg_composer)
+            .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
             .rounded(Radius::XLarge.px(&theme))
@@ -4543,19 +4585,19 @@ impl OrbitApp {
                         div()
                             .text_size(TextSize::Default.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(title.to_string()),
                     )
                     .children(desc.map(|d| {
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(d.to_string())
                     }))
                     .children(meta.map(|m| {
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .truncate()
                             .child(m.to_string())
                     })),
@@ -4575,15 +4617,15 @@ impl OrbitApp {
                     .size(px(7.))
                     .rounded_full()
                     .bg(if self.client.is_some() {
-                        theme.ok_green
+                        theme.success
                     } else {
-                        theme.stop_red
+                        theme.error
                     }),
             )
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(if self.client.is_some() {
                         tr!("status.connected")
                     } else {
@@ -4602,15 +4644,15 @@ impl OrbitApp {
             .group(BUTTON_GROUP)
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
+            .raised(theme.surface_elevated, &theme)
             .font_weight(FontWeight::MEDIUM)
-            .text_color(theme.text_2)
+            .text_color(theme.text_secondary)
             .cursor_pointer()
-            .hover(|s| s.raised(theme.bg_hover, &theme))
+            .hover(|s| s.raised(theme.surface_hover, &theme))
             .child(icon(
                 "icons/arrow-up-right.svg",
                 ButtonSize::Medium.icon_size().px(&theme),
-                theme.text_2,
+                theme.text_secondary,
             ))
             .child(tr!("settings.github"))
             .on_mouse_up(MouseButton::Left, |_, _, cx| {
@@ -4894,10 +4936,10 @@ impl OrbitApp {
     ) -> Vec<AnyElement> {
         let state = self.runtime_state();
         let (state_label, state_color) = match state {
-            RuntimeState::Running => (tr!("runtime.state_running"), theme.ok_green),
-            RuntimeState::Exited => (tr!("runtime.state_exited"), theme.crit),
-            RuntimeState::Stopped => (tr!("runtime.state_stopped"), theme.text_3),
-            RuntimeState::Failed => (tr!("runtime.state_failed"), theme.crit),
+            RuntimeState::Running => (tr!("runtime.state_running"), theme.success),
+            RuntimeState::Exited => (tr!("runtime.state_exited"), theme.error),
+            RuntimeState::Stopped => (tr!("runtime.state_stopped"), theme.text_muted),
+            RuntimeState::Failed => (tr!("runtime.state_failed"), theme.error),
         };
         let running = state == RuntimeState::Running;
         let has_client = self.client.is_some();
@@ -4966,7 +5008,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(state_label),
             )
             .into_any_element();
@@ -5097,7 +5139,7 @@ impl OrbitApp {
                 .px(DynamicSpacing::Base16.px(&theme))
                 .py(DynamicSpacing::Base12.px(&theme))
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("settings.no_output_from_the_pi_process"))
                 .into_any_element()
         } else {
@@ -5136,7 +5178,7 @@ impl OrbitApp {
                         .px(DynamicSpacing::Base04.px(&theme))
                         .text_size(TextSize::XSmall.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("settings.recent_stderr")),
                 )
                 .child(body)
@@ -5414,8 +5456,8 @@ impl OrbitApp {
             )
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
-            .text_color(theme.text_3)
+            .raised(theme.surface_elevated, &theme)
+            .text_color(theme.text_muted)
             .child(tr!("settings.pi_default"))
             .into_any_element();
         };
@@ -5463,12 +5505,13 @@ impl OrbitApp {
                 .font_weight(FontWeight::MEDIUM)
                 .cursor_pointer()
                 .when(active, |b| {
-                    b.raised_flat(theme.active).text_color(theme.active_fg)
+                    b.raised_flat(theme.surface_active)
+                        .text_color(theme.text_primary)
                 })
                 .when(!active, |b| {
-                    b.raised_flat(theme.bg_raised)
-                        .text_color(theme.text_2)
-                        .hover(|s| s.raised_flat(theme.bg_hover))
+                    b.raised_flat(theme.surface_elevated)
+                        .text_color(theme.text_secondary)
+                        .hover(|s| s.raised_flat(theme.surface_hover))
                 })
                 .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                     this.update(cx, |app, cx| app.set_composer_send_mode(mode, cx));
@@ -5515,14 +5558,14 @@ impl OrbitApp {
                         .cursor_pointer()
                         .when(active, |b| {
                             b.border_color(theme.border)
-                                .raised_flat(theme.active)
-                                .text_color(theme.active_fg)
+                                .raised_flat(theme.selection)
+                                .text_color(theme.text_primary)
                         })
                         .when(!active, |b| {
                             b.border_color(theme.border)
-                                .raised_flat(theme.bg_raised)
-                                .text_color(theme.text_2)
-                                .hover(|s| s.raised_flat(theme.bg_hover))
+                                .raised_flat(theme.surface_elevated)
+                                .text_color(theme.text_secondary)
+                                .hover(|s| s.raised_flat(theme.surface_hover))
                         })
                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                             this.update(cx, |app, cx| app.set_follow_up_mode(value_all, cx));
@@ -5562,7 +5605,7 @@ impl OrbitApp {
             .items_center()
             .cursor_pointer()
             .when(on, |t| t.bg(theme.accent).justify_end())
-            .when(!on, |t| t.bg(theme.bg_raised).justify_start())
+            .when(!on, |t| t.bg(theme.surface_elevated).justify_start())
             .hover(|t| t.border_color(theme.border_strong))
             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                 this.update(cx, action);
@@ -5619,6 +5662,8 @@ impl OrbitApp {
                     ),
                 ],
             ),
+            self.temporary_files_section(theme, this.clone()),
+            self.ai_scratch_files_section(theme, this),
         ]
     }
 
@@ -5683,11 +5728,11 @@ impl OrbitApp {
         button_frame(div().id("session-retention-run"), &theme, ButtonSize::Large)
             .border_1()
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
+            .raised(theme.surface_elevated, &theme)
             .cursor_pointer()
-            .hover(|style| style.raised(theme.bg_hover, &theme))
-            .active(|style| style.raised(theme.active, &theme))
-            .text_color(theme.text_2)
+            .hover(|style| style.raised(theme.surface_hover, &theme))
+            .active(|style| style.raised(theme.surface_active, &theme))
+            .text_color(theme.text_secondary)
             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                 this.update(cx, |app, cx| app.run_session_retention(cx));
             })
@@ -5851,16 +5896,17 @@ impl OrbitApp {
             .font_weight(FontWeight::MEDIUM);
         if primary {
             button = button
-                .raised(theme.send_bg, &theme)
-                .text_color(theme.send_fg)
-                .hover(|s| s.raised(theme.send_bg_hover, &theme));
+                .raised(theme.action, &theme)
+                .text_color(theme.action_fg)
+                .hover(|s| s.raised(theme.action_hover, &theme))
+                .active(|s| s.raised(theme.action_pressed, &theme));
         } else {
             button = button
                 .border_1()
                 .border_color(theme.border)
-                .raised(theme.bg_raised, &theme)
-                .text_color(theme.text_2)
-                .hover(|s| s.raised(theme.bg_hover, &theme));
+                .raised(theme.surface_elevated, &theme)
+                .text_color(theme.text_secondary)
+                .hover(|s| s.raised(theme.surface_hover, &theme));
         }
         press(button)
             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
@@ -6114,7 +6160,7 @@ impl OrbitApp {
             .border_color(gpui::transparent_black())
             .rounded(Radius::Large.px(&theme))
             .p(DynamicSpacing::Base04.px(&theme))
-            .focus(|style| style.border_color(theme.accent))
+            .focus(|style| style.border_color(theme.focus_ring))
             // gpui 0.2 has no `:focus-visible`: an automatic focus transfer
             // on mouse-down would leave the accent ring behind after a click.
             // Suppress that transfer so the ring only appears for keyboard
@@ -6161,14 +6207,14 @@ impl OrbitApp {
                         .cursor_pointer()
                         .when(active, |b| {
                             b.border_color(theme.border)
-                                .raised_flat(theme.active)
-                                .text_color(theme.active_fg)
+                                .raised_flat(theme.selection)
+                                .text_color(theme.text_primary)
                         })
                         .when(!active, |b| {
                             b.border_color(theme.border)
-                                .raised_flat(theme.bg_raised)
-                                .text_color(theme.text_2)
-                                .hover(|s| s.raised_flat(theme.bg_hover))
+                                .raised_flat(theme.surface_elevated)
+                                .text_color(theme.text_secondary)
+                                .hover(|s| s.raised_flat(theme.surface_hover))
                         })
                         .on_click(move |_, _, cx| {
                             this.update(cx, |app, cx| app.set_appearance_mode(mode, cx));
@@ -6204,7 +6250,7 @@ impl OrbitApp {
                     div()
                         .text_size(TextSize::XSmall.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(label.to_uppercase()),
                 )
                 .child(body)
@@ -6218,7 +6264,7 @@ impl OrbitApp {
             .px(DynamicSpacing::Base12.px(&theme))
             .py(DynamicSpacing::Base12.px(&theme))
             .rounded(Radius::XLarge.px(&theme))
-            .bg(theme.bg_main)
+            .bg(theme.background)
             .flex()
             .flex_col()
             .justify_center()
@@ -6228,14 +6274,14 @@ impl OrbitApp {
                     .font_family(theme::ui_font_family())
                     .text_size(TextSize::Large.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(tr!("settings.new_task")),
             )
             .child(
                 div()
                     .font_family(theme::ui_font_family())
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(tr!("settings.the_quick_brown_fox_jumps_over_the_lazy_dog")),
             );
 
@@ -6247,7 +6293,7 @@ impl OrbitApp {
                 .gap(DynamicSpacing::Base06.px(&theme))
                 .font_family(theme::code_font_family())
                 .text_size(theme.term_px(12.5))
-                .child(div().text_color(theme.ok_green).child("$"))
+                .child(div().text_color(theme.success).child("$"))
                 .child(div().text_color(theme.code_text).child(command.to_string()));
             if cursor {
                 row = row.child(
@@ -6255,7 +6301,7 @@ impl OrbitApp {
                         .w(theme.term_px(7.))
                         .h(theme.term_px(14.))
                         .rounded_full()
-                        .bg(theme.text_2),
+                        .bg(theme.text_secondary),
                 );
             }
             row
@@ -6278,11 +6324,11 @@ impl OrbitApp {
                     .flex()
                     .items_center()
                     .gap(DynamicSpacing::Base06.px(&theme))
-                    .bg(theme.bg_sidebar)
+                    .bg(theme.surface)
                     .border_b_1()
                     .border_color(theme.border)
                     .children(
-                        [theme.stop_red, theme.warn, theme.ok_green]
+                        [theme.error, theme.warning, theme.success]
                             .map(|color| div().size(px(7.)).rounded_full().bg(color)),
                     )
                     .child(
@@ -6290,7 +6336,7 @@ impl OrbitApp {
                             .ml_1p5()
                             .font_family(theme::code_font_family())
                             .text_size(theme.term_px(10.5))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(tr!("settings.terminal_prompt")),
                     ),
             )
@@ -6308,7 +6354,7 @@ impl OrbitApp {
                         div()
                             .font_family(theme::code_font_family())
                             .text_size(theme.term_px(12.5))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(tr!("settings.preview_prompt")),
                     )
                     .child(prompt("", true)),
@@ -6474,7 +6520,7 @@ impl OrbitApp {
                 div()
                     .w(px(40.))
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(format!("{}%", (norm * 100.).round() as u32)),
             )
             .into_any_element()
@@ -6571,7 +6617,7 @@ impl OrbitApp {
             .items_center()
             .cursor_pointer()
             .when(on, |t| t.bg(theme.accent).justify_end())
-            .when(!on, |t| t.bg(theme.bg_raised).justify_start())
+            .when(!on, |t| t.bg(theme.surface_elevated).justify_start())
             .on_mouse_up(MouseButton::Left, move |_, window, cx| {
                 this.update(cx, |app, cx| {
                     app.toggle_sidebar(window, cx);
@@ -6583,15 +6629,16 @@ impl OrbitApp {
     }
 
     /// The palettes the Theme dropdown lists, in the order it paints them:
-    /// the curated catalog (plus the palette in effect) when collapsed, the
-    /// whole catalog when the user asked for all of them. The disclosure row
-    /// is not part of this list — its index is `theme_catalog(..).len()`.
+    /// every palette of `mode`, in [`theme::ThemeId::ALL`] order.
     ///
     /// Both the label builder and the click handler read this, so a row index
     /// always resolves to the palette it painted.
-    pub(super) fn theme_catalog(&self, mode: ThemeMode, cx: &Context<Self>) -> Vec<theme::ThemeId> {
-        let configured = theme::appearance_prefs(cx).theme(mode);
-        theme::theme_options(mode, self.settings_themes_expanded, configured)
+    pub(super) fn theme_catalog(
+        &self,
+        mode: ThemeMode,
+        _cx: &Context<Self>,
+    ) -> Vec<theme::ThemeId> {
+        theme::themes_for(mode).collect()
     }
 
     /// Appearance → Theme. `mode` is the resolved appearance, so the row shows
@@ -6607,17 +6654,7 @@ impl OrbitApp {
         let catalog = self.theme_catalog(mode, cx);
         let configured = theme::appearance_prefs(cx).theme(mode);
         let selected = catalog.iter().position(|id| *id == configured).unwrap_or(0);
-        // The trailing row reveals the rest of the catalog, or folds it back
-        // away. It is a disclosure, not a palette, so it carries no value.
-        let mut options: Vec<String> = catalog.iter().map(|id| id.label().to_string()).collect();
-        options.push(
-            if self.settings_themes_expanded {
-                tr!("settings.fewer_themes")
-            } else {
-                tr!("settings.all_themes")
-            }
-            .to_string(),
-        );
+        let options: Vec<String> = catalog.iter().map(|id| id.label().to_string()).collect();
         self.select_control(
             "theme-select",
             SettingsSelect::Theme(mode),
@@ -6809,55 +6846,58 @@ impl OrbitApp {
             // dropdown anchored below the chip when open
             .children(self.settings_select_popup(kind, size, options, selected, theme, &this, cx))
             .child(
-                button_frame(
-                    div().id(ElementId::Name(id.into())),
-                    &theme,
-                    size,
-                )
-                .border_1()
-                .border_color(if open {
-                    theme.border_strong
-                } else {
-                    theme.border
-                })
-                .raised(if open { theme.overlay } else { theme.bg_raised }, &theme)
-                .cursor_pointer()
-                .text_color(theme.text_2)
-                .hover(|s| s.raised(theme.overlay, &theme))
-                .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-                    chip_this.update(cx, |app, cx| {
-                        // A dismissal from this same click's mouse-down
-                        // must not immediately re-open (see
-                        // `toggle_session_menu`).
-                        const GESTURE: Duration = Duration::from_millis(200);
-                        if let Some(dismissed) = app.menu_dismissed_at.take() {
-                            if dismissed.elapsed() < GESTURE {
-                                return;
-                            }
-                        }
-                        if app.settings_select == Some(kind) {
-                            app.settings_select = None;
+                button_frame(div().id(ElementId::Name(id.into())), &theme, size)
+                    .border_1()
+                    .border_color(if open {
+                        theme.border_strong
+                    } else {
+                        theme.border
+                    })
+                    .raised(
+                        if open {
+                            theme.overlay
                         } else {
-                            app.settings_select = Some(kind);
-                            // Open with the cursor on the chosen option,
-                            // scrolled into view in the list below.
-                            app.settings_select_highlight = Some(selected);
-                            app.settings_select_scroll
-                                .scroll_to_item(selected, ScrollStrategy::Center);
-                            app.settings_filter
-                                .update(cx, |filter, cx| filter.clear(cx));
-                            let handle = app.settings_filter.read(cx).focus_handle(cx);
-                            window.focus(&handle);
-                        }
-                        cx.notify();
-                    });
-                })
-                .child(label)
-                .child(icon(
-                    "icons/chevron-down.svg",
-                    IconSize::XSmall.px(&theme),
-                    theme.text_3,
-                )),
+                            theme.surface_elevated
+                        },
+                        &theme,
+                    )
+                    .cursor_pointer()
+                    .text_color(theme.text_secondary)
+                    .hover(|s| s.raised(theme.overlay, &theme))
+                    .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                        chip_this.update(cx, |app, cx| {
+                            // A dismissal from this same click's mouse-down
+                            // must not immediately re-open (see
+                            // `toggle_session_menu`).
+                            const GESTURE: Duration = Duration::from_millis(200);
+                            if let Some(dismissed) = app.menu_dismissed_at.take() {
+                                if dismissed.elapsed() < GESTURE {
+                                    return;
+                                }
+                            }
+                            if app.settings_select == Some(kind) {
+                                app.settings_select = None;
+                            } else {
+                                app.settings_select = Some(kind);
+                                // Open with the cursor on the chosen option,
+                                // scrolled into view in the list below.
+                                app.settings_select_highlight = Some(selected);
+                                app.settings_select_scroll
+                                    .scroll_to_item(selected, ScrollStrategy::Center);
+                                app.settings_filter
+                                    .update(cx, |filter, cx| filter.clear(cx));
+                                let handle = app.settings_filter.read(cx).focus_handle(cx);
+                                window.focus(&handle);
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .child(label)
+                    .child(icon(
+                        "icons/chevron-down.svg",
+                        IconSize::XSmall.px(&theme),
+                        theme.text_muted,
+                    )),
             )
             .into_any_element()
     }
@@ -6907,7 +6947,7 @@ impl OrbitApp {
                 .py(list_pad_y)
                 .child(
                     picker_entry(div(), &theme)
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("settings.no_matches")),
                 )
                 .into_any_element()
@@ -6939,22 +6979,22 @@ impl OrbitApp {
                                     // The chosen option keeps the fill; the
                                     // keyboard cursor rides the same wash.
                                     .when(highlighted_row || selected_row, |row| {
-                                        row.bg(theme.active)
+                                        row.bg(theme.surface_active)
                                     })
                                     .when(!highlighted_row && !selected_row, |row| {
-                                        row.hover(|style| style.bg(theme.overlay))
+                                        row.hover(|style| style.bg(theme.surface_hover))
                                     })
                                     .text_color(if selected_row || highlighted_row {
-                                        theme.active_fg
+                                        theme.text_primary
                                     } else {
-                                        theme.text_2
+                                        theme.text_secondary
                                     })
                                     .child(option.clone())
                                     .when(selected_row, |row| {
                                         row.child(icon(
                                             "icons/check.svg",
                                             context_menu::ICON.px(&theme),
-                                            theme.accent,
+                                            theme.accent_text,
                                         ))
                                     })
                                     .on_mouse_up(MouseButton::Left, move |_, _, cx| {
@@ -7027,7 +7067,7 @@ impl OrbitApp {
                     .child(icon(
                         "icons/search.svg",
                         input::ICON.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     ))
                     .child(div().flex_1().min_w_0().child(self.settings_filter.clone())),
             )
@@ -7050,10 +7090,7 @@ impl OrbitApp {
                     anchored()
                         .position_mode(AnchoredPositionMode::Window)
                         .anchor(Corner::TopRight)
-                        .offset(point(
-                            px(0.),
-                            size.height(&theme) + popover::MENU_OFFSET,
-                        ))
+                        .offset(point(px(0.), size.height(&theme) + popover::MENU_OFFSET))
                         .child(deferred(popup)),
                 )
                 .into_any_element(),
@@ -7126,25 +7163,6 @@ impl OrbitApp {
         match kind {
             SettingsSelect::Theme(mode) => {
                 let catalog = self.theme_catalog(mode, cx);
-                // The row after the last palette is the disclosure: it reveals
-                // the rest of the catalog instead of choosing, so the dropdown
-                // stays open on the longer list the user just asked for.
-                if ix >= catalog.len() {
-                    self.settings_themes_expanded = !self.settings_themes_expanded;
-                    // Put the cursor back on the palette in effect. Left where it
-                    // was, it would land on the first newly-revealed theme and
-                    // wash that row as if it had been chosen.
-                    let expanded = self.theme_catalog(mode, cx);
-                    let configured = theme::appearance_prefs(cx).theme(mode);
-                    let cursor = expanded
-                        .iter()
-                        .position(|id| *id == configured)
-                        .unwrap_or(0);
-                    self.settings_select_highlight = Some(cursor);
-                    self.settings_select_scroll
-                        .scroll_to_item(cursor, ScrollStrategy::Center);
-                    return false;
-                }
                 let Some(id) = catalog.get(ix).copied() else {
                     return true;
                 };
@@ -7331,10 +7349,8 @@ impl OrbitApp {
     pub(super) fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.refresh_updater(cx);
         self.settings_open = true;
-        // Every visit starts from the curated theme list, never from the
-        // expanded catalog a previous visit left behind.
-        self.settings_themes_expanded = false;
         self.set_settings_section(SettingsSection::General, cx);
+        self.sync_terminal_active(cx);
     }
 
     pub(super) fn on_open_settings(
@@ -7357,6 +7373,7 @@ impl OrbitApp {
         self.refresh_updater(cx);
         self.settings_open = true;
         self.set_settings_section(SettingsSection::About, cx);
+        self.sync_terminal_active(cx);
     }
 
     pub(super) fn on_settings_gear_click(
@@ -7371,6 +7388,7 @@ impl OrbitApp {
             self.settings_open = false;
             self.provider_editor = None;
             self.provider_key_editor = None;
+            self.sync_terminal_active(cx);
         } else {
             self.open_settings(cx);
             return;
@@ -7388,6 +7406,7 @@ impl OrbitApp {
         self.provider_editor = None;
         self.provider_key_editor = None;
         self.input.read(cx).focus(window);
+        self.sync_terminal_active(cx);
         cx.notify();
     }
 
@@ -7415,6 +7434,7 @@ impl OrbitApp {
                 self.reload_custom_providers_later(cx);
                 self.refresh_auth();
             }
+            SettingsSection::Privacy => self.refresh_temp_files(cx),
             SettingsSection::Skills => self.refresh_skills(cx),
             SettingsSection::Plugins => self.refresh_plugins(cx),
             SettingsSection::Mcp => self.mcp_section_opened(cx),
@@ -8184,7 +8204,7 @@ fn keycap(label: &str, theme: Theme) -> AnyElement {
         .justify_center()
         .bg(theme.overlay_strong)
         .text_size(TextSize::Small.px(&theme))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(label.to_string())
         .into_any_element()
 }
@@ -8292,9 +8312,9 @@ mod settings_select_tests {
 
 /// The Theme dropdown's option list is the single ordering both the label
 /// builder and the click resolver read, so a row index always resolves to the
-/// palette it painted — and the disclosure row is the only index past the last
-/// palette. Preferences are set in memory here; the real setter writes the
-/// user's `~/.orbit-pi/theme` and has no business running from a test.
+/// palette it painted. Preferences are set in memory here; the real setter
+/// writes the user's `~/.orbit-pi/theme` and has no business running from a
+/// test.
 #[cfg(test)]
 mod theme_catalog_tests {
     use super::*;
@@ -8316,49 +8336,42 @@ mod theme_catalog_tests {
     }
 
     #[gpui::test]
-    fn collapsed_catalog_is_the_curated_set(cx: &mut gpui::TestAppContext) {
+    fn catalog_lists_every_dark_palette(cx: &mut gpui::TestAppContext) {
         let app = test_app(cx);
         let cx = cx.add_empty_window();
         choose_dark_theme(cx, theme::ThemeId::Orbit);
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
-                let catalog = app.theme_catalog(ThemeMode::Dark, cx);
-                assert_eq!(catalog, theme::ThemeId::FEATURED[..3].to_vec());
-                // The disclosure row sits at `catalog.len()`, one past the
-                // last palette, so every palette index stays a palette.
-                assert_eq!(catalog.len(), 3);
+                assert_eq!(
+                    app.theme_catalog(ThemeMode::Dark, cx),
+                    vec![
+                        theme::ThemeId::Orbit,
+                        theme::ThemeId::OrbitDarker,
+                        theme::ThemeId::OrbitCobalt,
+                        theme::ThemeId::OrbitAzure,
+                        theme::ThemeId::Flexoki,
+                    ]
+                );
             });
         });
     }
 
     #[gpui::test]
-    fn an_unfeatured_choice_is_appended_not_hidden(cx: &mut gpui::TestAppContext) {
+    fn catalog_lists_every_light_palette(cx: &mut gpui::TestAppContext) {
         let app = test_app(cx);
         let cx = cx.add_empty_window();
-        choose_dark_theme(cx, theme::ThemeId::Dracula);
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
-                let catalog = app.theme_catalog(ThemeMode::Dark, cx);
-                assert_eq!(catalog.len(), 4);
-                assert_eq!(catalog.last(), Some(&theme::ThemeId::Dracula));
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn asking_for_all_themes_appends_without_reordering(cx: &mut gpui::TestAppContext) {
-        let app = test_app(cx);
-        let cx = cx.add_empty_window();
-        choose_dark_theme(cx, theme::ThemeId::Orbit);
-        cx.update(|_, cx| {
-            app.update(cx, |app, cx| {
-                let short = app.theme_catalog(ThemeMode::Dark, cx);
-                app.settings_themes_expanded = true;
-                let all = app.theme_catalog(ThemeMode::Dark, cx);
-                assert!(all.len() > short.len());
-                assert_eq!(all[..short.len()], short[..]);
-                assert!(all.contains(&theme::ThemeId::Dracula));
-                assert!(all.iter().all(|id| id.appearance() == ThemeMode::Dark));
+                assert_eq!(
+                    app.theme_catalog(ThemeMode::Light, cx),
+                    vec![
+                        theme::ThemeId::OrbitLight,
+                        theme::ThemeId::OrbitAzureLight,
+                        theme::ThemeId::OrbitPaper,
+                        theme::ThemeId::OrbitContrast,
+                        theme::ThemeId::FlexokiLight,
+                    ]
+                );
             });
         });
     }
@@ -8386,7 +8399,13 @@ mod model_filter_tests {
         let model = entry("anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5");
         assert!(model_visible(&model, "", false, &favorites, None));
         assert!(model_visible(&model, "sonnet", false, &favorites, None));
-        assert!(model_visible(&model, "claude-sonnet", false, &favorites, None));
+        assert!(model_visible(
+            &model,
+            "claude-sonnet",
+            false,
+            &favorites,
+            None
+        ));
         assert!(model_visible(&model, "anthropic", false, &favorites, None));
         assert!(!model_visible(&model, "gemini", false, &favorites, None));
     }
@@ -8410,11 +8429,35 @@ mod model_filter_tests {
         let gpt = entry("openai", "gpt-5", "GPT-5");
 
         // A provider scope admits only that provider's models.
-        assert!(model_visible(&opus, "", false, &favorites, Some("anthropic")));
-        assert!(model_visible(&sonnet, "", false, &favorites, Some("anthropic")));
-        assert!(!model_visible(&gpt, "", false, &favorites, Some("anthropic")));
+        assert!(model_visible(
+            &opus,
+            "",
+            false,
+            &favorites,
+            Some("anthropic")
+        ));
+        assert!(model_visible(
+            &sonnet,
+            "",
+            false,
+            &favorites,
+            Some("anthropic")
+        ));
+        assert!(!model_visible(
+            &gpt,
+            "",
+            false,
+            &favorites,
+            Some("anthropic")
+        ));
         // The search still applies inside the provider scope.
-        assert!(!model_visible(&sonnet, "opus", false, &favorites, Some("anthropic")));
+        assert!(!model_visible(
+            &sonnet,
+            "opus",
+            false,
+            &favorites,
+            Some("anthropic")
+        ));
         // `None` means every provider.
         assert!(model_visible(&gpt, "", false, &favorites, None));
     }

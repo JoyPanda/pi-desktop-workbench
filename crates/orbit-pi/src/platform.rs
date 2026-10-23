@@ -958,7 +958,9 @@ pub fn open_terminal_command(command: &str) -> Result<(), String> {
     // A `.command` file opened with `open` runs in Terminal.app without
     // requiring Automation (AppleScript) permission, and works even when a
     // non-default terminal is installed.
-    let path = std::env::temp_dir().join(format!("orbit-{}.command", std::process::id()));
+    let path = crate::temp_files::ensure_dir()
+        .map_err(|err| tr!("platform.login_script_failed", error = err))?
+        .join(format!("login-{}.command", std::process::id()));
     let script = format!("#!/bin/zsh\n{command}\n");
     std::fs::write(&path, script)
         .map_err(|err| tr!("platform.login_script_failed", error = err))?;

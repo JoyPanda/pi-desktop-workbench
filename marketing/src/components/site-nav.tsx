@@ -11,6 +11,7 @@ import {
   getRepoStars,
   LATEST_RELEASE_URL,
 } from "@/lib/releases";
+import { NO_DOWNLOADS } from "@/lib/downloads";
 
 const links = [
   { label: "Agent", href: "/#agent" },
@@ -37,11 +38,7 @@ export async function SiteNav() {
     getLatestRelease(),
     getRepoStars(),
   ]);
-  const assets = {
-    macos: release?.macos,
-    windows: release?.windows,
-    linux: release?.linux,
-  };
+  const downloads = release?.downloads ?? NO_DOWNLOADS;
 
   return (
     <header className="sticky top-0 z-50 bg-page/80 backdrop-blur-md">
@@ -96,20 +93,22 @@ export async function SiteNav() {
               <ThemeToggle />
 
               <OsDownloadButton
-                assets={assets}
+                downloads={downloads}
                 fallback={LATEST_RELEASE_URL}
                 variant="nav"
                 short
+                menu={false}
               />
             </div>
 
             <div className="flex items-center gap-2.5 md:hidden">
               <ThemeToggle />
               <OsDownloadButton
-                assets={assets}
+                downloads={downloads}
                 fallback={LATEST_RELEASE_URL}
                 variant="nav"
                 short
+                menu={false}
               />
             </div>
           </nav>

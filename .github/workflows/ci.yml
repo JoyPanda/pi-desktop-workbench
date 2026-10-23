@@ -52,12 +52,12 @@ jobs:
       - name: Build
         run: cargo build --workspace
 
-      # Informational: the repo carries pre-existing clippy lints, so this
-      # step reports rather than gates. One all-targets pass is enough — the
-      # per-platform builds above are the check that the app ships everywhere.
+      # Gating: the workspace is clippy-clean, so a new lint is a regression
+      # rather than noise. One all-targets pass is enough — the per-platform
+      # builds above are the check that the app ships everywhere.
       - name: Clippy
         if: runner.os == 'macOS'
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   # The required `build` status check. `always()` keeps this context
   # reporting even when a matrix leg fails or the matrix is cancelled, so

@@ -223,11 +223,8 @@ impl OrbitApp {
                         // now resolve to the managed install.
                         if verification.managed() {
                             app.pi_migration_required = None;
-                            let version = verification
-                                .installation
-                                .version
-                                .clone()
-                                .unwrap_or(before);
+                            let version =
+                                verification.installation.version.clone().unwrap_or(before);
                             app.toast_success(tr!("pi_update.migrated", version = version));
                             // A verified install can still be shadowed by an
                             // older pi earlier on PATH; surface that instead

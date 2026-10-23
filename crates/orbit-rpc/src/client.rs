@@ -321,7 +321,10 @@ impl PiClient {
         let command = crate::types::Command::new(id.clone(), body);
         let wire = command.to_wire()?;
         let (tx, rx) = mpsc::channel();
-        self.pending.lock().unwrap().insert(id, tx);
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id, tx);
         self.commands_tx
             .send(Outgoing { wire })
             .map_err(|_| anyhow!("pi process is not running"))?;
@@ -351,13 +354,19 @@ impl PiClient {
 
     /// Drain recent stderr lines written by pi.
     pub fn drain_stderr(&self) -> Vec<String> {
-        let mut ring = self.stderr_ring.lock().unwrap();
+        let mut ring = self
+            .stderr_ring
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         ring.drain(..).collect()
     }
 
     /// The most recent stderr lines (newest last), without draining them.
     pub fn recent_stderr(&self, limit: usize) -> Vec<String> {
-        let ring = self.stderr_ring.lock().unwrap();
+        let ring = self
+            .stderr_ring
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         ring.iter().rev().take(limit).rev().cloned().collect()
     }
 
@@ -425,7 +434,11 @@ impl PiClient {
                             let line = String::from_utf8_lossy(line);
                             let event = Event::parse_line(&line);
                             if let Event::Response { id, .. } = &event {
-                                if let Some(tx) = pending.lock().unwrap().remove(id) {
+                                if let Some(tx) = pending
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                    .remove(id)
+                                {
                                     let _ = tx.send(event.clone());
                                 }
                             }
@@ -450,7 +463,7 @@ impl PiClient {
             .spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
-                    let mut ring = ring.lock().unwrap();
+                    let mut ring = ring.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                     if ring.len() >= STDERR_RING_CAP {
                         ring.pop_front();
                     }

@@ -185,7 +185,9 @@ pub fn save_screenshots(files: &[(String, Vec<u8>)]) -> Result<PathBuf, String> 
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("orbit-bug-report-{stamp}"));
+    let dir = crate::temp_files::ensure_dir()
+        .map_err(|err| err.to_string())?
+        .join(format!("bug-report-{stamp}"));
     std::fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
     for (name, bytes) in files {
         std::fs::write(dir.join(sanitize_name(name)), bytes).map_err(|err| err.to_string())?;

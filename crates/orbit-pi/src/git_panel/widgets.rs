@@ -18,11 +18,11 @@ use crate::usage::tooltip::Tooltip;
 /// The color for a `git status` porcelain badge byte.
 pub fn status_color(badge: char, theme: Theme) -> Hsla {
     match badge {
-        'A' | '?' => theme.add_green,
-        'D' => theme.del_red,
-        'U' => theme.add_green,
-        'R' | 'C' => theme.warn,
-        _ => theme.warn,
+        'A' | '?' => theme.success,
+        'D' => theme.error,
+        'U' => theme.success,
+        'R' | 'C' => theme.warning,
+        _ => theme.warning,
     }
 }
 
@@ -40,7 +40,7 @@ pub fn check_box(checked: bool, theme: Theme) -> gpui::Div {
         .bg(if checked {
             theme.accent
         } else {
-            theme.bg_composer
+            theme.surface_secondary
         })
         .flex()
         .items_center()
@@ -49,7 +49,7 @@ pub fn check_box(checked: bool, theme: Theme) -> gpui::Div {
             box_.child(icon(
                 "icons/check.svg",
                 IconSize::Indicator.px(&theme),
-                theme.send_fg,
+                theme.accent_fg,
             ))
         })
 }
@@ -72,25 +72,28 @@ pub fn action_button(
         button = button
             .border_color(theme.border)
             .bg(theme.overlay)
-            .text_color(theme.text_3);
+            .text_color(theme.text_disabled);
     } else if primary {
-        button = press(button)
+        // Accent buttons press by color (the theme's pressed step), not the
+        // generic opacity dim, so the primary action keeps a real edge.
+        button = button
             .group(BUTTON_GROUP)
             .border_color(gpui::transparent_black())
-            .raised(theme.send_bg, &theme)
-            .text_color(theme.send_fg)
+            .raised(theme.action, &theme)
+            .text_color(theme.action_fg)
             .cursor_pointer()
-            .hover(|s| s.raised(theme.send_bg_hover, &theme))
+            .hover(|s| s.raised(theme.action_hover, &theme))
+            .active(|s| s.raised(theme.action_pressed, &theme))
             .on_click(listener);
     } else {
         button = press(button)
             .group(BUTTON_GROUP)
             .border_color(theme.border)
-            .raised(theme.bg_raised, &theme)
-            .text_color(theme.text)
+            .raised(theme.surface_elevated, &theme)
+            .text_color(theme.text_primary)
             .cursor_pointer()
             .hover(|s| {
-                s.raised(theme.bg_hover, &theme)
+                s.raised(theme.surface_hover, &theme)
                     .border_color(theme.border_strong)
             })
             .on_click(listener);
@@ -120,7 +123,7 @@ pub fn row_button(
         )
         .group(BUTTON_GROUP)
         .cursor_pointer()
-        .hover(|s| s.bg(theme.overlay)),
+        .hover(|s| s.bg(theme.surface_hover)),
     )
     .tooltip(move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into())
     .on_click(move |event, window, cx| {
@@ -130,7 +133,7 @@ pub fn row_button(
     .child(icon(
         icon_path,
         ButtonSize::Default.icon_size().px(&theme),
-        theme.text_3,
+        theme.text_muted,
     ))
     .into_any_element()
 }
@@ -138,14 +141,14 @@ pub fn row_button(
 /// A small ref chip (`main`, `origin/main`, `v1.2.0`), colored by kind.
 pub fn ref_badge(name: &str, kind: RefKind, theme: Theme) -> AnyElement {
     let (fg, border) = match kind {
-        RefKind::Head => (theme.accent, theme.accent),
-        RefKind::Branch => (theme.text_2, theme.border_strong),
-        RefKind::Remote => (theme.text_3, theme.border),
-        RefKind::Tag => (theme.warn, theme.warn),
+        RefKind::Head => (theme.accent_text, theme.accent),
+        RefKind::Branch => (theme.text_secondary, theme.border_strong),
+        RefKind::Remote => (theme.text_muted, theme.border),
+        RefKind::Tag => (theme.warning, theme.warning),
     };
     div()
         .h(px(18.))
-        .px(px(6.))
+        .px(DynamicSpacing::Base06.px(&theme))
         .rounded(Radius::Small.px(&theme))
         .border_1()
         .border_color(border.opacity(0.6))
@@ -172,8 +175,8 @@ pub fn load_more(
             .border_1()
             .border_color(theme.border)
             .cursor_pointer()
-            .text_color(theme.text_2)
-            .hover(|s| s.bg(theme.bg_hover)),
+            .text_color(theme.text_secondary)
+            .hover(|s| s.bg(theme.surface_hover)),
     )
     .on_click(listener)
     .child(if loading {
@@ -199,26 +202,26 @@ pub fn empty_note(
         .flex_col()
         .items_center()
         .justify_center()
-        .px(px(16.))
+        .px(DynamicSpacing::Base16.px(&theme))
         .py(px(60.))
         .child(empty_state_glyph(theme, glyph))
         .child(
             div()
-                .mt(px(16.))
+                .mt(DynamicSpacing::Base16.px(&theme))
                 .text_size(TextSize::Default.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(title.to_string()),
         );
     if let Some(detail) = detail {
         column = column.child(
             div()
-                .mt(px(6.))
+                .mt(DynamicSpacing::Base06.px(&theme))
                 .max_w(px(360.))
                 .text_align(gpui::TextAlign::Center)
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(17.))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(detail.to_string()),
         );
     }

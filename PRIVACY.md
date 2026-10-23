@@ -37,11 +37,18 @@ provider calls above:
 There is no `analytics.json`, no pseudonymous identifier, and no queue of
 events.
 
-## Session retention
+## Privacy controls
 
-Session retention is the only privacy control in **Settings → Privacy**. It
+**Settings → Privacy** holds both local cleanup controls. **Session retention**
 lets you archive or delete old `pi` sessions on a schedule you choose, entirely
-on your machine. Orbit never uploads them.
+on your machine. **Temporary files** lists Orbit's own scratch entries in
+its `orbit-pi` folder inside the system temp directory — bug-report
+screenshots, update downloads, and helper scripts — with **Open folder** and
+**Clean up now**; older top-level `orbit-*` leftovers are included too, and
+entries a live Orbit process still needs are kept. **AI scratch files** lists
+pi's own `pi-*` entries in the temp root — shell output, codemode images, and
+share/editor working files — and only removes files last used more than an
+hour ago. Orbit never uploads either.
 
 ## Source of truth
 

@@ -90,34 +90,35 @@ pub fn open(cx: &mut App) {
         None => (1240., 840.),
     };
     let restore_bounds = Bounds::centered(None, size(px(w), px(h)), cx);
-    let _window = cx
-        .open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Maximized(restore_bounds)),
-                // Keep the window usable when shrunk: sidebar (min
-                // 200px) + a readable transcript + the composer.
-                window_min_size: Some(size(px(960.), px(640.))),
-                titlebar: Some(platform::titlebar_options()),
-                app_id: Some("dev.orbit.pi".into()),
-                focus: true,
-                ..Default::default()
-            },
-            |window, cx| {
-                theme::watch_system_appearance(window, cx);
+    let Ok(_window) = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Maximized(restore_bounds)),
+            // Keep the window usable when shrunk: sidebar (min
+            // 200px) + a readable transcript + the composer.
+            window_min_size: Some(size(px(960.), px(640.))),
+            titlebar: Some(platform::titlebar_options()),
+            app_id: Some("dev.orbit.pi".into()),
+            focus: true,
+            ..Default::default()
+        },
+        |window, cx| {
+            theme::watch_system_appearance(window, cx);
 
-                // Focus the composer so typing works immediately; track
-                // window focus so background notifications know whether
-                // the user is already looking at the transcript.
-                app.update(cx, |app, cx| {
-                    app.watch_window_activation(window, cx);
-                    let handle = app.input.read(cx).focus_handle(cx);
-                    window.focus(&handle);
-                });
+            // Focus the composer so typing works immediately; track
+            // window focus so background notifications know whether
+            // the user is already looking at the transcript.
+            app.update(cx, |app, cx| {
+                app.watch_window_activation(window, cx);
+                let handle = app.input.read(cx).focus_handle(cx);
+                window.focus(&handle);
+            });
 
-                app
-            },
-        )
-        .unwrap();
+            app
+        },
+    ) else {
+        eprintln!("Orbit: could not open the main window");
+        return;
+    };
 
     // Both entries bring the app forward: a Dock click on a windowless app,
     // or a launch that opened the first window. Neither `focus: true` above

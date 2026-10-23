@@ -134,7 +134,10 @@ mod tests {
         // Already leading: order is unchanged.
         assert_eq!(
             recents.entries(),
-            [("anthropic".to_string(), "claude".to_string()), ("openai".to_string(), "gpt-5".to_string())]
+            [
+                ("anthropic".to_string(), "claude".to_string()),
+                ("openai".to_string(), "gpt-5".to_string())
+            ]
         );
         recents.touch("openai", "gpt-5");
         assert_eq!(recents.entries()[0].0, "openai");

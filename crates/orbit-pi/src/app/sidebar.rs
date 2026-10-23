@@ -622,8 +622,8 @@ pub(crate) fn render_side_row(
                         .items_center()
                         .gap(DynamicSpacing::Base06.px(&theme))
                         .cursor_pointer()
-                        .when(cursor, |s| s.bg(theme.overlay))
-                        .hover(|s| s.bg(theme.bg_hover))
+                        .when(cursor, |s| s.bg(theme.surface_hover))
+                        .hover(|s| s.bg(theme.surface_hover))
                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                             let label = label_for_click.clone();
                             this_toggle.update(cx, |app, cx| {
@@ -663,7 +663,7 @@ pub(crate) fn render_side_row(
                                 "icons/chevron-down.svg"
                             },
                             IconSize::XSmall.px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         ))
                         .child(icon_dyn(
                             workspace_icon,
@@ -677,7 +677,7 @@ pub(crate) fn render_side_row(
                                 .truncate()
                                 .text_size(TextSize::Default.px(&theme))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(label.clone()),
                         )
                         // Row actions, revealed on hover: a `…` menu
@@ -705,7 +705,7 @@ pub(crate) fn render_side_row(
                             // keeps group headers to just label + count.
                             .opacity(0.)
                             .group_hover("workspace-row", |s| s.opacity(1.))
-                            .hover(|s| s.bg(theme.overlay))
+                            .hover(|s| s.bg(theme.surface_hover))
                             .on_mouse_up(MouseButton::Left, {
                                 let this = this_new.clone();
                                 move |_, window, cx| {
@@ -719,7 +719,7 @@ pub(crate) fn render_side_row(
                             .child(icon(
                                 "icons/plus.svg",
                                 ButtonSize::Compact.icon_size().px(&theme),
-                                theme.text_3,
+                                theme.text_muted,
                             )),
                         )
                         // Session count, pinned to the header's right edge.
@@ -732,7 +732,7 @@ pub(crate) fn render_side_row(
                                 div()
                                     .flex_none()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(format!("{count}")),
                             )
                         }),
@@ -775,12 +775,12 @@ pub(crate) fn render_side_row(
                 .child(icon(
                     "icons/chevron-down.svg",
                     IconSize::XSmall.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("sidebar.show_count_more", count = count)),
                 );
             let mut row = div()
@@ -791,15 +791,15 @@ pub(crate) fn render_side_row(
                 .flex()
                 .items_center()
                 .rounded(list_item::RADIUS.px(&theme))
-                .when(cursor, |s| s.bg(theme.overlay))
-                .hover(|s| s.bg(theme.bg_hover))
+                .when(cursor, |s| s.bg(theme.surface_hover))
+                .hover(|s| s.bg(theme.surface_hover))
                 .child(more);
             if can_collapse {
                 row = row.child(
                     icon_button_frame(div(), &theme, ButtonSize::Compact)
                         .tip(tr!("sidebar.show_less"))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.overlay))
+                        .hover(|s| s.bg(theme.surface_hover))
                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                             cx.stop_propagation();
                             let label = label_for_collapse.clone();
@@ -811,7 +811,7 @@ pub(crate) fn render_side_row(
                         .child(icon(
                             "icons/chevron-up.svg",
                             IconSize::XSmall.px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         )),
                 );
             }
@@ -830,8 +830,8 @@ pub(crate) fn render_side_row(
                 .gap(DynamicSpacing::Base06.px(&theme))
                 .rounded(list_item::RADIUS.px(&theme))
                 .cursor_pointer()
-                .when(cursor, |s| s.bg(theme.overlay))
-                .hover(|s| s.bg(theme.bg_hover))
+                .when(cursor, |s| s.bg(theme.surface_hover))
+                .hover(|s| s.bg(theme.surface_hover))
                 .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                     let label = label_for_click.clone();
                     this.update(cx, |app, cx| {
@@ -842,12 +842,12 @@ pub(crate) fn render_side_row(
                 .child(icon(
                     "icons/chevron-up.svg",
                     IconSize::XSmall.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("sidebar.show_less")),
                 )
                 .into_any_element()
@@ -886,7 +886,7 @@ pub(crate) fn render_side_row(
             // on hover.
             let title = session_title(*ix, session.title.clone().into(), theme, active, running);
             // Indented under its workspace group so the list reads as a
-            // tree. The open session takes the `active` fill with `active_fg`
+            // tree. The open session takes the `selection` fill with `selection_fg`
             // ink — the same selected-destination grammar as the nav rows;
             // row actions are revealed on hover. A first-message preview adds
             // a second line only when it says something the title does not
@@ -947,10 +947,12 @@ pub(crate) fn render_side_row(
                 .flex()
                 .items_center()
                 .gap(DynamicSpacing::Base06.px(&theme))
-                .when(active, |card| card.bg(theme.active))
-                .when(cursor && !active, |card| card.bg(theme.overlay))
+                .when(active, |card| {
+                    card.bg(theme.selection).text_color(theme.selection_fg)
+                })
+                .when(cursor && !active, |card| card.bg(theme.surface_hover))
                 .when(!active && !cursor, |card| {
-                    card.hover(|s| s.bg(theme.bg_hover))
+                    card.hover(|s| s.bg(theme.surface_hover))
                 });
             // Text column: title + actions, then the first-message preview
             // with the age. The title line is the row's anchor and is always
@@ -992,10 +994,10 @@ pub(crate) fn render_side_row(
                             .items_center()
                             .gap(DynamicSpacing::Base06.px(&theme))
                             .when(running, |line| {
-                                line.child(crate::app::spinner(
+                                line.child(crate::app::running_spinner(
                                     ElementId::NamedInteger("side-spin".into(), *ix as u64),
                                     IconSize::XSmall.px(&theme),
-                                    theme.accent,
+                                    theme.accent_text,
                                     theme,
                                 ))
                             })
@@ -1003,14 +1005,14 @@ pub(crate) fn render_side_row(
                                 line.child(icon(
                                     "icons/pin.svg",
                                     IconSize::Medium.px(&theme),
-                                    theme.text_3,
+                                    theme.text_muted,
                                 ))
                             })
                             .when(archived, |line| {
                                 line.child(icon(
                                     "icons/archive.svg",
                                     IconSize::Medium.px(&theme),
-                                    theme.text_3,
+                                    theme.text_muted,
                                 ))
                             })
                             .child(title)
@@ -1019,7 +1021,7 @@ pub(crate) fn render_side_row(
                                     div()
                                         .flex_none()
                                         .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(theme.accent)
+                                        .text_color(theme.accent_text)
                                         .child(tr!("sidebar.current")),
                                 )
                             })
@@ -1037,7 +1039,7 @@ pub(crate) fn render_side_row(
                                     div()
                                         .flex_none()
                                         .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(theme.text_3)
+                                        .text_color(theme.text_muted)
                                         .child(age.clone()),
                                 )
                             }),
@@ -1063,7 +1065,7 @@ pub(crate) fn render_side_row(
                                             .max_w(px(120.))
                                             .truncate()
                                             .text_size(TextSize::XSmall.px(&theme))
-                                            .text_color(theme.text_2)
+                                            .text_color(theme.text_secondary)
                                             .child(workspace_label),
                                     )
                                 })
@@ -1075,7 +1077,11 @@ pub(crate) fn render_side_row(
                                             .truncate()
                                             .text_size(TextSize::Small.px(&theme))
                                             .line_height(BufferLineHeight::Standard.relative())
-                                            .text_color(theme.text_3)
+                                            .text_color(if active {
+                                                theme.text_secondary
+                                            } else {
+                                                theme.text_muted
+                                            })
                                             .child(session.first_message.clone()),
                                     )
                                 })
@@ -1083,29 +1089,16 @@ pub(crate) fn render_side_row(
                                     div()
                                         .flex_none()
                                         .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(theme.text_3)
+                                        .text_color(if active {
+                                            theme.text_secondary
+                                        } else {
+                                            theme.text_muted
+                                        })
                                         .child(age),
                                 ),
                         )
                     }),
             );
-            // The open session's marker: a short ember rail on the leading
-            // edge. The active fill and the hover/cursor washes sit within a
-            // few points of each other, so the rail — not the tint — is what
-            // makes "this is the session you are viewing" unmistakable, and
-            // the row's fill and ink can stay quiet beside it.
-            if active {
-                card = card.child(
-                    div()
-                        .absolute()
-                        .left(DynamicSpacing::Base06.px(&theme))
-                        .top_0()
-                        .bottom_0()
-                        .flex()
-                        .items_center()
-                        .child(div().w(px(2.)).h(px(16.)).rounded_full().bg(theme.accent)),
-                );
-            }
             row = row.child(card);
             row.into_any_element()
         }
@@ -1162,7 +1155,7 @@ pub(crate) fn session_menu_button(
     .child(icon(
         "icons/more.svg",
         ButtonSize::Compact.icon_size().px(&theme),
-        theme.text_3,
+        theme.text_muted,
     ))
     // The dropdown hangs off a zero-size anchor pinned to the button's
     // top-left corner. The button centers its icon (`items_center` +
@@ -1191,9 +1184,9 @@ fn session_title(
     running: bool,
 ) -> AnyElement {
     let color = if active {
-        theme.active_fg
+        theme.text_primary
     } else {
-        theme.text_2
+        theme.text_secondary
     };
     let weight = if active {
         FontWeight::MEDIUM
@@ -1224,11 +1217,11 @@ fn session_title(
             .text_size(size)
             .line_height(line_height)
             .font_weight(weight)
-            .text_color(theme.accent)
+            .text_color(theme.accent_text)
             .child(title)
             .into_any_element();
     }
-    // The sweep catches the accent: ink at the edges, ember through the band
+    // The sweep catches the accent: ink at the edges, accent through the band
     // (shadcn's highlight, spent on the one hue the system rations).
     let highlight = theme.accent;
     div()
@@ -1280,13 +1273,13 @@ pub(crate) fn session_menu_popup(
                         div()
                             .text_size(TextSize::Small.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("sidebar.delete_this_session")),
                     )
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(tr!("sidebar.removes_the_session_file_from_disk")),
                     ),
             )
@@ -1297,10 +1290,10 @@ pub(crate) fn session_menu_popup(
                     .gap(DynamicSpacing::Base06.px(&theme))
                     .child(
                         button_frame(div().id("menu-cancel"), &theme, ButtonSize::Default)
-                            .raised(theme.bg_raised, &theme)
+                            .raised(theme.surface_elevated, &theme)
                             .cursor_pointer()
-                            .hover(|s| s.raised(theme.bg_hover, &theme))
-                            .text_color(theme.text_2)
+                            .hover(|s| s.raised(theme.surface_hover, &theme))
+                            .text_color(theme.text_secondary)
                             .on_mouse_down(MouseButton::Left, {
                                 let this = this.clone();
                                 move |_, _, cx| {
@@ -1312,10 +1305,10 @@ pub(crate) fn session_menu_popup(
                     )
                     .child(
                         button_frame(div().id("menu-confirm-delete"), &theme, ButtonSize::Default)
-                            .raised(theme.stop_red, &theme)
+                            .raised(theme.error, &theme)
                             .cursor_pointer()
-                            .hover(|s| s.raised(theme.stop_red_hover, &theme))
-                            .text_color(theme.send_fg)
+                            .hover(|s| s.raised(theme.error_hover, &theme))
+                            .text_color(theme.error_fg)
                             .on_mouse_down(MouseButton::Left, {
                                 let this = this.clone();
                                 move |_, _, cx| {
@@ -1492,7 +1485,7 @@ pub(crate) fn workspace_menu_button(
     .child(icon(
         "icons/more.svg",
         ButtonSize::Compact.icon_size().px(&theme),
-        theme.text_3,
+        theme.text_muted,
     ))
     .children(menu.map(|menu| {
         div()
@@ -1530,18 +1523,22 @@ where
         .h(picker::entry_height(&theme))
         .flex_none()
         .cursor_pointer()
-        .hover(|s| s.bg(theme.overlay))
+        .hover(|s| s.bg(theme.surface_hover))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
             this.update(cx, |app, cx| (on_click)(app, cx));
         })
-        .child(icon(icon_path, context_menu::ICON.px(&theme), theme.text_3))
+        .child(icon(
+            icon_path,
+            context_menu::ICON.px(&theme),
+            theme.text_muted,
+        ))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(label),
         )
 }
@@ -1702,7 +1699,7 @@ fn workspace_appearance_picker(
                 .bg(color_of(&theme))
                 .border_2()
                 .border_color(if selected {
-                    theme.text
+                    theme.text_primary
                 } else {
                     theme.border_strong
                 })
@@ -1743,8 +1740,8 @@ fn workspace_appearance_picker(
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .when(selected, |s| s.bg(theme.active))
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .when(selected, |s| s.bg(theme.selection))
+                    .hover(|s| s.bg(theme.surface_hover))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
                         let next = WorkspaceMark {
@@ -1777,7 +1774,7 @@ fn workspace_appearance_picker(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(tr!("sidebar.icon_and_color")),
         )
         .child(
@@ -1789,8 +1786,8 @@ fn workspace_appearance_picker(
                 .py(DynamicSpacing::Base01.px(&theme))
                 .rounded(list_item::RADIUS.px(&theme))
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
-                .hover(|s| s.bg(theme.bg_hover))
+                .text_color(theme.text_muted)
+                .hover(|s| s.bg(theme.surface_hover))
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     cx.stop_propagation();
                     this_reset.update(cx, |app, cx| {
@@ -1831,8 +1828,8 @@ pub(crate) fn sidebar_options_button(
         .tip(tr!("sidebar.options"))
         .cursor_pointer()
         // Always visible: the sidebar's one view control, not a hover reveal.
-        .when(open, |button| button.bg(theme.active))
-        .hover(|s| s.bg(theme.overlay))
+        .when(open, |button| button.bg(theme.surface_active))
+        .hover(|s| s.bg(theme.surface_hover))
         .active(|s| s.opacity(PRESS_DIM))
         .on_mouse_up(MouseButton::Left, move |_, window, cx| {
             cx.stop_propagation();
@@ -1841,7 +1838,7 @@ pub(crate) fn sidebar_options_button(
         .child(icon(
             "icons/sort.svg",
             ButtonSize::Compact.icon_size().px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         .children(open.then(|| {
             div()
@@ -1878,8 +1875,10 @@ where
         .h(picker::entry_height(&theme))
         .flex_none()
         .cursor_pointer()
-        .when(active, |row| row.bg(theme.active))
-        .when(!active, |row| row.hover(|s| s.bg(theme.overlay)))
+        .when(active, |row| {
+            row.bg(theme.selection).text_color(theme.selection_fg)
+        })
+        .when(!active, |row| row.hover(|s| s.bg(theme.surface_hover)))
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
             this.update(cx, |app, cx| on_click(app, cx));
@@ -1888,9 +1887,9 @@ where
             icon_path,
             context_menu::ICON.px(&theme),
             if active {
-                theme.active_fg
+                theme.text_primary
             } else {
-                theme.text_3
+                theme.text_muted
             },
         ))
         .child(
@@ -1899,9 +1898,9 @@ where
                 .min_w_0()
                 .truncate()
                 .text_color(if active {
-                    theme.active_fg
+                    theme.text_primary
                 } else {
-                    theme.text_2
+                    theme.text_secondary
                 })
                 .child(label),
         )
@@ -1909,7 +1908,7 @@ where
             row.child(icon(
                 "icons/check.svg",
                 context_menu::ICON.px(&theme),
-                theme.accent,
+                theme.accent_text,
             ))
         })
 }
@@ -2022,15 +2021,15 @@ where
     let label: SharedString = label.into();
     let on_click = on_click;
     let (hover_bg, text_color, icon_color) = if danger {
-        (theme.stop_red_hover, theme.send_fg, theme.send_fg)
+        (theme.error_hover, theme.error_fg, theme.error_fg)
     } else {
-        (theme.overlay, theme.text_2, theme.text_3)
+        (theme.overlay, theme.text_secondary, theme.text_muted)
     };
     picker_entry(div().id(id), &theme)
         .h(picker::entry_height(&theme))
         .flex_none()
         .cursor_pointer()
-        .when(danger, |s| s.bg(theme.stop_red))
+        .when(danger, |s| s.bg(theme.error))
         .hover(move |s| s.bg(hover_bg))
         .text_color(text_color)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -2075,27 +2074,27 @@ pub(crate) fn empty_sessions_state(theme: Theme) -> impl IntoElement + use<> {
             div()
                 .size(px(36.))
                 .rounded_full()
-                .bg(theme.bg_raised)
+                .bg(theme.surface_elevated)
                 .flex()
                 .items_center()
                 .justify_center()
                 .child(icon(
                     "icons/spark.svg",
                     IconSize::Medium.px(&theme),
-                    theme.accent,
+                    theme.accent_text,
                 )),
         )
         .child(
             div()
                 .text_size(TextSize::Default.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_2)
+                .text_color(theme.text_secondary)
                 .child(tr!("sidebar.no_projects_yet")),
         )
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .text_align(TextAlign::Center)
                 .child(tr!("sidebar.pick_a_folder_to_start_your_first_task")),
         )

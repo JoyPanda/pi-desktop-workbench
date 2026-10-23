@@ -24,7 +24,8 @@ pi as a child process, no web, no webview, no Node daemon.
 3. **GPUI is pre-1.0 and pinned.** `crates/orbit-pi` uses `gpui = { version = "0.2.2", features = ["runtime_shaders"] }`. Upgrade deliberately on a schedule, never track `main`.
 4. **Performance is a product requirement.** The transcript and sidebar are virtualized (`list()`). The UI drains RPC events on a ~90 ms heartbeat — never block a frame with I/O. Syntax highlighting, when it lands, must be paint-only so streaming never reflows.
 5. **Trust pi's truth.** Render real RPC events and on-disk state; nothing decorative pretending to be functional. Access modes the protocol can't deliver are shown as unavailable (or as a static fact), not faked. The sidebar **Search** row opens the command palette (sessions/commands/settings) — it is not a transcript-content search; do not wire a fake one.
-6. **Shipping changes the docs, not just the code.** When a feature ships, update `INTENT.md` → *Implementation status* (and add or revise a `D#` decision when the architecture changed), refresh the `README.md` features/roadmap, and add a `CHANGELOG.md` `[Unreleased]` entry. A feature is not done until `INTENT.md` describes it.
+6. **A library call is looked up, not remembered.** Every dependency is pinned to the version in `Cargo.toml` / `marketing/package.json`. Read that version's docs (or its source) and follow the call site already in the repo before writing a new one — see *Library reference* below. If the docs and the repo disagree, the repo wins; if both leave you guessing, ask instead of inventing.
+7. **Shipping changes the docs, not just the code.** When a feature ships, update `INTENT.md` → *Implementation status* (and add or revise a `D#` decision when the architecture changed), refresh the `README.md` features/roadmap, and add a `CHANGELOG.md` `[Unreleased]` entry. A feature is not done until `INTENT.md` describes it.
 
 ## Repo layout
 
@@ -166,6 +167,117 @@ PRODUCT.md  INTENT.md  README.md  AGENT.md  PRIVACY.md
 Workspace edition is **2021**. Prefer **Rust 1.94+**. Root `Cargo.lock` is the lockfile; ignore a nested `crates/orbit-pi/Cargo.lock` if present.
 
 Override the pi binary with `PI_BIN` (default: `pi` on `PATH`).
+
+## Library reference — read the docs before writing usage
+
+Every dependency below is pinned. Do not write a call from memory: look up the
+pinned version, then follow the pattern the repo already uses. Look-up order:
+
+1. **This repo.** `rg "gpui::" crates/orbit-pi/src` finds call sites; the file map
+   above says which module owns what.
+2. **The pinned source** (the authoritative API surface):
+   `~/.cargo/registry/src/index.crates.io-*/<crate>-<version>/`, or locally rendered
+   docs with `cargo doc -p <crate> --no-deps --open`.
+3. **docs.rs at the pinned version:** `https://docs.rs/<crate>/<version>`. Thin or
+   missing for pre-1.0 crates — then (2) is the doc.
+4. **Upstream precedent:** Zed `crates/gpui` for GPUI, the Waku file map below for
+   patterns. Precedent, not a spec.
+
+### Rust — UI and app runtime (`crates/orbit-pi`)
+
+| Crate | Owns here | Docs | Repo rules |
+|---|---|---|---|
+| `gpui` 0.2.2 | every element, window, input, list, popover | https://docs.rs/gpui/0.2.2 · Zed `crates/gpui` | Pinned pre-1.0: read the 0.2.2 source, never `main`. See *GPUI 0.2.2 API notes*. `list()` needs a definite height; rows are plain flex trees, no component library. |
+| `rust-i18n` 4.2 | `t!` lookups, YAML locales | https://docs.rs/rust-i18n/4.2.0 | `locales/en.yml` is the source of truth; other locales are generated. Placeholder binding names must match the key exactly. Never hard-code user-facing English. |
+| `rfd` 0.15 | file pickers (attach, screenshots, export) | https://docs.rs/rfd/0.15.0 | Use `AsyncFileDialog`, or gpui's `prompt_for_paths` for folders. **Never** the blocking `FileDialog`: it runs a nested main-thread modal loop that re-enters the app and panics with `already borrowed`. |
+| `include_dir` 0.7 | `assets/` as a `gpui::AssetSource` | https://docs.rs/include_dir/0.7.0 | Packaged builds must not read assets from cwd. |
+| `ignore` 0.4 | gitignore-aware workspace walk | https://docs.rs/ignore/0.4.0 | Walk off the UI thread and post a snapshot; do not hand-roll `read_dir`. |
+| `notify-debouncer-mini` 0.7 | session-store and workspace watchers | https://docs.rs/notify-debouncer-mini/0.7.0 | Debounce, scan off-thread, only drain a list on the heartbeat. |
+| `serde` / `serde_json` 1 | JSONL envelopes, on-disk stores | https://serde.rs | Permissive protocol parsing: unknown shapes pass through as raw JSON; no `deny_unknown_fields` on RPC types. |
+| `anyhow` 1 | context on fallible plumbing | https://docs.rs/anyhow/1 | `Context` at boundaries; no `unwrap`/`expect` in a render path or on RPC data. |
+| `ed25519-dalek` 2 | release-signature verification | https://docs.rs/ed25519-dalek/2 | Verify before writing bytes to disk. No skip or fallback path. |
+| `chrono` 0.4 | local timestamps | https://docs.rs/chrono/0.4 | `default-features = false` + `clock`; formatting only. |
+| `base64` 0.22 | image payloads over RPC | https://docs.rs/base64/0.22 | Prompt attachments only, never state files. |
+| `image` 0.25 | backdrop decode, resize, blur, dither | https://docs.rs/image/0.25 | Decode once into the cache (`dither::background()`), bounded by `MAX_EDGE`/`BLUR_MAX`; never re-decode per frame. |
+| `devicons` 0.6 | file-type glyphs | https://docs.rs/devicons/0.6 | Needs the bundled Nerd Font; resolve the family once per frame, fall back to text. |
+| `unicode-segmentation` 1 | grapheme clusters | https://docs.rs/unicode-segmentation/1 | Caret and selection math is grapheme-based; never index a string by byte. |
+| `futures` 0.3 | `BoxFuture` + oneshot for the image loader | https://docs.rs/futures/0.3 | Only the pieces gpui's traits need. |
+| `reqwest` (as `zed-reqwest`) 0.12.15-zed | update feeds, avatars, GitHub metadata | https://docs.rs/zed-reqwest | Same crate version gpui links — never add a second `reqwest`. Off-thread, and only traffic the user asked for (see *Privacy*). |
+| `url` 2.5 | update-feed URLs, `termy://` deep links, MCP validation | https://docs.rs/url/2.5 | Parse, never string-concat a URL. |
+| `alacritty_terminal` 0.26 | terminal grid + VT/ANSI | https://docs.rs/alacritty_terminal/0.26 | `default-features = false`. It owns parsing and the grid; `terminal.rs` owns PTY threads and paint. No second terminal crate. |
+| `crossbeam-channel` 0.5 | PTY → UI event channel | https://docs.rs/crossbeam-channel/0.5 | Nothing on the writer thread may block on the UI. |
+| `flate2` 1 / `tar` 0.4 | unpack the signed Unix update | https://docs.rs/tar/0.4 | Unpack into a fresh directory; verify before swapping. |
+| `libc` 0.2 | `kill(pid, 0)` liveness probe | https://docs.rs/libc/0.2 | Unix only, smallest possible surface. |
+
+### Rust — platform
+
+| Crate | Owns here | Docs | Repo rules |
+|---|---|---|---|
+| `cocoa` `=0.26.0` | Dock icon when running unbundled | https://docs.rs/cocoa/0.26.0 | Pinned to gpui's own pin; `#[cfg(target_os = "macos")]` only. |
+| `objc2` 0.6 + `objc2-app-kit` / `objc2-foundation` / `objc2-user-notifications` 0.3 + `block2` 0.6 | window chrome, "open in" icons, notification banners, locale | https://docs.rs/objc2/0.6 | One objc2 generation across the tree; enable only the framework features actually used; every `unsafe` block carries a comment. |
+| `windows-sys` 0.61 | Win32 shell, GDI, window messages | https://docs.rs/windows-sys/0.61 | `#[cfg(windows)]`; features are opt-in. |
+| `raw-window-handle` 0.6 | HWND for window drag and the caption | https://docs.rs/raw-window-handle/0.6 | Must stay on gpui's version. |
+| `embed-resource` 3 (build) | exe icon, version metadata, manifest | https://docs.rs/embed-resource/3 | gpui's `windows-manifest` feature stays off — a second `RT_MANIFEST` fails CVTRES with `CVT1100`. |
+
+`crates/orbit-rpc` depends on `serde`, `serde_json`, and `anyhow` only. Keep it
+that way: it is a transport, not a place for UI, HTTP, or runtime helpers.
+
+### Node — bundled pi extensions (`contrib/`)
+
+Zero npm dependencies: plain ESM, Web Platform APIs, and `node --test` for
+coverage. The extension API is documented **in the installed pi package**, not
+the web — read it before adding a hook:
+
+```
+~/.pi/agent/install/releases/$(cat ~/.pi/agent/install/current-version)/node_modules/@earendil-works/pi-coding-agent/docs/
+  extensions.md        hooks, ctx.ui, ctx.modelRegistry, setActiveTools
+  rpc-extension-ui.md  how ctx.ui.* travels over RPC as extension_ui_request
+  rpc.md, settings.md, security.md
+```
+
+Rules: fail closed (block the tool call when no UI can confirm), read
+`~/.orbit-pi/*.json` fresh on every hook so a settings change re-arms live
+sessions, keep the decision table in a pure module (`policy.js`, `title.js`,
+`adapters.js`) with a `.test.mjs` beside it, and never add a package — these
+files are materialized under `~/.orbit-pi/` and run in the user's pi process.
+
+### Frontend — `marketing/` only
+
+`next` 16.3.5 · `react` / `react-dom` 19.2.8 · `@base-ui/react` 1.8 ·
+`@hugeicons/react` · `tailwindcss` v4 · `shadcn` 4 · `tw-animate-css`.
+Docs: https://nextjs.org/docs · https://react.dev · https://base-ui.com/react ·
+https://tailwindcss.com/docs · https://ui.shadcn.com.
+
+This tree is the landing page, not the app: nothing here may be imported by
+`crates/orbit-pi` (Hard rule 1). Use the existing primitives in
+`marketing/src/components/ui` and the site's tokens in `globals.css`; do not add
+a second component library.
+
+### CLIs Orbit shells out to
+
+| Tool | Used for | Rules |
+|---|---|---|
+| `pi` | the agent runtime, `pi mcp list --json`, `pi update self` | One child per open session. Docs: the installed package path above; override with `PI_BIN`. |
+| `git` | every Git operation, worktrees, plugins from git URLs | No `git2`/libgit2. Run off-thread, read the exit code and stderr, and surface them. |
+| `gh` | issues, pull requests, auth status, attachments | May be missing or signed out: branch on that instead of assuming, and fall back to the web flow. |
+| `node` | extension and plugin installs, `node --test` | The first-run check reports it missing; never shell to it from a render path. |
+| `python3` | repo scripts, stdlib only | `scripts/gen_locales.py`, `scripts/check_i18n.py`, codemods. Not a runtime dependency. |
+| `cargo` | build, test, clippy, `cargo doc` | `cargo build --workspace` stays warning-free. |
+
+### Already solved in-repo — do not add a crate for these
+
+- **Markdown/GFM** — the renderer in `transcript_view.rs` is a Waku port and must
+  stay paint-only so streaming never reflows.
+- **Syntax highlighting** — `highlight.rs` (paint-only diff/code lexer).
+- **Charts** — Usage is painted directly in `src/usage/`.
+- **Git** — the `git` CLI, not libgit2.
+- **State management / DI / component library / a second HTTP client / tokio /
+  an editor widget** — gpui entities, `app/helpers.rs`, `widgets.rs`,
+  `zed-reqwest`, gpui's smol runtime, and `ComposerInput` cover these.
+
+No new dependency without a stated reason (also in *Verification*). When one is
+justified, pin it, say in the PR why the in-repo path or an existing crate does
+not cover it, and add it to the table above.
 
 ## Privacy
 
@@ -433,138 +545,3 @@ Every feature in `PRODUCT.md` → `Capabilities` runs natively in the GPUI app a
 - Windows: the same `cargo run -p orbit-pi` builds and runs (GPUI renders through DXGI here). `gpui`'s default `windows-manifest` feature is off in `crates/orbit-pi/Cargo.toml` — it links a second `RT_MANIFEST` resource beside the one `build.rs` embeds, and CVTRES fails the link with `CVT1100: duplicate resource`. `scripts/bundle-windows.ps1` builds the Inno Setup installer (`scripts/installer/orbit-pi.iss`); it needs Inno Setup 6 (`ISCC.exe`) and, per-user under `%LocalAppData%\Programs`, no elevation. Desktop notifications and the alert sound are still macOS-only stubs. Window chrome is the app's own: the header row carries minimize / maximize / close, drawing a restore glyph when `window.is_maximized()`, and the header strips drag the window through `platform::start_window_drag`. Check them by clicking — `IsIconic`/`IsZoomed` flip, closing exits the process — and check dragging by pressing a header strip and moving the pointer; both were broken while the presses were routed through GPUI's `WindowControlArea` path, which this app's focusable root makes unusable (see the Shell row).
 - No `unsafe` without a comment; no new dependencies without a stated reason.
 
-## GPUI 0.2.2 implementation notes
-
-Use the pinned GPUI source in `~/.cargo/registry/src/.../gpui-0.2.2/` and the repository's
-existing code as the primary API reference. Zed is a useful architectural precedent, but
-do not copy behavior that conflicts with Orbit's product or design rules.
-
-Important constraints:
-
-- `list()` needs a definite height and scrolls itself; do not wrap it in another
-  scrolling container.
-- Virtualized lists should use the existing list/scroller patterns in this repository.
-- UI callbacks must not block on I/O.
-- Use the repository's `ComposerInput` / `EntityInputHandler` for text input rather
-  than introducing another editor abstraction without a deliberate decision.
-- Popovers should use the existing anchored/deferred pattern and dismiss correctly
-  on outside interaction.
-- Keep focus and keybinding precedence explicit; focused controls must win over global
-  bindings.
-- Use the repository's `AssetSource` and theme/font registration for packaged assets.
-- Prefer existing GPUI primitives and local helpers before introducing a component
-  library or new abstraction.
-- When a GPUI API is uncertain, inspect the pinned crate source rather than guessing.
-
-## Keybindings (current)
-
-| Keys | Action | Context |
-|---|---|---|
-| `cmd-q` | Quit | global |
-| `cmd-n` | New session | global |
-| `cmd-r` | Reload session list from disk | global |
-| `cmd-,` | Settings | global |
-| `cmd-p` | Command palette (sessions / commands / settings) | global |
-| `cmd-shift-e` | Toggle project panel (Explorer) | global |
-| `cmd-w` | Close the active file tab (last tab closes the Files surface) | `Files` |
-| `cmd-shift-w` | Close the Files surface | `Files` |
-| `cmd-s` | Save the active file now (autosave is on anyway) | `Editor` |
-| `cmd-z` / `cmd-shift-z` | Undo / redo | `Composer` / `Editor` |
-| `cmd-shift-c` | Copy the newest assistant response (footer copy mirror) | global |
-| `cmd-up` / `cmd-down` | Jump to previous / next user turn (rail mirror) | global |
-| `escape` / `cmd-.` | Close settings → close picker → `abort` | global / Composer |
-| `enter` / `cmd-enter` | Submit prompt | `Composer` |
-| `shift-enter` | Newline | `Composer` |
-| `enter` / `escape` / `up` / `down` | Confirm / cancel / move | `Picker` (registered after Composer) |
-| `enter` / `escape` / `up` / `down` | Run / close / move | `AddMenu` (composer "+" menu; registered after Picker) |
-| `enter` / `escape` / `up` / `down` | Select / close / move | `AccessMenu` (composer access-mode picker) |
-| `enter` / `escape` / `up` / `down` | Confirm / deny / move | `Approval` (inline access-guard bar) |
-
-## Pi CLI RPC protocol
-
-Orbit communicates with pi using newline-delimited JSON over stdio.
-
-- Start sessions with `pi --mode rpc`; `PI_BIN` may override the executable.
-- Framing is strict JSONL with LF delimiters. Preserve permissive parsing for forward
-  compatibility.
-- Use typed commands/events for protocol features Orbit actively depends on; unknown
-  commands/events should not crash the client.
-- Surface failed RPC responses instead of swallowing them.
-- Provider/agent failures may arrive as assistant message error state rather than a
-  normal RPC response; render the error in the session.
-- `extension_ui_request` is the RPC bridge for bundled extension dialogs and approvals.
-- Provider auth and quota are optional capabilities; never assume every pi build
-  implements them.
-- Access control is implemented by Orbit's bundled extension. `--approve`/`--no-approve`
-  is project trust, not a replacement for Orbit's access modes.
-- There is no sandbox. Do not describe the access guard as one.
-- Do not implement an AI "Auto" access mode until pi exposes the required extension API.
-
-## Plan (P0–P6) — see `INTENT.md` for decisions, rationale, estimates, and phase gates
-
-### P0 — Transport probe + foundation (mostly done)
-1. ✅ RPC framing + `get_state` against real pi; live prompt streaming (`agent_start → text → agent_settled`).
-2. ✅ Root `Cargo.toml` workspace (`orbit-pi`, `orbit-rpc`).
-3. ✅ Process spawner: `crates/orbit-rpc/src/client.rs` (per-session process, kill-on-drop, stderr ring).
-4. ✅ Rust RPC client: permissive serde types + JSONL reader/writer threads.
-5. ✅ First live round-trip in the real window (no more `live.rs` spike / mock tab).
-6. ✅ Extension dialogs (`extension_ui_request`: `select`/`confirm`/`input`/`editor`) render natively and block the run until answered. ✅ Access guard: the bundled extension confirms tool calls per the active mode (no protocol permission surface needed).
-
-### P1 — Shell & theme (mostly done; theme persistence still open)
-- ✅ Window, top bar, macOS traffic lights (`TitlebarOptions.traffic_light_position`).
-- ✅ Dark zinc palette (hardcoded in `app.rs`, Waku-like). ⬜ `Theme` entity, light mode, accent, density, persist to pi settings.
-- ✅ Sidebar + sessions grouped by workspace; ⬜ Search.
-- ✅ Keybindings / focus for composer + picker; ✅ native macOS menu bar (App/File/Edit/View); ⬜ broader native dialogs.
-- ✅ Curated embedded font catalog (Inter, Fixel Text, Geist, Atkinson, Source Sans 3, Roboto, Noto Sans, DM Sans, Manrope, JetBrains Mono, Fira Code, Geist Mono, Commit Mono, Source Code Pro, Cascadia Code, Roboto Mono, Iosevka, DM Mono, IBM Plex Mono, Inconsolata, Noto Sans Mono, Space Mono, Anonymous Pro, Martian Mono).
-
-### P2 — Data layer (substantially done)
-- ✅ Permissive command/event models.
-- ✅ Sessions: list, open, switch, new, **clone** (⌘P), delete, cross-workspace, over an Orbit-owned project list (remove a workspace from the sidebar without deleting pi's sessions). ⬜ rewind (`fork`) needs entry-id plumbing; rename lives in the session-details popover and stays active-session-only.
-- ✅ Catalog: `get_available_models`, thinking levels, plus a **Models** settings page.
-- ✅ Workbench readers: skills, plugins, usage history, on-disk model/provider CRUD.
-- ✅ Settings persistence to `~/.orbit-pi/` (`theme`, `ui.json`, `fonts.json`, `favorites.json`, `recent-models.json`, `notifications.json`, `layout.json`). ⬜ scoped-models file I/O.
-
-### P3 — Core chat (bulk done)
-- ✅ Virtualized transcript, stick-to-latest. ⬜ stream veil (Waku `md/veil.rs`).
-- ✅ Event drain on the ~90 ms heartbeat coalesces commits. ⬜ explicit ≤8.3 Hz streaming pipeline.
-- ✅ Markdown: GFM tables/lists/alerts, one `StyledText` per block, highlight-as-paint, copyable code blocks.
-- ✅ Multi-line composer, file attach → base64 images, `/`-command + `@`-file autocomplete, **steer**.
-- ✅ Extension dialogs (`select`/`confirm`/`input`/`editor`) as a native modal. ⬜ richer per-tool renderers (bash/thinking dedicated; edit/todo/plan/search/mcp are generic). ✅ tool approval via the access guard's confirm dialog.
-- ✅ Diff viewer + per-turn `Last Turn` checkpoints; ✅ image lightbox. Changed files render in the tail summary card **by design** (not per message). ✅ ⌘F transcript find.
-
-### P4 — Workbench (substantially done)
-- ✅ Git page (Changes / History / Graph + commit bar, commit-message generation). ✅ Providers: built-in catalog, API-key + OAuth, models.json CRUD, refresh. ✅ Skills, ✅ Plugins (+ search), ✅ **Models** page, ✅ Usage charts + filters + export. ✅ Theme/UI persistence (Orbit store). ✅ Explorer: left project panel (gitignore-aware tree, git badges, filter, hidden toggle) + full-page Files editor (editable, syntax-highlighted code/text with debounced autosave; markdown/image; binary/size guards) + file operations (New File/Folder, Rename, Delete-to-Trash).
-
-### P5 — Mermaid + accessibility (partial)
-- ✅ Mermaid fences stay copyable code blocks with an honest label (never faked). ✅ Reduce-motion setting honored by shimmer/spinners/drop fade. ✅ tool approval (`tool_call` guard + access modes; not a sandbox). ⬜ focus rings / screen-reader labeling.
-
-### P6 — Test & ship (partial)
-- ✅ Unit + live tests (skip cleanly without `pi`), ✅ 10k-message model-layer perf test, ✅ signed `.app`/DMG + optional notarization/stapling, ✅ GitHub Actions CI. ⬜ on-device scroll-perf benchmark, streaming state-machine edge coverage.
-
-## Waku reference file map (pattern reuse, not copy — their gpui is a fork)
-
-| Need | Waku file(s) |
-|---|---|
-| Transcript + streaming + veil | `src/app/transcript_view.rs`, `src/app/streaming.rs`, `src/md/veil.rs` |
-| Markdown renderer / highlight | `src/md/render.rs`, `src/md/highlight.rs`, `src/md/parser.rs` |
-| pi RPC transport (adapt to raw protocol) | `crates/waku-core/src/driver/pi.rs` |
-| Review diff sources, parsing, sticky headers, changed-files tree | `src/review_diff.rs`, `src/app/right_panel.rs`, `crates/waku-core/src/workspace.rs` (`resolve_diff_range`) |
-| Per-turn checkpoints (Last Turn) | `crates/waku-core/src/checkpoint.rs` |
-| Diff syntax highlighting | `src/md/highlight.rs` |
-| Integrated terminal (PTY + emulator) | `src/terminal.rs`, `crates/waku-core/src/terminal.rs` — both build on `alacritty_terminal` |
-| Theme/chrome/sidebar/sessions | `src/theme.rs`, `src/app/window_chrome.rs`, `src/app/sidebar.rs`, `src/app/sessions.rs` |
-| Usage/charts | `src/app/usage_page.rs`, `src/app/usage_meter.rs` |
-
-## Definition of done (whole migration)
-
-Every feature in `PRODUCT.md` → `Capabilities` runs natively in the GPUI app against the pi CLI with the same behavior as the legacy UI; legacy `src-tauri` deleted; `cargo run -p orbit-pi` is the only way to launch.
-
-**For an individual feature:** it runs natively in GPUI against the pi CLI, `cargo build --workspace` stays clean, tests cover the happy path, and the docs describe it — `INTENT.md` → *Implementation status* (plus a `D#` decision when the architecture changed), the `README.md` features/roadmap, and a `CHANGELOG.md` `[Unreleased]` entry. Update these in the same change that ships the feature, never as a follow-up.
-
-## Verification
-
-- `cargo build --workspace` must stay clean (zero warnings) after every change.
-- `cargo test --workspace` — unit tests + live pi integration tests. `live_pi.rs`, `live_catalog.rs`, and the other live tests skip when `pi` is missing; `orbit-pi` session-store tests skip when `~/.pi/agent/sessions` is empty. CI builds every change on macOS, Linux (ubuntu-22.04), and Windows, plus clippy on macOS (`.github/workflows/ci.yml`); tests run locally.
-- Run the app: `cargo run -p orbit-pi`. Check: sessions list from disk, new session (`cmd-n`), prompt streams into the transcript, model/thinking pickers, abort (`escape`), settings (`cmd-,`), sidebar toggle. Notifications need an app bundle — `scripts/run-bundled.sh` builds the debug binary into the ad-hoc-signed `Orbit Pi Alpha` (bundle id `dev.orbit.pi.alpha`, Alpha icon) and opens it.
-- Windows: the same `cargo run -p orbit-pi` builds and runs (GPUI renders through DXGI here). `gpui`'s default `windows-manifest` feature is off in `crates/orbit-pi/Cargo.toml` — it links a second `RT_MANIFEST` resource beside the one `build.rs` embeds, and CVTRES fails the link with `CVT1100: duplicate resource`. `scripts/bundle-windows.ps1` builds the Inno Setup installer (`scripts/installer/orbit-pi.iss`); it needs Inno Setup 6 (`ISCC.exe`) and, per-user under `%LocalAppData%\Programs`, no elevation. Desktop notifications and the alert sound are still macOS-only stubs. Window chrome is the app's own: the header row carries minimize / maximize / close, drawing a restore glyph when `window.is_maximized()`, and the header strips drag the window through `platform::start_window_drag`. Check them by clicking — `IsIconic`/`IsZoomed` flip, closing exits the process — and check dragging by pressing a header strip and moving the pointer; both were broken while the presses were routed through GPUI's `WindowControlArea` path, which this app's focusable root makes unusable (see the Shell row).
-- No `unsafe` without a comment; no new dependencies without a stated reason.

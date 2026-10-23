@@ -304,7 +304,9 @@ impl ChatMessage {
             error,
             aborted,
         };
-        let step = message.steps.last_mut().expect("one step");
+        // Borrow the step field directly so image pushes below can touch
+        // `message.images` without a whole-struct mutable borrow.
+        let step = message.steps.first_mut()?;
 
         match value.get("content") {
             Some(Value::String(text)) => step.text = text.clone(),
@@ -662,7 +664,17 @@ fn merge_step(slot: &mut ChatMessage, step: ChatMessage) {
 impl ChatMessage {
     /// A parsed message carries exactly one step — take it.
     fn into_step(mut self) -> Step {
-        self.steps.pop().expect("parsed messages carry one step")
+        self.steps.pop().unwrap_or_default()
+    }
+
+    /// The step streamed text and tool calls append to. Parsed rows always
+    /// carry one; a fresh default keeps a malformed stream from panicking.
+    fn current_step_mut(&mut self) -> &mut Step {
+        if self.steps.is_empty() {
+            self.steps.push(Step::default());
+        }
+        let last = self.steps.len() - 1;
+        &mut self.steps[last]
     }
 }
 
@@ -1084,12 +1096,13 @@ impl Transcript {
                     // always begins a new turn — never merged into the run
                     // before it (the whole trail used to collapse into one
                     // assistant blob when prompts followed a tool-heavy run).
-                    let continues_run = parsed_message.is_assistant()
-                        && parsed.last().is_some_and(ChatMessage::is_assistant);
-                    if continues_run {
-                        merge_step(parsed.last_mut().expect("checked"), parsed_message);
-                    } else {
-                        parsed.push(parsed_message);
+                    match parsed.last_mut() {
+                        Some(previous)
+                            if parsed_message.is_assistant() && previous.is_assistant() =>
+                        {
+                            merge_step(previous, parsed_message);
+                        }
+                        _ => parsed.push(parsed_message),
                     }
                 }
             }
@@ -1325,7 +1338,7 @@ impl Transcript {
                 let thinking = self.finish_thinking();
                 let generation = self.note_generation();
                 self.with_streaming(move |m| {
-                    let step = m.steps.last_mut().expect("step");
+                    let step = m.current_step_mut();
                     if let Some(duration) = thinking {
                         if !step.thinking.is_empty() {
                             step.thinking_duration = Some(duration);
@@ -1342,7 +1355,7 @@ impl Transcript {
                 let started = self.begin_thinking();
                 let generation = self.note_generation();
                 self.with_streaming(move |m| {
-                    let step = m.steps.last_mut().expect("step");
+                    let step = m.current_step_mut();
                     step.generation_time = Some(generation);
                     drop_seed(&mut step.thinking, mark, delta, seeded);
                     step.thinking.push_str(delta);
@@ -1371,7 +1384,7 @@ impl Transcript {
                 // Reasoning is done once the step starts emitting tool calls.
                 let thinking = self.finish_thinking();
                 let (changed, created) = self.with_streaming(|m| {
-                    let step = m.steps.last_mut().expect("step");
+                    let step = m.current_step_mut();
                     if let Some(duration) = thinking {
                         if !step.thinking.is_empty() {
                             step.thinking_duration = Some(duration);
@@ -1413,7 +1426,7 @@ impl Transcript {
                     drop(buffer);
                     match parsed {
                         Some(args) => self.with_streaming(move |m| {
-                            let step = m.steps.last_mut().expect("step");
+                            let step = m.current_step_mut();
                             step.generation_time = Some(generation);
                             let Some(tool) = step.tools.last_mut() else {
                                 return;
@@ -1460,7 +1473,7 @@ impl Transcript {
                     // already captured. Without an id, adopt the newest
                     // id-less row for the same tool before falling back to
                     // the newest row at all.
-                    let step = m.steps.last_mut().expect("step");
+                    let step = m.current_step_mut();
                     let position = id
                         .as_deref()
                         .and_then(|id| step.tools.iter().position(|t| t.id.as_deref() == Some(id)))
@@ -1510,7 +1523,7 @@ impl Transcript {
                             // reasoning when it delivers this block.
                             let thinking = self.finish_thinking();
                             self.with_streaming(move |m| {
-                                let step = m.steps.last_mut().expect("step");
+                                let step = m.current_step_mut();
                                 if let Some(duration) = thinking {
                                     if !step.thinking.is_empty() {
                                         step.thinking_duration = Some(duration);

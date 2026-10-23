@@ -1032,10 +1032,10 @@ impl SidePane {
             .flex()
             .items_center()
             .gap_1()
-            .pl(px(12.))
+            .pl(DynamicSpacing::Base12.px(&theme))
             // The top bar above owns the caption buttons; the dock below it
             // never shares their row.
-            .pr(px(6.))
+            .pr(DynamicSpacing::Base06.px(&theme))
             .border_b_1()
             .border_color(theme.border)
             .child(
@@ -1046,7 +1046,7 @@ impl SidePane {
                     .whitespace_nowrap()
                     .text_size(TextSize::Small.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .child(tr!("sidepane.review")),
             )
             .children(tree_available.then(|| {
@@ -1054,16 +1054,16 @@ impl SidePane {
                     .group(BUTTON_GROUP)
                     .tip(tr!("sidepane.toggle_tree"))
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .hover(|s| s.bg(theme.surface_hover))
                     .active(|s| s.opacity(PRESS_DIM))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_tree(cx)))
                     .child(icon(
                         "icons/folder.svg",
                         ButtonSize::Default.icon_size().px(&theme),
                         if self.tree_open {
-                            theme.text
+                            theme.text_primary
                         } else {
-                            theme.text_3
+                            theme.text_muted
                         },
                     ))
             }))
@@ -1072,7 +1072,7 @@ impl SidePane {
                     .group(BUTTON_GROUP)
                     .tip(tr!("common.refresh"))
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .hover(|s| s.bg(theme.surface_hover))
                     .active(|s| s.opacity(PRESS_DIM))
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                         this.refresh_from_button(cx);
@@ -1081,7 +1081,7 @@ impl SidePane {
                         "review-spinner",
                         ButtonSize::Default.icon_size().px(&theme),
                         self.review_loading || self.refresh_spin_until.is_some(),
-                        theme.text_3,
+                        theme.text_muted,
                         theme,
                     )),
             );
@@ -1112,13 +1112,13 @@ impl SidePane {
                         .group(BUTTON_GROUP)
                         .tip(tr!("common.close"))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.bg_hover))
+                        .hover(|s| s.bg(theme.surface_hover))
                         .active(|s| s.opacity(PRESS_DIM))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close(cx)))
                         .child(icon(
                             "icons/x.svg",
                             ButtonSize::Default.icon_size().px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         )),
                 );
         }
@@ -1135,15 +1135,15 @@ impl SidePane {
                 } else {
                     theme.border
                 })
-                .raised(theme.bg_raised, &theme)
+                .raised(theme.surface_elevated, &theme)
                 .cursor_pointer()
-                .hover(|s| s.raised(theme.bg_hover, &theme))
+                .hover(|s| s.raised(theme.surface_hover, &theme))
                 .active(|s| s.opacity(PRESS_DIM))
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_source_menu(cx)))
                 .child(icon(
                     "icons/file-diff.svg",
                     ButtonSize::Medium.icon_size().px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .child(
                     div()
@@ -1151,13 +1151,13 @@ impl SidePane {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(self.source_label(self.source)),
                 )
                 .child(icon(
                     "icons/chevron-down.svg",
                     IconSize::XSmall.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .into_any_element()
         });
@@ -1178,7 +1178,7 @@ impl SidePane {
                 row.child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.warn)
+                        .text_color(theme.warning)
                         .child(tr!("sidepane.partial")),
                 )
             })
@@ -1195,8 +1195,8 @@ impl SidePane {
                     .gap_2()
                     .text_size(TextSize::Small.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(div().text_color(theme.add_green).child(format!("+{added}")))
-                    .child(div().text_color(theme.del_red).child(format!("-{removed}")))
+                    .child(div().text_color(theme.success).child(format!("+{added}")))
+                    .child(div().text_color(theme.error).child(format!("-{removed}")))
             }));
 
         let content = self.render_content(window, theme, tree_visible, cx);
@@ -1212,11 +1212,11 @@ impl SidePane {
                         .h(px(PANE_ROW_H))
                         .flex()
                         .items_center()
-                        .px(px(12.))
+                        .px(DynamicSpacing::Base12.px(&theme))
                         .border_b_1()
                         .border_color(theme.border)
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.warn)
+                        .text_color(theme.warning)
                         .child(tr!("sidepane.partial")),
                 );
             }
@@ -1243,11 +1243,11 @@ impl SidePane {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let color = if !enabled {
-            theme.text_3.opacity(0.4)
+            theme.text_disabled
         } else if active {
-            theme.text
+            theme.text_primary
         } else {
-            theme.text_3
+            theme.text_muted
         };
         let button = icon_button_frame(div().id(id), &theme, size)
             .group(BUTTON_GROUP)
@@ -1257,7 +1257,7 @@ impl SidePane {
         }
         button
             .cursor_pointer()
-            .hover(|style| style.bg(theme.bg_hover))
+            .hover(|style| style.bg(theme.surface_hover))
             .active(|style| style.opacity(PRESS_DIM))
             .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| action(this, cx)))
@@ -1660,7 +1660,7 @@ impl SidePane {
                 .to_string()
             })
             .cursor_pointer()
-            .hover(|style| style.bg(theme.bg_hover))
+            .hover(|style| style.bg(theme.surface_hover))
             .on_click(
                 cx.listener(move |this, _: &ClickEvent, _, cx| this.toggle_file(file_index, cx)),
             );
@@ -1805,7 +1805,7 @@ impl SidePane {
                         .child(icon(
                             gap_icon(direction),
                             IconSize::Indicator.px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         )),
                 );
             }
@@ -1817,13 +1817,13 @@ impl SidePane {
             .flex_1()
             .h_full()
             .min_w_0()
-            .px(px(12.))
+            .px(DynamicSpacing::Base12.px(&theme))
             .flex()
             .items_center()
             .overflow_hidden()
             .whitespace_nowrap()
             .text_size(TextSize::Small.px(&theme))
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .bg(theme.overlay)
             .when(expandable, |label| {
                 label
@@ -1880,14 +1880,14 @@ impl SidePane {
                 .unwrap_or_else(|| div().into_any_element())
         })
         .size_full()
-        .py(px(4.));
+        .py(DynamicSpacing::Base04.px(&theme));
 
         let column_w = (f32::from(self.width) * 0.42).clamp(TREE_MIN_COL_W, TREE_MAX_COL_W);
         let filter_row = picker_search_frame(div(), &theme)
             .child(icon(
                 "icons/search.svg",
                 input::ICON.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(div().flex_1().min_w_0().child(self.tree_filter.clone()));
 
@@ -1959,7 +1959,7 @@ impl SidePane {
             } => div()
                 .w_full()
                 .h(px(30.))
-                .px(px(6.))
+                .px(DynamicSpacing::Base06.px(&theme))
                 .flex()
                 .items_center()
                 .child(
@@ -1973,10 +1973,10 @@ impl SidePane {
                         .rounded(Radius::Medium.px(&theme))
                         .flex()
                         .items_center()
-                        .gap(px(6.))
+                        .gap(DynamicSpacing::Base06.px(&theme))
                         .cursor_pointer()
                         .when(cursor, |row| row.bg(theme.overlay_strong))
-                        .when(!cursor, |row| row.hover(|row| row.bg(theme.overlay)))
+                        .when(!cursor, |row| row.hover(|row| row.bg(theme.surface_hover)))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             window.focus(&this.tree_focus);
                             this.tree_cursor = Some(index);
@@ -1989,12 +1989,12 @@ impl SidePane {
                                 "icons/chevron-right.svg"
                             },
                             IconSize::Indicator.px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         ))
                         .child(icon(
                             "icons/folder.svg",
                             IconSize::Small.px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         ))
                         .child(
                             div()
@@ -2004,7 +2004,7 @@ impl SidePane {
                                 .whitespace_nowrap()
                                 .text_size(TextSize::Small.px(&theme))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(name),
                         ),
                 )
@@ -2021,15 +2021,19 @@ impl SidePane {
                     .to_owned();
                 let selected = self.selected_file == Some(file_index);
                 let (status, status_color) = match file.status {
-                    review::FileStatus::Added => ("A", theme.add_green),
-                    review::FileStatus::Deleted => ("D", theme.del_red),
-                    review::FileStatus::Binary => ("B", theme.warn),
-                    review::FileStatus::Modified => ("M", theme.warn),
+                    review::FileStatus::Added => ("A", theme.success),
+                    review::FileStatus::Deleted => ("D", theme.error),
+                    review::FileStatus::Binary => ("B", theme.warning),
+                    review::FileStatus::Modified => ("M", theme.warning),
                 };
                 let nerd = nerd_font_family(cx);
                 let dark = theme.mode == ThemeMode::Dark;
-                let fallback = icon("icons/file.svg", IconSize::Small.px(&theme), theme.text_3)
-                    .into_any_element();
+                let fallback = icon(
+                    "icons/file.svg",
+                    IconSize::Small.px(&theme),
+                    theme.text_muted,
+                )
+                .into_any_element();
                 let glyph = file_glyph(
                     &file.path,
                     dark,
@@ -2040,7 +2044,7 @@ impl SidePane {
                 div()
                     .w_full()
                     .h(px(30.))
-                    .px(px(6.))
+                    .px(DynamicSpacing::Base06.px(&theme))
                     .flex()
                     .items_center()
                     .child(
@@ -2056,12 +2060,12 @@ impl SidePane {
                             .rounded(Radius::Medium.px(&theme))
                             .flex()
                             .items_center()
-                            .gap(px(6.))
+                            .gap(DynamicSpacing::Base06.px(&theme))
                             .cursor_pointer()
-                            .when(selected && cursor, |row| row.bg(theme.overlay_strong))
-                            .when(selected ^ cursor, |row| row.bg(theme.overlay))
+                            .when(selected, |row| row.bg(theme.selection))
+                            .when(!selected && cursor, |row| row.bg(theme.surface_hover))
                             .when(!selected && !cursor, |row| {
-                                row.hover(|row| row.bg(theme.overlay))
+                                row.hover(|row| row.bg(theme.surface_hover))
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 window.focus(&this.tree_focus);
@@ -2076,7 +2080,11 @@ impl SidePane {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .text_color(if selected { theme.text } else { theme.text_2 })
+                                    .text_color(if selected {
+                                        theme.text_primary
+                                    } else {
+                                        theme.text_secondary
+                                    })
                                     .child(name),
                             )
                             .child(
@@ -2180,9 +2188,9 @@ fn source_row(
     .h(picker::entry_height(&theme))
     .flex_none()
     .when(enabled, |row| row.cursor_pointer())
-    .when(selected, |row| row.bg(theme.active))
+    .when(selected, |row| row.bg(theme.selection))
     .when(enabled && !selected, |row| {
-        row.hover(|s| s.bg(theme.overlay))
+        row.hover(|s| s.bg(theme.surface_hover))
     })
     .when(enabled && choice.is_some(), |row| {
         row.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -2198,11 +2206,11 @@ fn source_row(
             .overflow_hidden()
             .whitespace_nowrap()
             .text_color(if !enabled {
-                theme.text_3
+                theme.text_muted
             } else if selected {
-                theme.active_fg
+                theme.text_primary
             } else {
-                theme.text_2
+                theme.text_secondary
             })
             .child(label.to_string()),
     )
@@ -2213,7 +2221,7 @@ fn source_row(
                 .flex_none()
                 .ml(context_menu::keybinding_gap(&theme) - context_menu::icon_gap(&theme))
                 .text_size(TextSize::Small.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(tr!("sidepane.no_turns_yet")),
         )
     })
@@ -2221,7 +2229,7 @@ fn source_row(
         row.child(icon(
             "icons/check.svg",
             context_menu::ICON.px(&theme),
-            theme.accent,
+            theme.accent_text,
         ))
     });
     row.into_any_element()
@@ -2280,7 +2288,7 @@ impl Render for SidePane {
                 .min_h_0()
                 .min_w_0()
                 .w_full()
-                .bg(theme.bg_main)
+                .bg(theme.background)
                 .flex()
                 .flex_col()
                 .child(body)
@@ -2300,7 +2308,7 @@ impl Render for SidePane {
             .flex_none()
             .w(self.width)
             .h_full()
-            .pl(px(12.))
+            .pl(DynamicSpacing::Base12.px(&theme))
             .flex()
             .flex_col()
             .min_h_0()
@@ -2327,7 +2335,7 @@ impl Render for SidePane {
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .bg(theme.bg_main)
+                    .bg(theme.background)
                     .border_1()
                     .border_color(theme.border)
                     .rounded(Radius::XLarge.px(&theme))

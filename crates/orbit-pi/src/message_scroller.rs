@@ -324,8 +324,8 @@ fn render_bottom_fade(theme: Theme) -> impl IntoElement {
         .h(rems(3.))
         .bg(linear_gradient(
             180.,
-            linear_color_stop(theme.bg_main.opacity(0.), 0.),
-            linear_color_stop(theme.bg_main, 1.),
+            linear_color_stop(theme.background.opacity(0.), 0.),
+            linear_color_stop(theme.background, 1.),
         ))
 }
 
@@ -358,9 +358,9 @@ fn render_jump_button(state: MessageScrollerState, theme: Theme) -> impl IntoEle
                 .elevation_2(&theme)
                 .rounded_full()
                 .tip(tr!("message_scroller.jump_to_latest"))
-                .bg(theme.bg_composer)
+                .bg(theme.surface_secondary)
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.bg_raised))
+                .hover(|style| style.bg(theme.surface_elevated))
                 .on_click(move |_, _, cx| {
                     state.scroll_to_end();
                     cx.refresh_windows();
@@ -370,13 +370,13 @@ fn render_jump_button(state: MessageScrollerState, theme: Theme) -> impl IntoEle
                         .path("icons/arrow-down.svg")
                         .flex_none()
                         .size(ButtonSize::Large.icon_size().px(&theme))
-                        .text_color(theme.text),
+                        .text_color(theme.text_primary),
                 )
                 .when(unread, |button| {
                     button.child(
                         div()
                             .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .child(tr!("message_scroller.new_activity")),
                     )
                 }),

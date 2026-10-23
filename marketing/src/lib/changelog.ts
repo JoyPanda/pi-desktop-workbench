@@ -1,3 +1,5 @@
+import { getDownloads, type Downloads } from "@/lib/downloads";
+
 const REPO = "imrj05/orbit";
 const CHANGELOG_URL = `https://raw.githubusercontent.com/${REPO}/main/CHANGELOG.md`;
 const RELEASES_API = `https://api.github.com/repos/${REPO}/releases?per_page=100`;
@@ -19,14 +21,7 @@ export type ChangelogEntry = {
   url: string;
   prerelease: boolean;
   groups: ChangeGroup[];
-  assets: ReleaseAssets;
-};
-
-/** Per-platform download URLs for a single release. */
-export type ReleaseAssets = {
-  macos?: string;
-  windows?: string;
-  linux?: string;
+  downloads: Downloads;
 };
 
 type GithubAsset = { name?: string; browser_download_url?: string };
@@ -176,27 +171,6 @@ function isoDate(value?: string): string {
   return value ? value.slice(0, 10) : "";
 }
 
-function assetUrl(assets: GithubAsset[] | undefined, pattern: RegExp) {
-  return assets?.find((asset) => asset.name && pattern.test(asset.name))
-    ?.browser_download_url;
-}
-
-/** Pick the installer/package each platform should download. */
-function releaseAssets(assets: GithubAsset[] | undefined): ReleaseAssets {
-  return {
-    macos: assetUrl(assets, /\.dmg$/i),
-    windows:
-      assetUrl(assets, /setup\.exe$/i) ??
-      assetUrl(assets, /^(?!.*setup).*\.exe$/i) ??
-      assetUrl(assets, /windows.*\.zip$/i) ??
-      assetUrl(assets, /\.zip$/i),
-    linux:
-      assetUrl(assets, /\.deb$/i) ??
-      assetUrl(assets, /linux.*\.tar\.gz$/i) ??
-      assetUrl(assets, /\.tar\.gz$/i),
-  };
-}
-
 /** Numeric version segments, for newest-first sorting (0.0.10 > 0.0.9). */
 function versionRank(version: string): number[] {
   return version
@@ -248,7 +222,7 @@ export async function getChangelog(): Promise<ChangelogEntry[]> {
       groups: raw.groups.length
         ? raw.groups
         : parseBody(release?.body ?? ""),
-      assets: releaseAssets(release?.assets),
+      downloads: getDownloads(release?.assets),
     });
   }
 
@@ -263,7 +237,7 @@ export async function getChangelog(): Promise<ChangelogEntry[]> {
       url: release.html_url || RELEASES_PAGE,
       prerelease: Boolean(release.prerelease),
       groups: parseBody(release.body ?? ""),
-      assets: releaseAssets(release.assets),
+      downloads: getDownloads(release.assets),
     });
   }
 

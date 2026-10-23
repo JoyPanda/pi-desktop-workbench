@@ -145,7 +145,7 @@ impl OrbitApp {
             .rounded_tl(px(HEADER_CTRL_R))
             .rounded_bl(px(HEADER_CTRL_R))
             .cursor_pointer()
-            .active(|s| s.bg(theme.active).text_color(theme.active_fg))
+            .active(|s| s.bg(theme.surface_active).text_color(theme.text_primary))
             .child(
                 img(ImageSource::Image(preferred_icon))
                     .size(APP_ICON.px(&theme))
@@ -167,12 +167,12 @@ impl OrbitApp {
         .rounded_br(px(HEADER_CTRL_R))
         .cursor_pointer()
         .when(self.open_in_menu_open, |s| {
-            s.bg(theme.active).text_color(theme.active_fg)
+            s.bg(theme.surface_active).text_color(theme.text_primary)
         })
         .child(icon(
             "icons/chevron-down.svg",
             IconSize::XSmall.px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ))
         // Pin the dropdown to the caret's bottom-right — same zero-size
         // anchor trick as the session row menu, so flex centering doesn't
@@ -235,8 +235,8 @@ impl OrbitApp {
                     &theme,
                 )
                 .cursor_pointer()
-                .when(selected, |row| row.bg(theme.active))
-                .hover(|style| style.bg(theme.overlay))
+                .when(selected, |row| row.bg(theme.selection))
+                .hover(|style| style.bg(theme.surface_hover))
                 .child(
                     img(ImageSource::Image(app_icon))
                         .size(APP_ICON.px(&theme))
@@ -247,9 +247,9 @@ impl OrbitApp {
                         .flex_1()
                         .min_w_0()
                         .text_color(if selected {
-                            theme.active_fg
+                            theme.text_primary
                         } else {
-                            theme.text_2
+                            theme.text_secondary
                         })
                         .child(label),
                 )
@@ -257,7 +257,7 @@ impl OrbitApp {
                     row.child(icon(
                         "icons/check.svg",
                         context_menu::ICON.px(&theme),
-                        theme.accent,
+                        theme.accent_text,
                     ))
                 })
                 .on_mouse_up(MouseButton::Left, move |_, _, cx| {
@@ -271,7 +271,7 @@ impl OrbitApp {
         if apps.is_empty() {
             list = list.child(
                 picker_entry(div(), &theme)
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("open_in.no_matches")),
             );
         }
@@ -303,7 +303,7 @@ impl OrbitApp {
                     .child(icon(
                         "icons/search.svg",
                         input::ICON.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     ))
                     .child(div().flex_1().min_w_0().child(self.open_in_filter.clone())),
             )

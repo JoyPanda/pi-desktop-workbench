@@ -5,7 +5,8 @@
 
 use gpui::{
     div, point, prelude::*, px, App, Context, ElementId, Entity, FocusHandle, Focusable,
-    FontWeight, IntoElement, MouseDownEvent, ParentElement, Render, ScrollHandle, Styled, Window,
+    FontWeight, IntoElement, MouseDownEvent, ParentElement, Render, ScrollHandle, Styled,
+    Subscription, Window,
 };
 
 use crate::app::{
@@ -61,6 +62,7 @@ pub struct BranchPicker {
     list_scroll: ScrollHandle,
     highlighted: usize,
     last_filter: String,
+    _filter_sub: Subscription,
     on_checkout: BranchAction,
     on_create: BranchAction,
     on_dismiss: BranchPickerDismiss,
@@ -82,6 +84,17 @@ impl BranchPicker {
                 .with_placeholder_var("workspace", workspace_label)
                 .with_key_context("Composer Picker")
         });
+        // Keep the derived filter state in sync from the input's notifications
+        // so `render` only reads it.
+        let filter_sub = cx.observe(&filter, |picker: &mut Self, filter, cx| {
+            let needle = filter.read(cx).text().to_lowercase();
+            if needle != picker.last_filter {
+                picker.last_filter = needle;
+                picker.highlighted = 0;
+                picker.list_scroll.set_offset(point(px(0.), px(0.)));
+                cx.notify();
+            }
+        });
         let create_input = cx.new(|cx| {
             ComposerInput::new(cx)
                 .with_placeholder_key("branch_picker.new_branch_name")
@@ -98,6 +111,7 @@ impl BranchPicker {
             list_scroll: ScrollHandle::new(),
             highlighted: 0,
             last_filter: String::new(),
+            _filter_sub: filter_sub,
             on_checkout,
             on_create,
             on_dismiss,
@@ -250,19 +264,19 @@ impl Render for BranchPicker {
                             div()
                                 .text_size(TextSize::Small.px(&theme))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text)
+                                .text_color(theme.text_primary)
                                 .child(tr!("branch_picker.create_and_checkout_new_branch")),
                         )
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .child(tr!("branch_picker.uncommitted_changes_come_with_you")),
                         )
                         .child(
                             input_field_frame(div(), &theme)
                                 .w_full()
-                                .bg(theme.bg_main)
+                                .bg(theme.background)
                                 .child(self.create_input.clone()),
                         ),
                 )
@@ -270,11 +284,11 @@ impl Render for BranchPicker {
                     button_frame(div(), &theme, ButtonSize::Medium)
                         .mx(DynamicSpacing::Base08.px(&theme))
                         .mb(DynamicSpacing::Base04.px(&theme))
-                        .raised(theme.send_bg, &theme)
-                        .hover(|s| s.raised(theme.send_bg_hover, &theme))
+                        .raised(theme.action, &theme)
+                        .hover(|s| s.raised(theme.action_hover, &theme))
                         .cursor_pointer()
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.send_fg)
+                        .text_color(theme.action_fg)
                         .on_mouse_up(
                             gpui::MouseButton::Left,
                             cx.listener(|picker, _, window, cx| {
@@ -288,16 +302,7 @@ impl Render for BranchPicker {
                 );
         }
 
-        let needle = self.filter.read(cx).text().to_lowercase();
-        if needle != self.last_filter {
-            self.last_filter = needle.clone();
-            self.highlighted = 0;
-            self.list_scroll.set_offset(point(px(0.), px(0.)));
-        }
-        let rows = self.filtered_branches(&needle);
-        if !rows.is_empty() {
-            self.highlighted = self.highlighted.min(rows.len() - 1);
-        }
+        let rows = self.filtered_branches(&self.last_filter);
 
         let mut list = div()
             .id("branch-picker-list")
@@ -324,9 +329,9 @@ impl Render for BranchPicker {
                 .h(px(row_h(&theme)))
                 .flex_none()
                 .cursor_pointer()
-                .when(selected || highlighted, |row| row.bg(theme.active))
+                .when(selected || highlighted, |row| row.bg(theme.selection))
                 .when(!selected && !highlighted, |row| {
-                    row.hover(|s| s.bg(theme.overlay))
+                    row.hover(|s| s.bg(theme.surface_hover))
                 })
                 .on_hover({
                     let this = this.clone();
@@ -354,7 +359,7 @@ impl Render for BranchPicker {
                 .child(icon(
                     "icons/branch.svg",
                     context_menu::ICON.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .child(
                     div()
@@ -362,9 +367,9 @@ impl Render for BranchPicker {
                         .min_w_0()
                         .truncate()
                         .text_color(if selected {
-                            theme.active_fg
+                            theme.text_primary
                         } else {
-                            theme.text_2
+                            theme.text_secondary
                         })
                         .child(branch_label),
                 )
@@ -372,7 +377,7 @@ impl Render for BranchPicker {
                     row.child(icon(
                         "icons/check.svg",
                         context_menu::ICON.px(&theme),
-                        theme.accent,
+                        theme.accent_text,
                     ))
                 }),
             );
@@ -394,7 +399,7 @@ impl Render for BranchPicker {
                     .child(icon(
                         "icons/search.svg",
                         input::ICON.px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     ))
                     .child(div().flex_1().min_w_0().child(self.filter.clone())),
             )
@@ -408,7 +413,7 @@ impl Render for BranchPicker {
                     .py(picker::list_padding_y(&theme))
                     .child(
                         picker_entry(div(), &theme)
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(tr!("branch_picker.no_branches_match")),
                     )
                     .into_any_element()
@@ -426,16 +431,16 @@ impl Render for BranchPicker {
                         picker_entry(div(), &theme)
                             .h(picker::entry_height(&theme))
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme.overlay))
+                            .hover(|s| s.bg(theme.surface_hover))
                             .on_mouse_up(gpui::MouseButton::Left, cx.listener(Self::begin_create))
                             .child(icon(
                                 "icons/plus.svg",
                                 context_menu::ICON.px(&theme),
-                                theme.text_2,
+                                theme.text_secondary,
                             ))
                             .child(
                                 div()
-                                    .text_color(theme.text_2)
+                                    .text_color(theme.text_secondary)
                                     .child(tr!("branch_picker.create_and_checkout_new_branch_2")),
                             ),
                     ),

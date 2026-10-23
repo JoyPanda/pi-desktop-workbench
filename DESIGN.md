@@ -2,25 +2,40 @@
 name: Orbit Pi
 description: Native GPUI workbench for the pi coding agent — quiet chrome, dense data, GPU-drawn.
 colors:
-  canvas: "#1A1A1A"
-  sidebar: "#181818"
-  raised: "#232323"
-  hover: "#262626"
-  active: "#2A2A2A"
-  ink: "#E2E2E2"
+  canvas: "#181818"
+  sidebar: "#1F1F1F"
+  surface-secondary: "#242424"
+  raised: "#292929"
+  hover: "#303030"
+  active: "#363636"
+  selection: "#2F3949"
+  ink: "#E5E5E5"
   ink-secondary: "#A3A3A3"
-  ink-tertiary: "#7D7D7D"
-  hairline: "#2A2A2A"
-  ember: "#E2795B"
-  success: "#62C987"
-  danger: "#E2726A"
-  caution: "#E0B36A"
-  canvas-light: "#F6F5F6"
-  raised-light: "#ECECEC"
-  ink-light: "#242424"
-  ink-secondary-light: "#666666"
-  hairline-light: "#E2E2E2"
-  ember-light: "#B55035"
+  ink-tertiary: "#909090"
+  ink-disabled: "#606060"
+  hairline: "#343434"
+  hairline-subtle: "#292929"
+  accent: "#286CF0"
+  accent-hover: "#2D6FEF"
+  accent-pressed: "#1F5DD8"
+  accent-foreground: "#FFFFFF"
+  focus-ring: "#6EA0FF"
+  success: "#4CAF86"
+  danger: "#E16D70"
+  caution: "#E5AD55"
+  info: "#65A4E8"
+  canvas-light: "#F5F5F5"
+  sidebar-light: "#FFFFFF"
+  raised-light: "#F0F0F0"
+  hover-light: "#EBEBEB"
+  active-light: "#E2E2E2"
+  selection-light: "#E8EEFA"
+  ink-light: "#171717"
+  ink-secondary-light: "#525252"
+  ink-tertiary-light: "#696969"
+  hairline-light: "#E5E5E5"
+  accent-light: "#286CF0"
+  focus-ring-light: "#286CF0"
 typography:
   title:
     fontFamily: ".ZedSans, IBM Plex Sans, system-ui, sans-serif"
@@ -69,6 +84,9 @@ components:
   nav-row-hover:
     backgroundColor: "{colors.hover}"
     textColor: "{colors.ink}"
+  nav-row-active:
+    backgroundColor: "{colors.selection}"
+    textColor: "{colors.ink}"
   primary-button:
     backgroundColor: "{colors.raised}"
     textColor: "{colors.ink}"
@@ -76,8 +94,8 @@ components:
     height: "34px"
     padding: "0 10px"
   accent-button:
-    backgroundColor: "{colors.ember}"
-    textColor: "{colors.canvas}"
+    backgroundColor: "{colors.accent}"
+    textColor: "{colors.accent-foreground}"
     rounded: "{rounded.md}"
     height: "34px"
     padding: "0 10px"
@@ -107,50 +125,58 @@ components:
 
 Orbit is a workbench, not a website. Every surface is drawn by the GPU through GPUI,
 so the chrome stays flat, honest, and quiet while the data — transcripts, diffs,
-graphs, usage — carries the density. There is one accent (ember orange) and it is
-rationed: selection, focus, the caret, the active series. Everything else is ink on
-canvas at three weights of emphasis.
+graphs, usage — carries the density. There is one accent (blue) and it is
+rationed: primary actions, selection, focus, the caret, the active series. Everything
+else is ink on canvas at four weights of emphasis.
 
 The system is monochrome-by-default with semantic color reserved for state, so a
-screenshot in any of the forty-four palettes still reads as Orbit. Depth is delivered by
+screenshot in any of the ten palettes still reads as Orbit. Depth is delivered by
 hairlines and tonal steps rather than shadows; shadows exist only for surfaces that
 genuinely float above the page (composer, popovers, modals).
 
 **Key Characteristics:**
-- One accent, rationed: ember marks the active thing and nothing else.
+- One accent, rationed: blue marks the active thing and nothing else.
 - Hairlines over boxes: `border_1` at `theme.border` separates; cards are the exception.
-- Three ink weights: `text` (primary), `text_2` (secondary), `text_3` (tertiary/labels).
+- Four ink weights: `text_primary` (primary), `text_secondary` (secondary),
+  `text_muted` (tertiary/labels), and `text_disabled` (inactive controls).
 - Density with air: 28–34px controls, 6–10px padding, 44px page headers. The
   Appearance panel exposes this as UI, Terminal/Editor font sizes (px), and
   Spacing Density (a global multiplier through `theme.space`).
-- Forty-four palettes, one grammar: every color is read from `theme::get(cx)`, never
-  hardcoded. Appearance offers Orbit's own six first and keeps the rest of the catalog
-  behind one disclosure, so the common choice is never made inside a 44-row list.
+- Ten palettes, one grammar: every color is read from `theme::get(cx)`, never
+  hardcoded. Appearance lists the five dark and five light palettes for the mode in
+  effect, so the common choice is never made inside a catalog-sized list.
 
 ## Colors
 
-A near-black canvas with a single ember accent; light mode is warm off-white, not white.
+A charcoal canvas with a single blue accent; light mode is warm-neutral off-white, not
+white. Alternate palettes keep their own signature hue inside the same grammar.
 
 ### Primary
-- **Ember** (#E2795B dark / #B55035 light): selection, focus rings, links, the active
-  data series, the caret, the inline-code wash. Never decoration, never a large fill.
-  The light ember is held dark enough to clear 4.5:1 on the light canvas, since links
-  paint it as text. Inline code keeps the body ink and sits on the wash: tinting its
-  glyphs accent too filled code-heavy answers with ember and blurred code into links.
+- **Accent** (#286CF0 both modes): primary actions, selection accents, focus, links, the
+  active data series, the caret, and the inline-code wash. `accent` is the fill role;
+  `accent_text` (#6EA0FF dark / #1F5DD8 light) is the readable foreground role for
+  links, icons, keywords, and mentions. `accent_fg` is white on the fill. Never
+  decoration, never a large fill outside a primary control.
+- **Selection** (#2F3949 dark / #E8EEFA light): the active navigation/list row. It is a
+  restrained blue-tinted wash, not a bright accent fill, and pairs with `selection_fg`.
+  The dark wash is one step below the reference #303A4B so `accent_text` labels and
+  secondary metadata on a selected row still clear 4.5:1.
 
 ### Neutral
-- **Canvas** (#1A1A1A / #F6F5F6): the main content plane and every page background.
-- **Sidebar** (#181818 / #F3F3F3): the chrome column; also the composer surface.
-- **Raised** (#232323 / #ECECEC): chips, primary buttons, hover cards, grouped rows.
-- **Hover** (#262626 / #E8E8E8): pointer feedback only.
-- **Active** (#2A2A2A / #E2E2E2): the selected row; pairs with `active_fg`.
-- **Hairline** (#2A2A2A / #E2E2E2): 1px separators, table rules, section boundaries.
-- **Ink** (#E2E2E2 / #242424), **Ink Secondary** (#A3A3A3 / #666666),
-  **Ink Tertiary** (#7D7D7D / #858585): the three text weights.
+- **Canvas** (#181818 / #F5F5F5): the main content plane and window background.
+- **Surface** (#1F1F1F / #FFFFFF): sidebars, panels, and the composer plane.
+- **Surface Secondary** (#242424 / #F8F8F8): nested containers and quiet wells.
+- **Elevated** (#292929 / #F0F0F0): chips, menus, popovers, modals, grouped rows.
+- **Hover** (#303030 / #EBEBEB): pointer feedback only.
+- **Active** (#363636 / #E2E2E2): pressed/open controls; distinct from `selection`.
+- **Hairline** (#343434 / #E5E5E5) and **Hairline Subtle** (#292929 / #EEEEEE):
+  1px separators, table rules, section boundaries.
+- **Ink** (#E5E5E5 / #171717), **Ink Secondary** (#A3A3A3 / #525252),
+  **Ink Muted** (#909090 / #696969), **Ink Disabled** (#606060 / #A3A3A3).
 
 ### Named Rules
-**The One Accent Rule.** Ember appears on ≤10% of any screen. If two things are ember,
-one of them is wrong.
+**The One Accent Rule.** The accent appears on ≤10% of any screen. If two things are
+accent-colored, one of them is wrong.
 
 **The Ink Weight Rule.** Emphasis comes from ink weight and size, never from hue.
 A number that must shout gets `text` + a larger size, not a color.
@@ -162,21 +188,20 @@ invert into holes. Light palettes mirror the ramp downward. `menu_bg` sits at `r
 a popover floats, it never recesses. Every palette is asserted against this
 monotonicity, not just Orbit.
 
-**The Accent-Is-Not-Status Rule.** The accent may never equal `ok_green`, `add_green`,
-`stop_red`, or `crit`. If the theme's signature hue is also its success or error color,
+**The Accent-Is-Not-Status Rule.** The accent may never equal `success`, `warning`,
+`error`, or `info`. If the theme's signature hue is also its success or error color,
 the accent moves to the palette's second hue; a green selection over a green checkmark
 reads as one state, not two.
 
 ### Composer tokens
 The composer paints two inline token roles. They are read as content — siblings of the
 `syn_*` editor colors — not as chrome accents, so they sit outside the accent economy:
-- **`/command`** takes the accent (`mention_command`): commands are actions, the same role
-  terminal command words and syntax keywords already carry.
+- **`/command`** takes `accent_text` (`mention_command`): commands are actions, the same
+  role terminal command words and syntax keywords already carry.
 - **`@file`** takes the accent's complement (`mention_file`), so a reference never reads as
-  a command. Chroma-less palettes (Ashwood, Mono) stay monochrome and split the two by
-  ink instead of hue.
+  a command.
 
-Both are derived in `Theme`, so all forty-four palettes stay legible without per-palette tuning.
+Both are derived in `Theme`, so all ten palettes stay legible without per-palette tuning.
 
 ## Typography
 
@@ -200,15 +225,24 @@ is Latin + punctuation + box-drawing + powerline), so a picked face never
 depends on the OS. The bundled IBM Plex Sans and Lilex faces stay in the list
 under their own names (their gpui aliases are `.ZedSans` / `.ZedMono`).
 
-**The Palette Catalog.** `ThemeId::ALL` ships forty-four palettes; `ThemeId::FEATURED`
-is the six that are Orbit's own — Orbit, Orbit Darker, Orbit Cobalt, Orbit Light, Orbit
-Paper, Orbit Contrast — dark first. Settings → Appearance → **Theme** is a single
-control, not one row per appearance mode: it shows and edits the palette currently in
-effect, and a palette outside the curated set is appended to the short list rather than
-hidden, so the checkmark always has a row to sit on. The rest of the catalog is one
-disclosure away. `theme_options(mode, all, configured)` is the single ordering the
-dropdown paints and a click resolves, and revealing appends after the curated block so
-rows never reorder under the pointer.
+**The Palette Catalog.** `ThemeId::ALL` ships ten palettes: Orbit's own family plus
+Flexoki. Five are dark (Orbit, Orbit Darker, Orbit Cobalt, Orbit Azure, Flexoki) and five
+are light (Orbit Light, Orbit Azure Light, Orbit Paper, Orbit Contrast, Flexoki Light).
+The blue design is **Orbit Azure** (dark) and **Orbit Azure Light**; the original ember
+palette is simply **Orbit** / **Orbit Light**. Settings → Appearance →
+**Theme** is a single control, not one row per appearance mode: it shows and edits the
+palette currently in effect, listing only the palettes of that mode. `themes_for(mode)`
+is the single ordering the dropdown paints and a click resolves, so a row index always
+maps to the palette it painted. Retired editor themes still load from a saved
+preference: dark keys fall back to Orbit, light keys to Orbit Light.
+
+**The Primary-Action Role.** `accent` is a palette's *identity* hue — selection washes,
+focus, tints, and accent-colored text derive from it. A primary button's fill is
+`action` / `action_hover` / `action_pressed` with `action_fg` ink, a separate role so a
+palette can key its buttons to its accent (Orbit Azure: blue on blue) or to a neutral step
+(Orbit: light primary buttons with dark ink, the original ember-era look) without losing
+the identity hue everywhere else. Both roles are covered by the AA floors in the theme
+tests.
 
 **Orbit Cobalt.** The graphite-and-blue dark palette shipped as "Orbit Minimal" and is
 renamed for what it is: a hue. Minimal is a property of the interface, never of a
@@ -295,7 +329,7 @@ under one grammar — ordered dither, the same Bayer pass the photo setting uses
   vignette, so the screen runs edge to edge and its drift is visible to the frame. It is
   drawn in
   `text_3` at 55% (dark) / 62% (light), so it is paper texture, never a second content
-  layer, and it works in all forty-four palettes without a per-palette asset.
+  layer, and it works in all ten palettes without a per-palette asset.
 - **The monogram is screened into that field.** Where the app mark sits — between the
   empty-state column and the composer — the same screen takes over its shape: a coverage
   mask sampled from the shipped `app-icon.png` (never redrawn by hand, so the backdrop
@@ -357,9 +391,9 @@ the chat page has neither.
 - Sidebar rows: 28px tall, 6px radius, 14px icon (Small) in a fixed 20px slot, label in
   `text_2`/`text_3`; hover fills `bg_hover`; the active destination is marked by
   `active` fill with `active_fg`, never by accent color alone.
-- A running session row leads with an 11px spinner in the accent and its title carries a
-  shimmer — an ember highlight band swept left-to-right across the ink on a 2s loop. This is
-  the only per-row motion in the sidebar; a settled row is still.
+- A running session row leads with a small accent arc turning in place and its title
+  carries a shimmer — an accent highlight band swept left-to-right across the ink on a 2s
+  loop. This is the only per-row motion in the sidebar; a settled row is still.
 - Page headers: 44px, back affordance first, title in 15px/500, actions right-aligned
   as 28px ghost controls.
 
@@ -408,7 +442,7 @@ Focus is a first-class state, not a stronger hover state.
 - Keyboard focus uses `border_strong` or an equivalent non-color-only focus signal.
 - Selection uses `active`.
 - Focused selection must remain distinguishable from an unfocused selection.
-- Focus must never depend on ember alone.
+- Focus must never depend on accent color alone.
 - After dismissing a popover or modal, restore focus to the control that opened it.
 - Opening a contextual panel must not unexpectedly steal focus from the active editor or composer.
 
@@ -480,7 +514,7 @@ The sidebar is quiet infrastructure.
   normally the same sentence cut short and the preview is the rest of it — a second line
   the eye reads and learns nothing from. Rows are therefore one or two lines tall, and the
   age rides whichever line is last.
-- Active navigation uses `active`, not ember alone.
+- Active navigation uses `selection`, not accent color alone.
 - Session state may use semantic indicators, but decorative animation is forbidden except
   for the currently running session treatment already defined above.
 - Sidebar width and collapsed state should persist per workspace/window when practical.
@@ -906,24 +940,35 @@ All visual values must flow through the theme system.
 Prefer semantic names:
 
 ```text
-canvas
-sidebar
-raised
-hover
-active
-text
-text_2
-text_3
+background
+surface
+surface_secondary
+surface_elevated
+surface_hover
+surface_active
 border
-border_strong
+border_subtle
+text_primary
+text_secondary
+text_muted
+text_disabled
 accent
-ok_green
-add_green
-stop_red
-crit
-menu_bg
-bg_composer
+accent_hover
+accent_pressed
+accent_fg
+accent_text
+selection
+selection_fg
+focus_ring
+success
+warning
+error
+error_hover
+info
 ```
+
+Specialized roles (`code_bg`, `syn_*`, `overlay`, `border_strong`, `toggle_knob`)
+exist alongside the vocabulary; they are read through the same `Theme`.
 
 Avoid component-specific color names such as:
 
@@ -973,7 +1018,7 @@ performance, and visual restraint make long agent sessions feel natural.
 
 ### Do:
 - **Do** read every color, size, and radius from `theme::get(cx)`; add a role to
-  `Palette` when a new semantic need appears so all forty-four palettes stay legible.
+  `Palette` when a new semantic need appears so all ten palettes stay legible.
 - **Do** use hairlines and whitespace to separate sections; reserve rounded bordered
   surfaces for objects that are conceptually singular (composer, metric board, popover).
 - **Do** keep controls at 28px (compact) / 34px (primary) so a 900px-tall window shows

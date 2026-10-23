@@ -358,7 +358,11 @@ mod tests {
         // must never advertise an npm install there.
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         assert_eq!(install_hint("pi"), crate::pi_install::INSTALL_COMMAND);
-        assert!(!install_hint("pi").contains("npm install"), "{}", install_hint("pi"));
+        assert!(
+            !install_hint("pi").contains("npm install"),
+            "{}",
+            install_hint("pi")
+        );
         #[cfg(target_os = "macos")]
         {
             assert_eq!(install_hint("node"), "brew install node");

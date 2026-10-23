@@ -16,7 +16,9 @@ name: Release
 # credentials (an account-agreement problem, not a build one), and unsigned
 # ones otherwise.
 # Windows and Linux are best-effort (continue-on-error) until those platforms
-# are validated.
+# are validated. Linux builds natively on both x86_64 and arm64 hosted runners,
+# which is what scripts/bundle-linux.sh and appcast.py's linux-aarch64 feed
+# expect (the triple comes from the host, not a cross-compile target).
 #
 # Secrets (Settings → Secrets and variables → Actions):
 #   ORBIT_ANALYTICS_APP_KEY      Countly application key baked into the binary
@@ -236,10 +238,20 @@ jobs:
         run: security delete-keychain build.keychain 2>/dev/null || true
 
   linux:
-    name: Linux x86_64
+    name: Linux ${{ matrix.arch }}
     needs: version
     if: needs.version.outputs.skip != 'true'
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          # GitHub-hosted arm64 image; builds the same way as the x86_64 leg
+          # because nothing is cross-compiled.
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     continue-on-error: true
     steps:
@@ -270,7 +282,7 @@ jobs:
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux
+          name: linux-${{ matrix.arch }}
           path: |
             dist/orbit-pi-*.tar.gz
             dist/orbit-pi_*.deb

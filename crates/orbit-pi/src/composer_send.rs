@@ -182,10 +182,10 @@ mod tests {
         keystroke: gpui::Keystroke,
         context: &str,
     ) -> Option<Box<dyn gpui::Action>> {
-        let (bindings, _) = cx.key_bindings().borrow().bindings_for_input(
-            &[keystroke],
-            &[gpui::KeyContext::parse(context).unwrap()],
-        );
+        let (bindings, _) = cx
+            .key_bindings()
+            .borrow()
+            .bindings_for_input(&[keystroke], &[gpui::KeyContext::parse(context).unwrap()]);
         bindings
             .first()
             .map(|binding| binding.action().boxed_clone())
@@ -281,22 +281,18 @@ mod tests {
                     .as_any()
                     .is::<crate::CloseTerminalTab>());
             } else {
-                assert!(bound_keystroke(
-                    cx,
-                    delivered("secondary-shift-t"),
-                    "Terminal"
-                )
-                .unwrap()
-                .as_any()
-                .is::<crate::NewTerminalTab>());
-                assert!(bound_keystroke(
-                    cx,
-                    delivered("secondary-shift-w"),
-                    "Terminal"
-                )
-                .unwrap()
-                .as_any()
-                .is::<crate::CloseTerminalTab>());
+                assert!(
+                    bound_keystroke(cx, delivered("secondary-shift-t"), "Terminal")
+                        .unwrap()
+                        .as_any()
+                        .is::<crate::NewTerminalTab>()
+                );
+                assert!(
+                    bound_keystroke(cx, delivered("secondary-shift-w"), "Terminal")
+                        .unwrap()
+                        .as_any()
+                        .is::<crate::CloseTerminalTab>()
+                );
                 // The shell keeps its own editing chords.
                 assert!(bound_keystroke(cx, tab("w"), "Terminal")
                     .map(|action| !action.as_any().is::<crate::CloseTerminalTab>())
@@ -307,14 +303,18 @@ mod tests {
             }
             // Cycling fires on the keystroke the backend actually delivers for
             // ⇧] / ⇧[, which is `}` / `{` with `shift` cleared, not `shift-]`.
-            assert!(bound_keystroke(cx, delivered("secondary-shift-]"), "Terminal")
-                .unwrap()
-                .as_any()
-                .is::<crate::NextTerminalTab>());
-            assert!(bound_keystroke(cx, delivered("secondary-shift-["), "Terminal")
-                .unwrap()
-                .as_any()
-                .is::<crate::PrevTerminalTab>());
+            assert!(
+                bound_keystroke(cx, delivered("secondary-shift-]"), "Terminal")
+                    .unwrap()
+                    .as_any()
+                    .is::<crate::NextTerminalTab>()
+            );
+            assert!(
+                bound_keystroke(cx, delivered("secondary-shift-["), "Terminal")
+                    .unwrap()
+                    .as_any()
+                    .is::<crate::PrevTerminalTab>()
+            );
             // The same chords are not claimed anywhere else: in the chat column
             // ⌘T is not a tab command and Ctrl+Tab still cycles sessions.
             assert!(bound_action(cx, "secondary-t", "Composer")

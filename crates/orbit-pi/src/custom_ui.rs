@@ -24,7 +24,7 @@ use serde_json::Value;
 use crate::app::{icon, icon_button_frame, TipExt};
 use crate::terminal::encode_key;
 use crate::theme;
-use crate::theme::tokens::{ButtonSize, IconSize, Radius, StyledExt, TextSize};
+use crate::theme::tokens::{ButtonSize, DynamicSpacing, IconSize, Radius, StyledExt, TextSize};
 use crate::widgets;
 
 /// Column budget the host offers the component: the card is exactly this many
@@ -317,13 +317,17 @@ impl Render for CustomUi {
         }
 
         // ── header: the surface's origin, its title, and a close control ──
-        let mut meta = div().flex().items_center().gap(px(8.)).child(
-            div()
-                .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_3)
-                .child(SharedString::from("Extension UI")),
-        );
+        let mut meta = div()
+            .flex()
+            .items_center()
+            .gap(DynamicSpacing::Base08.px(&theme))
+            .child(
+                div()
+                    .text_size(TextSize::Small.px(&theme))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_muted)
+                    .child(SharedString::from("Extension UI")),
+            );
         if let Some(title) = self
             .surface
             .title
@@ -343,7 +347,7 @@ impl Render for CustomUi {
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(SharedString::from(title.to_string())),
                 );
         }
@@ -360,7 +364,7 @@ impl Render for CustomUi {
             .child(icon(
                 "icons/extensions.svg",
                 IconSize::Small.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(div().flex_1().min_w_0().flex().items_center().child(meta))
             .child(
@@ -368,12 +372,12 @@ impl Render for CustomUi {
                     .debug_selector(|| "custom-ui-close".to_string())
                     .tip(tr!("common.close"))
                     .cursor_pointer()
-                    .hover(|style| style.bg(theme.bg_hover))
+                    .hover(|style| style.bg(theme.surface_hover))
                     .on_click(cx.listener(Self::on_close_click))
                     .child(icon(
                         "icons/x.svg",
                         ButtonSize::Default.icon_size().px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     )),
             );
 
@@ -384,7 +388,7 @@ impl Render for CustomUi {
             .mx(px(10.))
             .my(px(10.))
             .px(px(10.))
-            .py(px(8.))
+            .py(DynamicSpacing::Base08.px(&theme))
             .rounded(Radius::XLarge.px(&theme))
             .bg(theme.code_bg)
             .border_1()
@@ -409,7 +413,7 @@ impl Render for CustomUi {
             .border_t_1()
             .border_color(theme.border)
             .text_size(TextSize::Small.px(&theme))
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .child(SharedString::from("↑↓ Navigate · ⏎ Select · esc Back"));
 
         let card = div()

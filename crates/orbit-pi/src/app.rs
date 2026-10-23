@@ -281,6 +281,10 @@ pub struct OrbitApp {
     retention: crate::session_retention::RetentionConfig,
     /// One-shot latch: the launch retention pass must run exactly once.
     retention_ran: bool,
+    /// Settings → Privacy: Orbit's scratch files in the system temp folder.
+    /// Refreshed when the page opens and after a cleanup, so rendering never
+    /// touches the filesystem.
+    temp_files: crate::temp_files::TempFiles,
     /// Display name pi reports for the session (`get_state.sessionName`).
     session_name: Option<String>,
     /// pi is compacting right now (`get_state` / `compaction_*`).
@@ -403,10 +407,6 @@ pub struct OrbitApp {
     /// index, so it survives filtering. `<Enter>` picks it; the list keeps
     /// it in view.
     settings_select_highlight: Option<usize>,
-    /// Theme dropdown only: whether the user asked for the whole palette
-    /// catalog instead of the curated set. Reset when Settings opens, so every
-    /// visit starts from the short list.
-    settings_themes_expanded: bool,
     /// Scroll handle for the settings dropdown's option list.
     settings_select_scroll: UniformListScrollHandle,
     /// Settings → Report a bug: the issue title.
@@ -705,6 +705,9 @@ pub struct OrbitApp {
     /// width, full-page state, or collapse from its header, and the app's
     /// layout (sidebar, main column, terminal) must follow immediately.
     _sidepane_sub: Subscription,
+    /// Keeps the file viewer's observer alive: the Explorer marks the active
+    /// file from the viewer's selected tab.
+    _file_viewer_sub: Subscription,
     /// Right dock — the workspace file tree (cmd-shift-e).
     project_panel: Entity<crate::explorer::ProjectPanel>,
     /// Full-page read-only file viewer (the Files surface).
@@ -1295,17 +1298,37 @@ impl OrbitApp {
             error: (!connect_error.is_empty()).then(|| connect_error.clone()),
         };
 
+        // A palette switch must repaint every surface, including the child
+        // entities GPUI renders independently of this view. The app itself
+        // observes the global; the panels that own their own element trees are
+        // notified explicitly so a theme change is never left half-applied.
         let theme_sub = cx.observe_global::<Theme>(|this, cx| {
             this.input.update(cx, |_, cx| cx.notify());
             if let Some((_, selector)) = &this.model_selector {
                 selector.update(cx, |_, cx| cx.notify());
             }
+            this.project_panel.update(cx, |_, cx| cx.notify());
+            this.file_viewer.update(cx, |_, cx| cx.notify());
+            this.sidepane.update(cx, |_, cx| cx.notify());
+            this.terminal_panel.update(cx, |_, cx| cx.notify());
+            this.git_panel.update(cx, |_, cx| cx.notify());
+            this.usage.update(cx, |_, cx| cx.notify());
+            if let Some(picker) = &this.branch_picker {
+                picker.update(cx, |_, cx| cx.notify());
+            }
+            if let Some(picker) = &this.workspace_picker {
+                picker.update(cx, |_, cx| cx.notify());
+            }
             cx.notify();
         });
 
-        // Composer edits notify only the input entity; re-render the app so
-        // the send button's quiet/ready state tracks the text as you type.
-        let input_sub = cx.observe(&input, |_, _, cx| cx.notify());
+        // Composer edits notify only the input entity; re-sync the
+        // slash/mention menu and re-render the app so the send button's
+        // quiet/ready state tracks the text as you type.
+        let input_sub = cx.observe(&input, |this, _, cx| {
+            this.sync_autocomplete(cx);
+            cx.notify();
+        });
 
         // `cmd-c` with a live transcript selection copies that selection even
         // while the composer holds focus — an interceptor is the only hook
@@ -1350,7 +1373,16 @@ impl OrbitApp {
 
         // Right side pane: Review (git diff).
         let sidepane = cx.new(SidePane::new);
-        let sidepane_sub = cx.observe(&sidepane, |_, _, cx| cx.notify());
+        let sidepane_sub = cx.observe(&sidepane, |this, pane, cx| {
+            // Review and the Explorer are mutually exclusive right docks.
+            // Catch every path that opens Review, not just the top-bar toggle.
+            if pane.read(cx).is_open() {
+                this.project_panel.update(cx, |panel, cx| panel.close(cx));
+            }
+            // A full-width Review pane hides the terminal's chat column.
+            this.sync_terminal_active(cx);
+            cx.notify();
+        });
         // Bottom panel: an integrated shell.
         let terminal_panel = cx.new(TerminalPanel::new);
         // Full-page Git panel (Changes / History / Graph).
@@ -1398,6 +1430,12 @@ impl OrbitApp {
                 }),
                 cx,
             )
+        });
+        let file_viewer_sub = cx.observe(&file_viewer, |this, viewer, cx| {
+            let active = viewer.read(cx).active_display();
+            this.project_panel
+                .update(cx, |panel, cx| panel.set_active(active, cx));
+            cx.notify();
         });
 
         let workspace_store = load_workspace_store();
@@ -1533,6 +1571,7 @@ impl OrbitApp {
             auto_title: crate::auto_title::AutoTitleConfig::load(),
             retention: crate::session_retention::RetentionConfig::load(),
             retention_ran: false,
+            temp_files: crate::temp_files::TempFiles::default(),
             session_name: None,
             is_compacting: false,
             retrying: false,
@@ -1581,7 +1620,6 @@ impl OrbitApp {
             settings_search: settings_search.clone(),
             _settings_search_sub: settings_search_sub,
             settings_select_highlight: None,
-            settings_themes_expanded: false,
             settings_select_scroll: UniformListScrollHandle::new(),
             bug_report_title,
             bug_report_what,
@@ -1701,6 +1739,7 @@ impl OrbitApp {
             _sidepane_sub: sidepane_sub,
             project_panel,
             file_viewer,
+            _file_viewer_sub: file_viewer_sub,
             terminal_panel,
             git_open: false,
             git_panel: git_panel.clone(),
@@ -1859,6 +1898,7 @@ impl OrbitApp {
             panel.set_on_close(Rc::new(move |_window, cx| {
                 let _ = app_weak.update(cx, |app, cx| {
                     app.git_open = false;
+                    app.sync_terminal_active(cx);
                     cx.notify();
                 });
             }));
@@ -1871,6 +1911,7 @@ impl OrbitApp {
             page.set_on_close(Rc::new(move |_window, cx| {
                 let _ = app_weak.update(cx, |app, cx| {
                     app.usage_open = false;
+                    app.sync_terminal_active(cx);
                     cx.notify();
                 });
             }));
@@ -1914,6 +1955,10 @@ impl OrbitApp {
         if app.notification_prefs.desktop {
             notifications::request_permission();
         }
+        // Seed the Review pane and terminal with the launch workspace before
+        // the first frame; later changes arrive through
+        // [`Self::sync_review_context`].
+        app.sync_review_context(cx);
         app
     }
 
@@ -2000,7 +2045,7 @@ impl OrbitApp {
     /// Point the app at `cwd` and remember it for the next launch, so the
     /// new-task page opens on the last folder instead of the process cwd
     /// (which is `/` when the app is launched from Finder).
-    pub(super) fn set_current_workspace(&mut self, cwd: PathBuf) {
+    pub(super) fn set_current_workspace(&mut self, cwd: PathBuf, cx: &mut Context<Self>) {
         // Resolve symlinks once at the boundary so the active folder, the
         // persisted last-workspace, and every pi session spawned here all
         // share one identity (`/tmp` and `/private/tmp` are not two folders).
@@ -2014,6 +2059,56 @@ impl OrbitApp {
         self.worktree_repo_root = None;
         self.worktree_fetch = self.worktree_fetch.wrapping_add(1);
         self.current_workspace = Some(cwd.clone());
+        self.sync_review_context(cx);
+    }
+
+    /// Push the workspace / session / turn context the Review pane and the
+    /// terminal panel render against. Called from the transitions that change
+    /// it — workspace pick, session switch, turn checkpoint — so `render`
+    /// stays free of state writes.
+    pub(super) fn sync_review_context(&mut self, cx: &mut Context<Self>) {
+        let workspace = self
+            .current_workspace
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
+        self.sidepane
+            .update(cx, |pane, cx| pane.set_workspace(workspace.clone(), cx));
+        self.terminal_panel
+            .update(cx, |panel, cx| panel.set_workspace(workspace.clone(), cx));
+        let provider = self.model_provider.clone();
+        let model = self.model_id.clone();
+        self.git_panel.update(cx, |panel, cx| {
+            panel.set_context(workspace.clone(), provider, model, cx);
+        });
+        self.project_panel
+            .update(cx, |panel, cx| panel.set_workspace(workspace.clone(), cx));
+        let session = self.session_id.clone();
+        let turn = self.latest_turn;
+        self.sidepane.update(cx, |pane, cx| {
+            pane.set_turn_context(session.clone(), turn, cx)
+        });
+        self.git_panel.update(cx, |panel, cx| {
+            panel.set_review_turn_context(session, turn, cx)
+        });
+    }
+
+    /// Whether the terminal panel should poll: visible only while no full-page
+    /// surface owns the window and Review is not full-width. Pushed from the
+    /// page toggles and the sidepane observer instead of every render.
+    pub(super) fn sync_terminal_active(&mut self, cx: &mut Context<Self>) {
+        let pane_visible = self.sidepane.read(cx).is_open()
+            && !self.settings_open
+            && !self.usage_open
+            && self.dependencies_ready();
+        let pane_full = pane_visible && self.sidepane.read(cx).is_full_width();
+        let visible = self.terminal_panel.read(cx).is_open()
+            && !self.settings_open
+            && !self.usage_open
+            && !self.git_open
+            && !self.worktrees_open
+            && !pane_full;
+        self.terminal_panel
+            .update(cx, |panel, cx| panel.sync_active(visible, cx));
     }
 
     /// Add `cwd` to Orbit's project list if it isn't already there. Called
@@ -2427,7 +2522,11 @@ fn parse_workspace_store(value: &Value) -> WorkspaceStore {
                     icon: map.get("icon").and_then(Value::as_str).map(str::to_string),
                     tint: map.get("tint").and_then(Value::as_str).map(str::to_string),
                 };
-                (sessions::canonical_workspace_path(Path::new(raw)), added, mark)
+                (
+                    sessions::canonical_workspace_path(Path::new(raw)),
+                    added,
+                    mark,
+                )
             }
             _ => continue,
         };
@@ -2985,6 +3084,7 @@ mod session;
 mod settings;
 mod sidebar;
 mod skills_ui;
+mod temp_ui;
 mod toast_ui;
 mod updater_ui;
 mod view;
@@ -3007,6 +3107,8 @@ mod popup_layout_tests;
 #[cfg(test)]
 mod refresh_tests;
 #[cfg(test)]
+mod send_progress_tests;
+#[cfg(test)]
 mod session_default_apply_tests;
 #[cfg(test)]
 mod session_park_tests;
@@ -3023,15 +3125,15 @@ mod sidebar_sort_tests;
 #[cfg(test)]
 mod sidepane_full_width_tests;
 #[cfg(test)]
+mod theme_switch_tests;
+#[cfg(test)]
 mod titlebar_layout_tests;
 #[cfg(test)]
-mod worktree_howto_tests;
+mod window_watch_tests;
 #[cfg(test)]
 mod worktree_chip_tests;
 #[cfg(test)]
-mod send_progress_tests;
-#[cfg(test)]
-mod window_watch_tests;
+mod worktree_howto_tests;
 
 // `icon` and friends are part of the crate-wide UI kit; keep their original
 // `crate::app::…` paths stable for the other modules that import them.
@@ -3040,7 +3142,8 @@ pub(crate) use helpers::{
     button_frame, context_menu_entry, context_menu_separator, context_menu_surface, empty_state,
     file_badge, file_glyph, icon, icon_button_frame, icon_dyn, input_field_frame, menu_header,
     nerd_font_family, picker_entry, picker_search_frame, picker_surface, press,
-    provider_mark_color, refresh_glyph, spinner, EmptyFill, TipExt, BUTTON_GROUP, PRESS_DIM,
+    provider_mark_color, refresh_glyph, running_spinner, spinner, EmptyFill, TipExt, BUTTON_GROUP,
+    PRESS_DIM,
 };
 use sidebar::sessions_with_placeholder;
 

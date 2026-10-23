@@ -203,14 +203,14 @@ impl OrbitApp {
             .child(icon(
                 "icons/search.svg",
                 input::ICON.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(div().flex_1().min_w_0().child(search.input.clone()))
             .child(
                 div()
                     .flex_none()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(label),
             )
             .child(search_nav_button(
@@ -233,8 +233,8 @@ impl OrbitApp {
                 icon_button_frame(div().id("search-close-btn"), &theme, ButtonSize::Compact)
                     .tip(tr!("common.close"))
                     .cursor_pointer()
-                    .text_color(theme.text_2)
-                    .hover(|s| s.bg(theme.overlay).text_color(theme.text))
+                    .text_color(theme.text_secondary)
+                    .hover(|s| s.bg(theme.surface_hover).text_color(theme.text_primary))
                     .on_mouse_up(
                         MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
@@ -244,7 +244,7 @@ impl OrbitApp {
                     .child(icon(
                         "icons/x.svg",
                         ButtonSize::Compact.icon_size().px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     )),
             )
             .into_any_element(),
@@ -266,13 +266,17 @@ fn search_nav_button(
         .when(!disabled, |button| {
             press(button)
                 .cursor_pointer()
-                .hover(|s| s.bg(theme.overlay))
+                .hover(|s| s.bg(theme.surface_hover))
                 .on_mouse_up(MouseButton::Left, listener)
         })
         .child(icon(
             glyph,
             ButtonSize::Compact.icon_size().px(&theme),
-            theme.text_2,
+            if disabled {
+                theme.text_disabled
+            } else {
+                theme.text_secondary
+            },
         ))
         .into_any_element()
 }

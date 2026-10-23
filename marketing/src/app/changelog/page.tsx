@@ -14,6 +14,7 @@ import { SiteNav } from "@/components/site-nav";
 import { Band, ButtonLink, SectionLabel, Shell } from "@/components/ui";
 import { formatDate, getChangelog } from "@/lib/changelog";
 import { getLatestRelease, LATEST_RELEASE_URL } from "@/lib/releases";
+import { NO_DOWNLOADS, preferredDownload } from "@/lib/downloads";
 import { SITE } from "@/lib/site";
 
 const DESCRIPTION =
@@ -87,25 +88,27 @@ export default async function ChangelogPage() {
     ],
   };
 
-  const downloadHref = release?.macos ?? LATEST_RELEASE_URL;
+  const downloads = release?.downloads ?? NO_DOWNLOADS;
+  const downloadHref =
+    preferredDownload(downloads, "macos")?.url ?? LATEST_RELEASE_URL;
   const platforms = [
     {
       icon: <MacosIcon className="size-3.5" />,
       label: "macOS",
       meta: ".dmg",
-      href: release?.macos ?? LATEST_RELEASE_URL,
+      href: preferredDownload(downloads, "macos")?.url ?? LATEST_RELEASE_URL,
     },
     {
       icon: <WindowsIcon className="size-3.5" />,
       label: "Windows",
       meta: ".exe",
-      href: release?.windows ?? LATEST_RELEASE_URL,
+      href: preferredDownload(downloads, "windows")?.url ?? LATEST_RELEASE_URL,
     },
     {
       icon: <LinuxIcon className="size-3.5" />,
       label: "Linux",
       meta: ".deb",
-      href: release?.linux ?? LATEST_RELEASE_URL,
+      href: preferredDownload(downloads, "linux")?.url ?? LATEST_RELEASE_URL,
     },
   ];
 

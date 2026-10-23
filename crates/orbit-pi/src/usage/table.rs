@@ -290,7 +290,7 @@ fn header_cell(ix: usize, column: &Column, theme: Theme, handlers: TableHandlers
         .when(column.numeric, |cell| cell.justify_end())
         .when(column.sortable, |cell| {
             cell.cursor_pointer()
-                .hover(|style| style.bg(theme.bg_hover))
+                .hover(|style| style.bg(theme.surface_hover))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     sort(ix, sort_next, window, cx);
                 })
@@ -301,7 +301,7 @@ fn header_cell(ix: usize, column: &Column, theme: Theme, handlers: TableHandlers
                 .truncate()
                 .text_size(TextSize::Default.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(column.label.clone()),
         );
 
@@ -357,7 +357,11 @@ fn header_cell(ix: usize, column: &Column, theme: Theme, handlers: TableHandlers
 /// others — a grid that draws carets everywhere reads as noise.
 fn sort_caret(sort: SortState, theme: Theme) -> AnyElement {
     let visible = sort != SortState::Default;
-    let color = if visible { theme.text_2 } else { theme.text_3 };
+    let color = if visible {
+        theme.text_secondary
+    } else {
+        theme.text_muted
+    };
     div()
         .flex_none()
         .flex()
@@ -432,7 +436,7 @@ pub(super) fn empty_cell(text: &str, theme: Theme) -> AnyElement {
         .flex()
         .justify_center()
         .text_size(TextSize::Default.px(&theme))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(text.to_string())
         .into_any_element()
 }
@@ -507,8 +511,8 @@ pub struct FailureRow {
 /// failures a warning.
 pub(super) fn failure_kind_register(kind: super::model::ErrorKind, theme: Theme) -> (String, Hsla) {
     match kind {
-        super::model::ErrorKind::Provider => (kind.label(), theme.crit),
-        super::model::ErrorKind::Tool => (kind.label(), theme.warn),
+        super::model::ErrorKind::Provider => (kind.label(), theme.error),
+        super::model::ErrorKind::Tool => (kind.label(), theme.warning),
     }
 }
 

@@ -182,7 +182,7 @@ impl OrbitApp {
                 AcEntry::Command { .. } => icon(
                     "icons/extensions.svg",
                     context_menu::ICON.px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 )
                 .into_any_element(),
                 AcEntry::File { path } => file_glyph(
@@ -218,8 +218,8 @@ impl OrbitApp {
                 )
                 .h(row_h)
                 .cursor_pointer()
-                .when(selected, |row| row.bg(theme.active))
-                .hover(|style| style.bg(theme.overlay))
+                .when(selected, |row| row.bg(theme.selection))
+                .hover(|style| style.bg(theme.surface_hover))
                 .on_click(move |_, _, cx| {
                     this.update(cx, |app, cx| app.commit_entry(entry.clone(), cx))
                         .ok();
@@ -242,9 +242,9 @@ impl OrbitApp {
                                 .truncate()
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(if selected {
-                                    theme.active_fg
+                                    theme.text_primary
                                 } else {
-                                    theme.text_2
+                                    theme.text_secondary
                                 })
                                 .child(title),
                         )
@@ -255,7 +255,7 @@ impl OrbitApp {
                                     .flex_1()
                                     .truncate()
                                     .text_size(picker::SECONDARY_TEXT.px(&theme))
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(subtitle),
                             )
                         }),
@@ -271,7 +271,7 @@ impl OrbitApp {
                             .items_center()
                             .bg(theme.overlay_strong)
                             .text_size(TextSize::XSmall.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .child(badge),
                     )
                 }),
@@ -306,7 +306,11 @@ impl OrbitApp {
             return None;
         }
         let theme = *theme::get(cx);
-        let row = div().w_full().flex().flex_wrap().gap(px(6.));
+        let row = div()
+            .w_full()
+            .flex()
+            .flex_wrap()
+            .gap(DynamicSpacing::Base06.px(&theme));
         Some(
             row.children(self.attachments.iter().enumerate().map(|(ix, a)| {
                 // Image attachments show the decoded image; the glyph is the
@@ -328,8 +332,12 @@ impl OrbitApp {
                         theme.mode == ThemeMode::Dark,
                         nerd_font_family(cx).as_ref(),
                         IconSize::XSmall.px(&theme),
-                        icon("icons/task.svg", IconSize::XSmall.px(&theme), theme.text_3)
-                            .into_any_element(),
+                        icon(
+                            "icons/task.svg",
+                            IconSize::XSmall.px(&theme),
+                            theme.text_muted,
+                        )
+                        .into_any_element(),
                     )
                     .into_any_element(),
                 };
@@ -338,7 +346,7 @@ impl OrbitApp {
                     .tip(tr!("composer.remove_attachment"))
                     .border_1()
                     .border_color(theme.border)
-                    .raised(theme.bg_raised, &theme)
+                    .raised(theme.surface_elevated, &theme)
                     .cursor_pointer()
                     .hover(|s| s.raised(theme.overlay, &theme))
                     .child(visual)
@@ -346,14 +354,14 @@ impl OrbitApp {
                         div()
                             .max_w(px(160.))
                             .truncate()
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(a.name.clone()),
                     )
                     .child(
                         icon(
                             "icons/x.svg",
                             ButtonSize::Medium.icon_size().px(&theme),
-                            theme.text_3,
+                            theme.text_muted,
                         )
                         .into_any_element(),
                     )

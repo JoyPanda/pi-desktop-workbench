@@ -340,7 +340,9 @@ fn cached(dir: &Path) -> Option<Arc<RenderImage>> {
         cell: tuning.cell,
     };
 
-    let cache = CACHE.read().expect("dither cache");
+    let cache = CACHE
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some(cached) = cache.as_ref() {
         if cached.key == key {
             return cached.image.clone();
@@ -358,7 +360,9 @@ fn cached(dir: &Path) -> Option<Arc<RenderImage>> {
         }
         Arc::new(RenderImage::new(vec![Frame::new(bgra)]))
     });
-    *CACHE.write().expect("dither cache") = Some(Cached {
+    *CACHE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Cached {
         key,
         image: image.clone(),
     });
@@ -824,7 +828,7 @@ mod tests {
         let crop_y = (scaled.height() as i64 - height as i64) / 2;
         image::imageops::replace(&mut out, &scaled, -crop_x, -crop_y);
 
-        // The view's bottom scrim: `bg_main` from transparent at the top of
+        // The view's bottom scrim: `background` from transparent at the top of
         // the fade to `fade_peak()` at the bottom edge.
         let page = [0x1a, 0x1a, 0x1a];
         let fade = (tuning.fade * height as f32).round() as u32;

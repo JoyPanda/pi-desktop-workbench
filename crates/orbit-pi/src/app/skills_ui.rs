@@ -40,7 +40,7 @@ impl OrbitApp {
             .min_w_0()
             .min_h_0()
             .flex()
-            .bg(theme.bg_main)
+            .bg(theme.background)
             .font_family(theme::ui_font_family())
             .child(self.skills_list(theme, this.clone(), cx))
             .child(self.skill_detail(theme, this))
@@ -65,17 +65,17 @@ impl OrbitApp {
             .child(icon(
                 "icons/search.svg",
                 input::ICON.px(&theme),
-                theme.text_3,
+                theme.text_muted,
             ))
             .child(div().flex_1().min_w_0().child(self.skills_filter.clone()));
 
         let all_row = div()
-            .mx(px(12.))
+            .mx(DynamicSpacing::Base12.px(&theme))
             .mb(px(10.))
             .h(px(30.))
-            .px(px(8.))
+            .px(DynamicSpacing::Base08.px(&theme))
             .rounded(Radius::Large.px(&theme))
-            .bg(theme.bg_raised)
+            .bg(theme.surface_elevated)
             .border_1()
             .border_color(theme.border)
             .flex()
@@ -84,20 +84,20 @@ impl OrbitApp {
             .child(icon(
                 "icons/magic-wand.svg",
                 IconSize::Small.px(&theme),
-                theme.text_2,
+                theme.text_secondary,
             ))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_2)
+                    .text_color(theme.text_secondary)
                     .child(tr!("skills_ui.all_skills")),
             )
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(self.skills.len().to_string()),
             );
 
@@ -108,7 +108,7 @@ impl OrbitApp {
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .pb(px(8.));
+            .pb(DynamicSpacing::Base08.px(&theme));
 
         // Project first — the most local, then global agent, then user.
         for scope in [SkillScope::Project, SkillScope::Agent, SkillScope::User] {
@@ -129,7 +129,7 @@ impl OrbitApp {
         if filtered.is_empty() {
             list = list.child(
                 div()
-                    .px(px(16.))
+                    .px(DynamicSpacing::Base16.px(&theme))
                     .py(px(28.))
                     .flex()
                     .flex_col()
@@ -138,12 +138,12 @@ impl OrbitApp {
                     .child(icon(
                         "icons/search.svg",
                         IconSize::Custom(22. / 16.).px(&theme),
-                        theme.text_3,
+                        theme.text_muted,
                     ))
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(tr!("skills_ui.no_skills_match")),
                     )
                     .into_any_element(),
@@ -152,18 +152,18 @@ impl OrbitApp {
 
         let footer = div()
             .px(px(14.))
-            .py(px(8.))
+            .py(DynamicSpacing::Base08.px(&theme))
             .border_t_1()
             .border_color(theme.border)
             .text_size(TextSize::Small.px(&theme))
-            .text_color(theme.text_3)
+            .text_color(theme.text_muted)
             .child(tr!("skills_ui.skill_count", count = filtered.len()));
 
         div()
             .w(px(320.))
             .h_full()
             .flex_shrink_0()
-            .bg(theme.bg_sidebar)
+            .bg(theme.surface)
             .border_r_1()
             .border_color(theme.border)
             .flex()
@@ -177,9 +177,9 @@ impl OrbitApp {
 
     fn skill_group_label(&self, scope: SkillScope, count: usize, theme: Theme) -> AnyElement {
         div()
-            .px(px(16.))
+            .px(DynamicSpacing::Base16.px(&theme))
             .pt(px(10.))
-            .pb(px(4.))
+            .pb(DynamicSpacing::Base04.px(&theme))
             .flex()
             .items_center()
             .gap_2()
@@ -187,13 +187,13 @@ impl OrbitApp {
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(scope.label().to_uppercase()),
             )
             .child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(count.to_string()),
             )
             .into_any_element()
@@ -206,15 +206,17 @@ impl OrbitApp {
         div()
             .id(ElementId::Name(format!("skill-row-{}", skill.name).into()))
             .mx(px(10.))
-            .px(px(8.))
+            .px(DynamicSpacing::Base08.px(&theme))
             .py(px(7.))
             .rounded(Radius::Medium.px(&theme))
             .flex()
             .items_start()
             .gap_2p5()
             .cursor_pointer()
-            .when(selected, |row| row.bg(theme.active))
-            .when(!selected, |row| row.hover(|style| style.bg(theme.bg_hover)))
+            .when(selected, |row| row.bg(theme.selection))
+            .when(!selected, |row| {
+                row.hover(|style| style.bg(theme.surface_hover))
+            })
             .when(!skill.enabled, |row| row.opacity(0.55))
             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                 this.update(cx, |app, cx| app.select_skill(file.clone(), cx));
@@ -232,9 +234,9 @@ impl OrbitApp {
                             .text_size(TextSize::Small.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if selected {
-                                theme.active_fg
+                                theme.selection_fg
                             } else {
-                                theme.text
+                                theme.text_primary
                             })
                             .truncate()
                             .child(skill.name.clone()),
@@ -243,7 +245,7 @@ impl OrbitApp {
                         col.child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .text_color(theme.text_3)
+                                .text_color(theme.text_muted)
                                 .truncate()
                                 .child(description.to_string()),
                         )
@@ -254,17 +256,17 @@ impl OrbitApp {
 
     fn skill_tile(&self, skill: &Skill, selected: bool, theme: Theme) -> AnyElement {
         let color = if selected {
-            theme.active_fg
+            theme.text_primary
         } else if skill.enabled {
-            theme.text_2
+            theme.text_secondary
         } else {
-            theme.text_3
+            theme.text_disabled
         };
         div()
             .size(px(26.))
             .flex_none()
             .rounded(Radius::Medium.px(&theme))
-            .bg(theme.bg_raised)
+            .bg(theme.surface_elevated)
             .border_1()
             .border_color(theme.border)
             .flex()
@@ -300,19 +302,19 @@ impl OrbitApp {
                 .child(icon(
                     "icons/magic-wand.svg",
                     IconSize::Custom(30. / 16.).px(&theme),
-                    theme.text_3,
+                    theme.text_muted,
                 ))
                 .child(
                     div()
                         .text_size(TextSize::Default.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(tr!("skills_ui.select_a_skill")),
                 )
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_2)
+                        .text_color(theme.text_secondary)
                         .child(tr!(
                             "skills_ui.pick_one_from_the_list_to_see_its_details_and_sk"
                         )),
@@ -329,7 +331,7 @@ impl OrbitApp {
                     .size(px(40.))
                     .flex_none()
                     .rounded(Radius::Large.px(&theme))
-                    .bg(theme.bg_raised)
+                    .bg(theme.surface_elevated)
                     .border_1()
                     .border_color(theme.border)
                     .flex()
@@ -338,7 +340,7 @@ impl OrbitApp {
                     .child(icon(
                         "icons/magic-wand.svg",
                         IconSize::Custom(20. / 16.).px(&theme),
-                        theme.text_2,
+                        theme.text_secondary,
                     )),
             )
             .child(
@@ -352,14 +354,14 @@ impl OrbitApp {
                         div()
                             .text_size(theme.ui_px(17.))
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
+                            .text_color(theme.text_primary)
                             .truncate()
                             .child(skill.name.clone()),
                     )
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .text_color(theme.text_3)
+                            .text_color(theme.text_muted)
                             .truncate()
                             .child(self.skill_subtitle(&skill)),
                     ),
@@ -372,9 +374,9 @@ impl OrbitApp {
             skill.description.clone()
         };
         let description_color = if skill.is_valid() {
-            theme.text_2
+            theme.text_secondary
         } else {
-            theme.crit
+            theme.error
         };
 
         let facts = div()
@@ -427,7 +429,7 @@ impl OrbitApp {
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(tr!("skills_ui.skill_md_is_empty")),
                 )
                 .into_any_element(),
@@ -439,9 +441,9 @@ impl OrbitApp {
             .min_h_0()
             .flex()
             .flex_col()
-            .px(px(24.))
+            .px(DynamicSpacing::Base24.px(&theme))
             .pt(px(18.))
-            .pb(px(12.))
+            .pb(DynamicSpacing::Base12.px(&theme))
             .gap_3()
             .child(header)
             .child(
@@ -458,7 +460,7 @@ impl OrbitApp {
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(tr!("skills_ui.skill_md")),
             )
             .child(content)
@@ -494,7 +496,7 @@ impl OrbitApp {
                     .w(px(84.))
                     .flex_none()
                     .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_3)
+                    .text_color(theme.text_muted)
                     .child(label.to_string()),
             )
             .child(div().flex_1().min_w_0().child(value))
@@ -506,7 +508,7 @@ impl OrbitApp {
             .min_w_0()
             .truncate()
             .text_size(TextSize::Small.px(&theme))
-            .text_color(theme.text)
+            .text_color(theme.text_primary)
             .child(value.to_string())
             .into_any_element()
     }
@@ -525,7 +527,9 @@ impl OrbitApp {
             .items_center()
             .cursor_pointer()
             .when(on, |track| track.bg(theme.accent).justify_end())
-            .when(!on, |track| track.bg(theme.bg_raised).justify_start())
+            .when(!on, |track| {
+                track.bg(theme.surface_elevated).justify_start()
+            })
             .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                 this.update(cx, |app, cx| {
                     app.apply_skill_action(SkillAction::Toggle, cx)
@@ -552,7 +556,7 @@ impl OrbitApp {
                         .flex_1()
                         .min_w_0()
                         .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.crit)
+                        .text_color(theme.error)
                         .child(tr!(
                             "skills_ui.delete_skill_hint",
                             path = skills::display_path(skill.dir().unwrap_or(&skill.file))
@@ -647,23 +651,23 @@ impl OrbitApp {
             (
                 base.border_1()
                     .border_color(theme.border)
-                    .raised(theme.bg_raised, &theme)
-                    .text_color(theme.crit)
+                    .raised(theme.surface_elevated, &theme)
+                    .text_color(theme.error)
                     .hover(|style| {
                         style
-                            .border_color(theme.crit.opacity(0.6))
-                            .raised(theme.crit.opacity(0.08), &theme)
+                            .border_color(theme.error.opacity(0.6))
+                            .raised(theme.error.opacity(0.08), &theme)
                     }),
-                theme.crit,
+                theme.error,
             )
         } else {
             (
                 base.border_1()
                     .border_color(theme.border)
-                    .raised(theme.bg_raised, &theme)
-                    .text_color(theme.text_2)
-                    .hover(|style| style.raised(theme.bg_hover, &theme)),
-                theme.text_2,
+                    .raised(theme.surface_elevated, &theme)
+                    .text_color(theme.text_secondary)
+                    .hover(|style| style.raised(theme.surface_hover, &theme)),
+                theme.text_secondary,
             )
         };
         press(button)

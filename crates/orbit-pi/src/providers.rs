@@ -841,7 +841,14 @@ fn write_json_secure(path: &Path, root: &Value) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600)).map_err(|err| {
+            let _ = std::fs::remove_file(&tmp);
+            tr!(
+                "errors.could_not_write",
+                path = tmp.display().to_string(),
+                error = err
+            )
+        })?;
     }
     std::fs::rename(&tmp, path).map_err(|err| {
         let _ = std::fs::remove_file(&tmp);
@@ -951,8 +958,9 @@ pub(crate) fn provider_brand(provider: &str) -> Option<(u32, u32)> {
             (0x615CED, 0x4E49C9)
         }
         "together" => (0x0F6FFF, 0x0B57CC),
-        "xiaomi" | "xiaomi-token-plan-ams" | "xiaomi-token-plan-cn"
-        | "xiaomi-token-plan-sgp" => (0xFF6900, 0xCC5400),
+        "xiaomi" | "xiaomi-token-plan-ams" | "xiaomi-token-plan-cn" | "xiaomi-token-plan-sgp" => {
+            (0xFF6900, 0xCC5400)
+        }
         "zai" | "zai-coding-cn" => (0x3B5BFF, 0x2A43CC),
         _ => return None,
     })
@@ -974,7 +982,10 @@ mod tests {
     fn brand_aliases_and_skips_monochrome_brands() {
         // Aliases share the underlying brand's ink.
         assert_eq!(provider_brand("google-vertex"), provider_brand("google"));
-        assert_eq!(provider_brand("moonshotai-cn"), provider_brand("moonshotai"));
+        assert_eq!(
+            provider_brand("moonshotai-cn"),
+            provider_brand("moonshotai")
+        );
         assert_eq!(provider_brand("ollama-cloud"), provider_brand("ollama"));
         // Distinct brands get distinct hues…
         assert!(provider_brand("deepseek").is_some());

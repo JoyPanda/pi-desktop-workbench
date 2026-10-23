@@ -87,7 +87,9 @@ struct Store {
 static STORE: RwLock<Option<Store>> = RwLock::new(None);
 
 fn with_store<R>(f: impl FnOnce(&mut Store) -> R) -> R {
-    let mut guard = STORE.write().unwrap();
+    let mut guard = STORE
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     f(guard.get_or_insert_with(|| Store {
         layout: Layout::load(),
         changed_at: None,

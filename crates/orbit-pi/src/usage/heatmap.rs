@@ -9,7 +9,7 @@
 //! The measure is the page's active [`ChartMetric`], so the calendar and the
 //! timeline always speak in the same register. Cell shades are a single-hue
 //! accent ramp, the same restraint as every other chart on the page
-//! (§17): empty days are the trough, active days step up through ember.
+//! (§17): empty days are the surface well, active days step up through accent.
 //!
 //! Everything here is layout and formatting. The totals arrive computed on the
 //! snapshot; the page keeps hover and selection.
@@ -107,12 +107,12 @@ pub fn level(value: f64, thresholds: [f64; 3], max: f64) -> u8 {
 }
 
 /// The fill for one level: the canvas for none (which reads as a hollow box
-/// against the raised card), then a single-hue ember ramp. `trough` cannot be
-/// used for the empty level — in several palettes it equals `bg_raised`, which
+/// against the raised card), then a single-hue accent ramp. The well cannot be
+/// used for the empty level — in several palettes it equals `surface_elevated`, which
 /// is exactly the card the calendar sits on.
 pub fn level_color(level: u8, theme: Theme) -> Hsla {
     match level {
-        0 => theme.bg_main,
+        0 => theme.background,
         1 => theme.accent.opacity(0.24),
         2 => theme.accent.opacity(0.46),
         3 => theme.accent.opacity(0.72),
@@ -232,7 +232,7 @@ fn month_strip(labels: &[Option<String>], geometry: &Geometry, theme: Theme) -> 
                 .w(px(geometry.w))
                 .flex_none()
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .whitespace_nowrap()
                 .child(label.clone().unwrap_or_default()),
         );
@@ -283,7 +283,7 @@ fn week_grid(
                 .items_center()
                 .justify_end()
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(theme.text_3)
+                .text_color(theme.text_muted)
                 .child(text),
         );
     }
@@ -374,7 +374,7 @@ fn day_cell(
         // brightens for the hovered / selected day.
         .border_1()
         .border_color(if is_hover || is_selected {
-            theme.text
+            theme.text_primary
         } else {
             theme.border
         })
@@ -438,7 +438,7 @@ fn day_readout(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
+                .text_color(theme.text_primary)
                 .child(stamp_label(day.start_ms, Granularity::Day)),
         );
     for (label, value) in rows {
@@ -450,8 +450,8 @@ fn day_readout(
                 .gap(DynamicSpacing::Base12.px(&theme))
                 .whitespace_nowrap()
                 .text_size(TextSize::Small.px(&theme))
-                .child(div().flex_none().text_color(theme.text_3).child(label))
-                .child(div().min_w_0().text_color(theme.text).child(value)),
+                .child(div().flex_none().text_color(theme.text_muted).child(label))
+                .child(div().min_w_0().text_color(theme.text_primary).child(value)),
         );
     }
 
@@ -506,7 +506,7 @@ fn legend(theme: Theme) -> AnyElement {
         .justify_end()
         .gap(DynamicSpacing::Base06.px(&theme))
         .text_size(TextSize::XSmall.px(&theme))
-        .text_color(theme.text_3)
+        .text_color(theme.text_muted)
         .child(tr!("heatmap.less"))
         .child(swatches)
         .child(tr!("heatmap.more"))

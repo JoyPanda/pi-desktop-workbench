@@ -1577,7 +1577,7 @@ impl Element for TextElement {
             let placeholder = self.input.read(cx).resolved_placeholder();
             let mut run = base.clone();
             run.len = placeholder.len();
-            run.color = theme.text_3;
+            run.color = theme.text_muted;
             (placeholder, vec![run])
         } else if let Some(lang) = syntax {
             // Code files: paint the whole buffer with the same lexer the
@@ -1755,7 +1755,7 @@ impl Element for TextElement {
                         point(origin.x, origin.y + px(2.)),
                         size(px(2.), line_height - px(4.)),
                     ),
-                    theme.accent,
+                    theme.accent_text,
                 )
             })
         } else {
@@ -1782,7 +1782,7 @@ impl Element for TextElement {
                     ),
                     size(width, thumb_height),
                 ),
-                theme.text_3.opacity(0.45),
+                theme.text_muted.opacity(0.45),
             )
         });
 
@@ -1803,7 +1803,7 @@ impl Element for TextElement {
                     .join("\n");
                 let mut run = base.clone();
                 run.len = text.len();
-                run.color = theme.text_3.opacity(0.7);
+                run.color = theme.text_muted.opacity(0.7);
                 window
                     .text_system()
                     .shape_text(text.into(), font_size, &[run], None, None)
@@ -1890,14 +1890,16 @@ impl Element for TextElement {
                 let i = prepaint.number_first + k;
                 if let Some(y) = prepaint.line_y.get(i).copied() {
                     let x = bounds.origin.x + gutter - px(9.) - number.width();
-                    let _ = number.paint(
+                    if let Err(error) = number.paint(
                         point(x, bounds.origin.y + y - scroll),
                         line_height,
                         TextAlign::Left,
                         None,
                         window,
                         cx,
-                    );
+                    ) {
+                        eprintln!("Orbit composer: could not paint a line number: {error}");
+                    }
                 }
             }
             window.with_content_mask(
@@ -1910,7 +1912,7 @@ impl Element for TextElement {
                         window.paint_quad(quad);
                     }
                     for (i, line) in prepaint.lines.iter().enumerate() {
-                        line.paint(
+                        if let Err(error) = line.paint(
                             point(
                                 bounds.origin.x + gutter - scroll_x,
                                 bounds.origin.y + prepaint.line_y[i] - scroll,
@@ -1920,8 +1922,9 @@ impl Element for TextElement {
                             None,
                             window,
                             cx,
-                        )
-                        .unwrap();
+                        ) {
+                            eprintln!("Orbit composer: could not paint a text line: {error}");
+                        }
                     }
                     // Caret over the text.
                     if focused {

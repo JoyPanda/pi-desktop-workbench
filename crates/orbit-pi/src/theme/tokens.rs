@@ -264,6 +264,8 @@ impl TextSize {
 }
 
 /// Headline sizes on a Major Second scale — Zed's `HeadlineSize`.
+/// Reserved by the modal metrics ([`modal::HEADLINE`]); no surface paints a
+/// page headline through it yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HeadlineSize {
     /// ~14px.
@@ -1011,9 +1013,9 @@ impl ElevationIndex {
     /// fill for both elevated layers (Zed's `elevated_surface_background`).
     pub fn bg(self, theme: &Theme) -> Hsla {
         match self {
-            Self::Background | Self::Surface => theme.bg_sidebar,
-            Self::EditorSurface => theme.bg_main,
-            Self::ElevatedSurface | Self::ModalSurface => theme.menu_bg,
+            Self::Background | Self::Surface => theme.surface,
+            Self::EditorSurface => theme.background,
+            Self::ElevatedSurface | Self::ModalSurface => theme.surface_elevated,
         }
     }
 }
@@ -1114,7 +1116,7 @@ pub fn button_shadow(theme: &Theme) -> Vec<BoxShadow> {
 }
 
 /// Raised-button fills. Works on elements and on hover/active refinements
-/// alike (`.hover(|s| s.raised(theme.bg_hover, &theme))`).
+/// alike (`.hover(|s| s.raised(theme.surface_hover, &theme))`).
 pub trait RaisedExt: Styled + Sized {
     /// Gradient face in `color` plus the lift shadow — a standalone button.
     fn raised(self, color: Hsla, theme: &Theme) -> Self {

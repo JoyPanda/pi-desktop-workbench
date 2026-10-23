@@ -178,7 +178,7 @@ export default async function ReleasePage({
 
               <div className="mt-7">
                 <OsDownloadButton
-                  assets={entry.assets}
+                  downloads={entry.downloads}
                   fallback={entry.url}
                   className="min-h-11 gap-[9px] px-5 text-[13px] sm:min-w-[196px]"
                 />

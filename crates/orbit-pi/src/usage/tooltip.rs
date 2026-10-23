@@ -34,7 +34,7 @@ impl Render for Tooltip {
                     .elevation_2(&theme)
                     .font_family(theme::ui_font_family())
                     .text_size(tooltip::TEXT.px(&theme))
-                    .text_color(theme.text)
+                    .text_color(theme.text_primary)
                     .py(tooltip::padding_y(&theme))
                     .px(tooltip::padding_x(&theme))
                     .child(

@@ -118,7 +118,7 @@ impl OrbitApp {
                             .min_w_0()
                             .truncate()
                             .text_size(toast_tokens::BODY.px(&theme))
-                            .text_color(theme.text_2)
+                            .text_color(theme.text_secondary)
                             .child(update.name.clone()),
                     )
                     .child(
@@ -131,19 +131,19 @@ impl OrbitApp {
                                 div()
                                     .font_family(theme::code_font_family())
                                     .text_size(toast_tokens::version_text_size(&theme))
-                                    .text_color(theme.text_3)
+                                    .text_color(theme.text_muted)
                                     .child(short_revision(&update.current).to_string()),
                             )
                             .child(icon(
                                 "icons/arrow-right.svg",
                                 IconSize::XSmall.px(&theme),
-                                theme.text_3,
+                                theme.text_muted,
                             ))
                             .child(
                                 div()
                                     .font_family(theme::code_font_family())
                                     .text_size(toast_tokens::version_text_size(&theme))
-                                    .text_color(theme.text)
+                                    .text_color(theme.text_primary)
                                     .child(short_revision(&update.latest).to_string()),
                             ),
                     )
@@ -155,7 +155,7 @@ impl OrbitApp {
             div()
                 .id(ElementId::Name("plugin-update-close".into()))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.bg_hover))
+                .hover(|style| style.bg(theme.surface_hover))
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| this.skip_plugin_updates(cx)),
@@ -166,7 +166,7 @@ impl OrbitApp {
         .child(icon(
             "icons/x.svg",
             toast_tokens::CLOSE_BUTTON.icon_size().px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ));
 
         let this = cx.entity();
@@ -176,8 +176,8 @@ impl OrbitApp {
             toast_tokens::ACTION_BUTTON,
         ))
         .cursor_pointer()
-        .text_color(theme.text_3)
-        .hover(|style| style.bg(theme.bg_hover).text_color(theme.text))
+        .text_color(theme.text_muted)
+        .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| app.skip_plugin_updates(cx));
         })
@@ -190,16 +190,17 @@ impl OrbitApp {
             toast_tokens::ACTION_BUTTON,
         ))
         .cursor_pointer()
-        .raised(theme.send_bg, &theme)
-        .text_color(theme.send_fg)
-        .hover(|style| style.raised(theme.send_bg_hover, &theme))
+        .raised(theme.action, &theme)
+        .text_color(theme.action_fg)
+        .hover(|style| style.raised(theme.action_hover, &theme))
+        .active(|style| style.raised(theme.action_pressed, &theme))
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             this.update(cx, |app, cx| app.apply_plugin_updates(cx));
         })
         .child(icon(
             "icons/refresh.svg",
             IconSize::XSmall.px(&theme),
-            theme.send_fg,
+            theme.action_fg,
         ))
         .child(tr!("updater_ui.update_now"));
 
@@ -227,7 +228,7 @@ impl OrbitApp {
                 .child(icon(
                     "icons/extensions.svg",
                     toast_tokens::ICON.px(&theme),
-                    theme.accent,
+                    theme.accent_text,
                 )),
         )
         .child(
@@ -249,7 +250,7 @@ impl OrbitApp {
                                 .min_w_0()
                                 .text_size(toast_tokens::TITLE.px(&theme))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text)
+                                .text_color(theme.text_primary)
                                 .child(title),
                         )
                         .child(
@@ -264,7 +265,7 @@ impl OrbitApp {
                                 .bg(theme.overlay)
                                 .text_size(toast_tokens::BODY.px(&theme))
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text_2)
+                                .text_color(theme.text_secondary)
                                 .child(updates.len().to_string()),
                         )
                         .child(close_button),
@@ -309,24 +310,24 @@ impl OrbitApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         let (glyph, tint) = match toast.kind {
-            ToastKind::Info => ("icons/info.svg", theme.accent),
-            ToastKind::Success => ("icons/check.svg", theme.ok_green),
-            ToastKind::Warning => ("icons/info.svg", theme.warn),
-            ToastKind::Error => ("icons/stop.svg", theme.crit),
+            ToastKind::Info => ("icons/info.svg", theme.info),
+            ToastKind::Success => ("icons/check.svg", theme.success),
+            ToastKind::Warning => ("icons/info.svg", theme.warning),
+            ToastKind::Error => ("icons/stop.svg", theme.error),
         };
         let id = toast.id;
         let close_button = press(icon_button_frame(
             div()
                 .id(ElementId::Name(format!("toast-close-{id}").into()))
                 .cursor_pointer()
-                .hover(|style| style.bg(theme.bg_hover)),
+                .hover(|style| style.bg(theme.surface_hover)),
             &theme,
             toast_tokens::CLOSE_BUTTON,
         ))
         .child(icon(
             "icons/x.svg",
             toast_tokens::CLOSE_BUTTON.icon_size().px(&theme),
-            theme.text_3,
+            theme.text_muted,
         ));
         let card = toast_tokens::surface(
             div()
@@ -371,7 +372,7 @@ impl OrbitApp {
                         .line_clamp(2)
                         .text_size(toast_tokens::TITLE.px(&theme))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
+                        .text_color(theme.text_primary)
                         .child(toast.title.clone()),
                 )
                 .children(toast.body.as_ref().map(|body| {
@@ -379,7 +380,7 @@ impl OrbitApp {
                         .whitespace_normal()
                         .line_clamp(3)
                         .text_size(toast_tokens::BODY.px(&theme))
-                        .text_color(theme.text_3)
+                        .text_color(theme.text_muted)
                         .child(body.clone())
                 })),
         )
