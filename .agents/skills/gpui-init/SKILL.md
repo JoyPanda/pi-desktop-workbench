@@ -292,7 +292,10 @@ channel = "stable"
 ## Optional: Using Pre-built Components
 
 > [!NOTE]
-> For pre-built UI components (similar to shadcn/ui), see the **gpui-component-usage** skill.
+> For pre-built UI components (similar to shadcn/ui), the `longbridge/gpui-component`
+> crate is an option. **This project does not depend on it** — it builds on plain `gpui`.
+> The `gpui-patterns` skill shows how that library implements components so you can
+> reproduce the patterns without the dependency.
 
 ## Project Checklist
 

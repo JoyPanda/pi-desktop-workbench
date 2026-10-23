@@ -5,6 +5,10 @@ description: Actions and event handling in GPUI applications. Use when implement
 
 # GPUI Actions
 
+> Reference: `references/key_dispatch.md` — the canonical gpui 0.2.2 key dispatch model
+> (key contexts, propagation, focus interaction). Read it before changing how actions
+> are routed between nested views.
+
 This skill covers actions, events, and user interaction handling in GPUI.
 
 ## Overview

@@ -5,6 +5,11 @@ description: Core GPUI concepts including contexts, windows, entities, elements,
 
 # GPUI Fundamentals
 
+> Reference: `references/ownership-and-data-flow.md` — the official gpui 0.2.2 explanation
+> of the ownership model: how `App` owns entities, what an `Entity<T>` handle actually is,
+> and how `read` / `update` / `observe` / `Subscription` fit together. Authoritative for
+> this pinned version; read it before reasoning about entity lifetimes.
+
 This skill covers the core concepts of GPUI framework for building desktop UI applications in Rust.
 
 ## Overview

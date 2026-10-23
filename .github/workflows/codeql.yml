@@ -61,7 +61,7 @@ jobs:
         # your codebase is analyzed, see https://docs.github.com/en/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/codeql-code-scanning-for-compiled-languages
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v7
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
     # Add any setup steps before running the `github/codeql-action/init` action.
     # This includes steps like installing compilers or runtimes (`actions/setup-node`
@@ -69,9 +69,30 @@ jobs:
     # - name: Setup runtime (example)
     #   uses: actions/setup-example@v1
 
+    # Rust extraction is ~10x slower than the other three languages because the
+    # extractor shells out to cargo: `LoadManifest` resolves the dependency
+    # graph against the sparse registry index (~1 min on a cold runner) and
+    # `ExtractLibrary` builds proc-macro dependencies from source (~1 min).
+    # Both are network/warm-cache bound and repeat byte-for-byte between runs,
+    # so the registry half is worth caching.
+    #
+    # Deliberately no `target/` cache (`cache-targets: false`): the extractor
+    # runs with `cargo_target_dir: None` (its own per-run scratch dir), and
+    # `build-mode: none` never compiles this workspace. Caching `target/` would
+    # cost a multi-GB restore for no reuse and evict ci.yml's per-OS builds.
+    - name: Cache cargo registry
+      if: matrix.language == 'rust'
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      with:
+        prefix-key: codeql-rust
+        cache-targets: "false"
+        # PR runs only read the cache; writing from them would churn the
+        # 10 GB budget every push and is keyed off the same Cargo.lock anyway.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@v4
+      uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
       with:
         languages: ${{ matrix.language }}
         build-mode: ${{ matrix.build-mode }}
@@ -80,7 +101,9 @@ jobs:
         # Prefix the list here with "+" to use these queries and those in the config file.
 
         # For more details on CodeQL's query packs, refer to: https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
-        # queries: security-extended,security-and-quality
+        # Security *and* quality queries: the default suite reports only
+        # security findings, which is why the code-quality view stays empty.
+        queries: security-extended,security-and-quality
 
     # If the analyze step fails for one of the languages you are analyzing with
     # "We were unable to automatically build your code", modify the matrix above
@@ -100,6 +123,6 @@ jobs:
         exit 1
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v4
+      uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
       with:
         category: "/language:${{matrix.language}}"

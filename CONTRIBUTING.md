@@ -202,25 +202,29 @@ The updater verifies every downloaded artifact against an Ed25519 public key
 compiled into the binary (`ORBIT_UPDATE_PUBLIC_KEY`). Generate the keypair once:
 
 ```bash
-openssl genpkey -algorithm ed25519 -out orbit-update.pem
+mkdir -p "$HOME/.config/orbit"
+openssl genpkey -algorithm ed25519 -out "$HOME/.config/orbit/orbit-update.pem"
 
 # Public key → repository secret ORBIT_UPDATE_PUBLIC_KEY
-openssl pkey -in orbit-update.pem -pubout -outform DER | tail -c 32 | base64
+openssl pkey -in "$HOME/.config/orbit/orbit-update.pem" -pubout -outform DER | tail -c 32 | base64
 
 # Private key → repository secret ORBIT_UPDATE_PRIVATE_KEY
-base64 -i orbit-update.pem
+base64 -i "$HOME/.config/orbit/orbit-update.pem"
 ```
 
-Add both under Settings → Secrets and variables → Actions, and keep
-`orbit-update.pem` somewhere safe — lose it and you can never sign another
-update. With no public key the updater stays dormant, and debug builds never
-update themselves.
+Add both under Settings → Secrets and variables → Actions, and keep that file
+somewhere safe — lose it and you can never sign another update. With no public
+key the updater stays dormant, and debug builds never update themselves.
+
+Never place the private key inside the repository tree: it is gitignored, but
+`git add -f` and backup/sync tools do not respect that. CI fails on any tracked
+`*.pem`/`*.key`, and the key belongs in `~/.config/orbit/` (mode `0600`).
 
 To exercise the flow from a dev build, compile the public key in and force the
 updater on:
 
 ```bash
-ORBIT_UPDATE_PUBLIC_KEY="$(openssl pkey -in orbit-update.pem -pubout -outform DER | tail -c 32 | base64)" \
+ORBIT_UPDATE_PUBLIC_KEY="$(openssl pkey -in "$HOME/.config/orbit/orbit-update.pem" -pubout -outform DER | tail -c 32 | base64)" \
 ORBIT_FORCE_UPDATER=1 cargo run
 ```
 

@@ -25,12 +25,6 @@
       "skillPath": "gpui-code-quality/SKILL.md",
       "computedHash": "5d7202d95a9d531c76835b14b5c6ea9e4c8685195c9fe8e4af49a0b4e5fdb1de"
     },
-    "gpui-component": {
-      "source": "aprilnea/gpui-skills",
-      "sourceType": "github",
-      "skillPath": "gpui-component/SKILL.md",
-      "computedHash": "acf6afcdf0b2147b414cf53f2ccca53e345839a37923c595aeae045a943102c0"
-    },
     "gpui-elements": {
       "source": "cnwzhu/gpui-skills",
       "sourceType": "github",

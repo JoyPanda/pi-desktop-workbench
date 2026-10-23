@@ -5,6 +5,10 @@ description: Entity and context patterns for state management in GPUI. Use when 
 
 # GPUI Entities
 
+> Reference: `references/contexts.md` — the canonical gpui 0.2.2 taxonomy of `App`,
+> `Context<T>`, `AsyncApp`, `AsyncWindowContext`, `TestAppContext`, `Window`, and
+> `Entity<T>`. Read it when you need to confirm which context a function takes.
+
 This skill provides comprehensive patterns for working with entities and contexts in GPUI applications.
 
 ## Overview
