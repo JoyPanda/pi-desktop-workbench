@@ -274,17 +274,13 @@ impl McpManager {
         self.log_event("probe_started", "");
     }
 
-    /// Structured, secret-redacted lifecycle log on stderr. Orbit ships no log
-    /// file; these lines surface in a terminal launch and Console.app, and
-    /// carry only names/status — every detail passes through
-    /// [`McpSecrets::redact`]. Pi's own server log messages live in
-    /// `~/.pi/agent/mcp.log`.
-    pub(crate) fn log_event(&self, event: &str, detail: &str) {
-        if detail.is_empty() {
-            eprintln!("orbit-mcp event={event}");
-        } else {
-            eprintln!("orbit-mcp event={event} {}", self.secrets.redact(detail));
-        }
+    /// Structured lifecycle log on stderr. Orbit ships no log file; these
+    /// lines surface in a terminal launch and Console.app.
+    /// To avoid leaking sensitive or untrusted data, dynamic detail payloads
+    /// are intentionally not emitted.
+    /// Pi's own server log messages live in `~/.pi/agent/mcp.log`.
+    pub(crate) fn log_event(&self, event: &str, _detail: &str) {
+        eprintln!("orbit-mcp event={event}");
     }
 
     /// Fold one probe result into the runtime cache. Servers Pi did not
