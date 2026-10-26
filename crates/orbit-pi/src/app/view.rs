@@ -6,8 +6,8 @@ use crate::commands::{self, CommandId};
 use gpui::StyledText;
 
 use crate::theme::tokens::{
-    button, context_menu, picker, popover, AnimationDuration, ButtonSize, DynamicSpacing, IconSize,
-    Radius, TextSize,
+    button, context_menu, input, panel, picker, popover, AnimationDuration, ButtonSize,
+    DynamicSpacing, IconSize, Radius, TextSize,
 };
 use crate::usage::tooltip::Tooltip;
 use crate::widgets as ext_widgets;
@@ -98,7 +98,7 @@ fn feature_card(theme: Theme, body: AnyElement) -> AnyElement {
                 .flex()
                 .flex_col()
                 .overflow_hidden()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .child(body),
@@ -456,7 +456,7 @@ impl Render for OrbitApp {
         // Provider quota — a compact, provider-independent headroom meter.
         // Hidden entirely on a pi without `quota.*` (or when no provider
         // reports anything), so the bar never shows a fabricated value.
-        top_controls = top_controls.children(self.render_quota_pill(compact_chrome, cx));
+        top_controls = top_controls.children(self.render_quota_chip(compact_chrome, cx));
         top_controls = top_controls.children(self.render_open_in_control(cx));
         top_controls = top_controls
             // Review dock — the side-panel toggle and the working tree's
@@ -658,6 +658,7 @@ impl Render for OrbitApp {
                                             .flex_1()
                                             .min_h_0()
                                             .px_2()
+                                            .pb_2()
                                             .relative()
                                             .child(
                                                 div()
@@ -712,45 +713,86 @@ impl Render for OrbitApp {
                             )
                             // footer — connection status, then the utility
                             // icons on the last edge, set off from the session
-                            // list by a hairline
+                            // list by a hairline. The gutter matches the
+                            // section label above so the column has one edge.
                             .child(
                                 div()
                                     .id("sidebar-footer")
                                     .debug_selector(|| "sidebar-footer".to_string())
                                     .h(px(44.))
-                                    .px_3()
+                                    .px(px(14.))
                                     .border_t_1()
                                     .border_color(theme.border)
                                     .flex()
                                     .items_center()
-                                    .child(
+                                    // Connection status — a dot alone while
+                                    // the runtime is live: "Connected" is the
+                                    // steady state, so a permanent label spends
+                                    // the row's best corner on a non-event. When
+                                    // it is not live the label appears and the
+                                    // pair reconnects on click.
+                                    .child(if self.runtime_is_live() {
                                         div()
+                                            .flex_none()
+                                            .size(px(6.))
+                                            .rounded_full()
+                                            .bg(theme.success)
+                                            .into_any_element()
+                                    } else {
+                                        div()
+                                            .id("sidebar-runtime-status")
                                             .flex()
+                                            .min_w_0()
                                             .items_center()
                                             .gap(DynamicSpacing::Base06.px(&theme))
-                                            .child(div().size(px(6.)).rounded_full().bg(
-                                                if self.client.is_some() {
-                                                    theme.success
-                                                } else {
-                                                    theme.error
-                                                },
-                                            ))
+                                            .cursor_pointer()
+                                            .tip(tr!("view.reconnect"))
+                                            .active(|s| s.opacity(PRESS_DIM))
+                                            .on_mouse_up(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                                                    this.runtime_restart(cx)
+                                                }),
+                                            )
                                             .child(
                                                 div()
+                                                    .flex_none()
+                                                    .size(px(6.))
+                                                    .rounded_full()
+                                                    .bg(theme.error),
+                                            )
+                                            .child(
+                                                div()
+                                                    .min_w_0()
+                                                    .truncate()
                                                     .text_size(TextSize::Small.px(&theme))
-                                                    .text_color(theme.text_muted)
-                                                    .child(if self.client.is_some() {
-                                                        tr!("status.connected")
-                                                    } else {
-                                                        tr!("status.offline")
-                                                    }),
-                                            ),
-                                    )
+                                                    .text_color(theme.text_secondary)
+                                                    .child(tr!("status.offline")),
+                                            )
+                                            .into_any_element()
+                                    })
                                     .child(div().flex_1())
                                     .when_some(
                                         self.sidebar_updater_button(theme, cx),
                                         |footer, button| {
-                                            footer.child(button).child(div().w(px(8.)))
+                                            // Reserve the pill's expanded width
+                                            // so its hover reveal grows into
+                                            // empty space, not over the label.
+                                            footer
+                                                .child(
+                                                    div()
+                                                        .flex_none()
+                                                        .w(theme.ui_px(
+                                                            super::updater_ui::
+                                                                UPDATER_PILL_EXPANDED_W,
+                                                        ))
+                                                        .h_full()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_end()
+                                                        .child(button),
+                                                )
+                                                .child(div().w(px(8.)))
                                         },
                                     )
                                     .child(self.sidebar_footer_actions(theme, cx)),
@@ -915,6 +957,7 @@ impl Render for OrbitApp {
                                     review_workspace.as_deref(),
                                     window.viewport_size().height,
                                     main_width,
+                                    self.agent_calls,
                                     Some(self.review_opener(cx)),
                                     Some(self.image_opener(cx)),
                                     self.search_hits(),
@@ -984,7 +1027,7 @@ impl Render for OrbitApp {
                                                 } else {
                                                     theme.border
                                                 })
-                                                .rounded(Radius::XXLarge.px(&theme))
+                                                .rounded(input::composer_radius(&theme))
                                                 .shadow(theme.composer_shadow())
                                                 .px(DynamicSpacing::Base16.px(&theme))
                                                 .pt(DynamicSpacing::Base12.px(&theme))
@@ -1012,7 +1055,7 @@ impl Render for OrbitApp {
                                                     let overlay = div()
                                                         .absolute()
                                                         .inset_0()
-                                                        .rounded(Radius::XXLarge.px(&theme))
+                                                        .rounded(input::composer_radius(&theme))
                                                         .bg(theme.surface_secondary.opacity(0.92))
                                                         .border_1()
                                                         .border_color(theme.accent)
@@ -1081,6 +1124,11 @@ impl Render for OrbitApp {
                         None
                     } else {
                         self.new_task_backdrop(theme, self.backdrop_phase, empty)
+                    })
+                    .children(if feature_open || pane_full {
+                        None
+                    } else {
+                        self.chat_backdrop(theme, empty)
                     })
                     .child(main_top_bar)
                     // The top bar spans the whole main area; the docks and
@@ -1387,7 +1435,7 @@ impl OrbitApp {
                 .w_full()
                 .px(DynamicSpacing::Base12.px(&theme))
                 .py(DynamicSpacing::Base08.px(&theme))
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.code_bg)
@@ -1435,8 +1483,7 @@ impl OrbitApp {
             .child(div().flex_1())
             .child(self.model_chip(compact, cx))
             .children(self.thinking_chip(cx))
-            .children(self.steer_button(cx))
-            .child(self.send_button(cx))
+            .child(self.send_controls(cx))
     }
 
     /// The access-mode chip: a lock glyph, the active mode's label, and a
@@ -1566,7 +1613,9 @@ impl OrbitApp {
             list = list.child(
                 picker_entry(entry, &theme)
                     .cursor_pointer()
-                    .when(selected || highlighted, |row| row.bg(theme.selection))
+                    .when(selected || highlighted, |row| {
+                        row.bg(theme.surface_selected)
+                    })
                     .when(!selected && !highlighted, |row| {
                         row.hover(|style| style.bg(theme.surface_hover))
                     })
@@ -1766,7 +1815,9 @@ impl OrbitApp {
             list = list.child(
                 picker_entry(entry, &theme)
                     .cursor_pointer()
-                    .when(selected || highlighted, |row| row.bg(theme.selection))
+                    .when(selected || highlighted, |row| {
+                        row.bg(theme.surface_selected)
+                    })
                     .when(!selected && !highlighted, |row| {
                         row.hover(|style| style.bg(theme.surface_hover))
                     })
@@ -1933,50 +1984,6 @@ impl OrbitApp {
             )
     }
 
-    /// While a run is in flight and the composer holds something to send, a
-    /// quiet steer control sits beside Stop: it injects the text into the live
-    /// turn (`steer`) rather than queuing a follow-up. Hidden when idle or
-    /// empty, since there is nothing to redirect.
-    pub(super) fn steer_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let theme = *theme::get(cx);
-        if !self.is_running() {
-            return None;
-        }
-        let has_text =
-            !self.input.read(cx).text().trim().is_empty() || !self.attachments.is_empty();
-        if !has_text {
-            return None;
-        }
-        Some(
-            icon_button_frame(div().id("steer-btn"), &theme, ButtonSize::Medium)
-                .group(BUTTON_GROUP)
-                .rounded_full()
-                .raised(theme.overlay, &theme)
-                .hover(|s| s.raised(theme.overlay_strong, &theme))
-                .active(|s| s.opacity(PRESS_DIM))
-                .cursor_pointer()
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.steer_current(cx)),
-                )
-                .tooltip({
-                    let keys = format!(
-                        "{}, {}",
-                        SendMode::Steer.shortcut_label(theme.ui.composer_send_mode),
-                        platform::shortcuts::label(platform::shortcuts::STEER),
-                    );
-                    let label = tr!("composer.steer_tooltip", keys = keys);
-                    move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into()
-                })
-                .child(icon(
-                    "icons/arrow-up-right.svg",
-                    ButtonSize::Medium.icon_size().px(&theme),
-                    theme.accent_text,
-                ))
-                .into_any_element(),
-        )
-    }
-
     /// The composer's "+" button and its add menu (anchored above the
     /// button, same deferred pattern as the chip pickers). The menu carries
     /// the `AddMenu` key context, so ↑/↓/Enter/Escape drive it while open.
@@ -2024,7 +2031,7 @@ impl OrbitApp {
                     .h(picker::entry_height(&theme))
                     .flex_none()
                     .cursor_pointer()
-                    .when(highlighted, |row| row.bg(theme.selection))
+                    .when(highlighted, |row| row.bg(theme.surface_selected))
                     .hover(|style| style.bg(theme.surface_hover))
                     .on_hover(move |hovered, _, cx| {
                         if *hovered {
@@ -2267,7 +2274,8 @@ impl OrbitApp {
     /// state is only the `flex_1` slot above the composer: a backdrop scoped
     /// to it ended at the composer's top edge and left the bottom of the
     /// window on a flat slab, at every fade setting including "None". The
-    /// chat page deliberately has none.
+    /// active chat paints the quiet [`Self::chat_backdrop`] wash instead —
+    /// the living field is the new-task page's own.
     pub(super) fn new_task_backdrop(
         &mut self,
         theme: Theme,
@@ -2297,6 +2305,62 @@ impl OrbitApp {
                     layer.child(crate::backdrop::layer(theme, phase))
                 })
                 .children(backdrop)
+                .into_any_element(),
+        )
+    }
+
+    /// The active chat's backdrop: a static, ambient wash where
+    /// [`Self::new_task_backdrop`] leaves a flat slab — no field, no motion,
+    /// nothing behind the words the eye could track. A whisper of the accent
+    /// colour fades down from the top edge to lift the chrome; a barely
+    /// denser neutral band grounds the page under the composer. Both stay in
+    /// the low single digits of alpha — legible only as "not a flat slab",
+    /// never as texture — and neither animates, so reading the transcript is
+    /// exactly as quiet as before.
+    pub(super) fn chat_backdrop(&self, theme: Theme, empty: bool) -> Option<AnyElement> {
+        if empty {
+            // The new-task page shows its own living backdrop.
+            return None;
+        }
+        Some(
+            div()
+                .id("chat-backdrop")
+                .debug_selector(|| "chat-backdrop".to_string())
+                .absolute()
+                .top(px(TOP_BAR_H))
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .child(
+                    // Accent halo, strongest at the top edge and gone by the
+                    // middle of the column.
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(relative(0.45))
+                        .bg(linear_gradient(
+                            180.,
+                            linear_color_stop(theme.accent_text.opacity(0.05), 0.),
+                            linear_color_stop(theme.accent_text.opacity(0.), 1.),
+                        )),
+                )
+                .child(
+                    // Neutral lift under the composer, so the bottom of the
+                    // page reads grounded rather than ending on the slab.
+                    div()
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .h(relative(0.30))
+                        .bg(linear_gradient(
+                            180.,
+                            linear_color_stop(theme.text_primary.opacity(0.), 0.),
+                            linear_color_stop(theme.text_primary.opacity(0.02), 1.),
+                        )),
+                )
                 .into_any_element(),
         )
     }
@@ -2405,7 +2469,8 @@ impl OrbitApp {
 
         // The backdrop belongs to the caller (`new_task_backdrop`, painted by
         // the chat column in `render`): one layer spans this state, the
-        // floating composer, and the status bar. The chat page has none.
+        // floating composer, and the status bar. The active chat gets the
+        // quiet `chat_backdrop` wash instead.
         div()
             .flex_1()
             .min_h_0()
@@ -2507,7 +2572,7 @@ impl OrbitApp {
                                                     .pl(DynamicSpacing::Base08.px(&theme))
                                                     .pr(px(10.))
                                                     .py(px(7.))
-                                                    .rounded(Radius::Large.px(&theme))
+                                                    .rounded(input::RADIUS.px(&theme))
                                                     .border_1()
                                                     .border_color(if picker_open {
                                                         theme.accent.opacity(0.55)
@@ -2533,7 +2598,7 @@ impl OrbitApp {
                                                         div()
                                                             .size(px(28.))
                                                             .flex_none()
-                                                            .rounded(Radius::Large.px(&theme))
+                                                            .rounded(button::RADIUS.px(&theme))
                                                             .bg(theme.overlay)
                                                             .flex()
                                                             .items_center()
@@ -2851,7 +2916,7 @@ impl OrbitApp {
             // A panel that hugs its rows: the setup page centres its column, so
             // a shrinkable child here would be clipped instead of grown.
             .flex_none()
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.border)
             .overflow_hidden()
@@ -2910,7 +2975,7 @@ impl OrbitApp {
             .gap(DynamicSpacing::Base08.px(&theme))
             .px(px(14.))
             .py(DynamicSpacing::Base12.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .bg(theme.surface_elevated)
             .border_1()
             .border_color(theme.border)
@@ -2969,7 +3034,7 @@ impl OrbitApp {
             .w_full()
             .px(px(14.))
             .py(DynamicSpacing::Base12.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .bg(theme.surface_elevated)
             .border_1()
             .border_color(theme.border)
@@ -3295,7 +3360,7 @@ impl OrbitApp {
                     .id("history-back")
                     .block_mouse_except_scroll()
                     .size(px(HEADER_CTRL_H))
-                    .rounded(px(HEADER_CTRL_R))
+                    .rounded(header_ctrl_radius(&theme))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -3323,7 +3388,7 @@ impl OrbitApp {
                     .id("history-forward")
                     .block_mouse_except_scroll()
                     .size(px(HEADER_CTRL_H))
-                    .rounded(px(HEADER_CTRL_R))
+                    .rounded(header_ctrl_radius(&theme))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -3375,7 +3440,7 @@ impl OrbitApp {
                 } else {
                     px(0.)
                 })
-                .rounded(px(HEADER_CTRL_R))
+                .rounded(header_ctrl_radius(&theme))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -3695,9 +3760,11 @@ impl OrbitApp {
         div()
             .flex()
             .items_center()
-            .gap_1()
+            .gap(DynamicSpacing::Base06.px(&theme))
             .child(search)
             .child(usage)
+            // Separates "where you go" from "how it is configured".
+            .child(div().flex_none().w(px(1.)).h(px(12.)).bg(theme.border))
             .child(settings)
     }
 
@@ -3815,63 +3882,169 @@ impl OrbitApp {
             || self.settings_select.is_some()
     }
 
-    pub(super) fn send_button(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
+    /// The composer's send area: one primary control whose glyph, weight, and
+    /// tooltip state what ↵ will do right now, plus a quiet stop while a run is
+    /// in flight.
+    ///
+    /// Sending mid-run queues or steers per the configured send mode, so the
+    /// primary slot wears that mode's glyph instead of always showing a paper
+    /// plane. Stop is always the *secondary* slot: stopping is a normal action,
+    /// not a warning, so it rests neutral and only turns red under the pointer.
+    pub(super) fn send_controls(&self, cx: &Context<Self>) -> AnyElement {
         let theme = *theme::get(cx);
-        if self.busy {
-            icon_button_frame(div().id("stop-btn"), &theme, ButtonSize::Medium)
-                .rounded_full()
-                .raised(theme.error, &theme)
-                .hover(|s| s.raised(theme.error_hover, &theme))
-                .active(|s| s.raised(theme.error, &theme))
-                .cursor_pointer()
-                .text_color(theme.error_fg)
-                .on_mouse_up(MouseButton::Left, cx.listener(Self::on_abort_mouse))
-                .tooltip({
-                    let label = tr!(
-                        "composer.shortcut_hint",
-                        keys = platform::shortcuts::label(platform::shortcuts::STOP),
-                        action = tr!("shortcut.stop")
-                    );
-                    move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into()
-                })
-                .child(icon(
-                    "icons/stop.svg",
-                    ButtonSize::Medium.icon_size().px(&theme),
-                    theme.action_fg,
-                ))
-        } else {
-            // Nothing to send yet: the button stays clickable (submit
-            // no-ops on empty) but reads as quiet until there's a message
-            // or an attachment.
-            let empty = self.input.read(cx).text().trim().is_empty() && self.attachments.is_empty();
-            icon_button_frame(div().id("send-btn"), &theme, ButtonSize::Medium)
-                .rounded_full()
-                .when(empty, |btn| btn.bg(theme.overlay))
-                .when(!empty, |btn| {
-                    btn.raised(theme.action, &theme)
-                        .hover(|s| s.raised(theme.action_hover, &theme))
-                        .active(|s| s.raised(theme.action_pressed, &theme))
-                        .cursor_pointer()
-                })
-                .on_mouse_up(MouseButton::Left, cx.listener(Self::on_send_click))
-                .tooltip({
-                    let label = tr!(
-                        "composer.shortcut_hint",
-                        keys = platform::shortcuts::label(platform::shortcuts::SEND),
-                        action = tr!("composer.send")
-                    );
-                    move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into()
-                })
-                .child(icon(
-                    "icons/send.svg",
-                    ButtonSize::Medium.icon_size().px(&theme),
-                    if empty {
-                        theme.text_muted
-                    } else {
-                        theme.action_fg
-                    },
-                ))
+        let running = self.is_running();
+        // The same rule `submit_as` uses: text, images, or a collapsed paste
+        // all make a sendable message.
+        let has_payload = self.send_has_payload(cx);
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap(DynamicSpacing::Base04.px(&theme));
+        // Queued messages and the control that queued them agree at a glance.
+        if let Some(badge) = self.queue_badge(theme) {
+            row = row.child(badge);
         }
+        if !running {
+            return row
+                .child(self.send_button(has_payload, false, theme, cx))
+                .into_any_element();
+        }
+        // Mid-run with nothing typed, stop is the only action and takes the
+        // primary seat rather than sitting beside a dead send.
+        if has_payload {
+            row = row.child(self.send_button(true, true, theme, cx));
+        }
+        row.child(self.stop_button(theme, cx)).into_any_element()
+    }
+
+    /// Whether the composer holds anything a send would deliver: typed text,
+    /// an image, a file, or a collapsed paste. The one rule the control's
+    /// enabled state reads, so it can never disagree with `submit_as`.
+    pub(super) fn send_has_payload(&self, cx: &Context<Self>) -> bool {
+        !self.input.read(cx).text().trim().is_empty() || self.attachment_slots_used() > 0
+    }
+
+    /// How many messages are waiting behind the live turn — a quiet count of
+    /// small width beside the send control, so a queued follow-up is visible
+    /// without moving the eye up to the queue bar.
+    fn queue_badge(&self, theme: Theme) -> Option<AnyElement> {
+        let count = self.queue.len();
+        if count == 0 {
+            return None;
+        }
+        Some(
+            div()
+                .id("queue-badge")
+                .debug_selector(|| "queue-badge".to_string())
+                .flex_none()
+                .h(ButtonSize::Medium.height(&theme))
+                .px(DynamicSpacing::Base06.px(&theme))
+                .rounded_full()
+                .bg(theme.surface_elevated)
+                .flex()
+                .items_center()
+                .gap(DynamicSpacing::Base02.px(&theme))
+                .text_size(TextSize::XSmall.px(&theme))
+                .text_color(theme.text_muted)
+                .tip(tr!("view.queued_after_task", count = count))
+                .child(icon(
+                    "icons/clock.svg",
+                    IconSize::XSmall.px(&theme),
+                    theme.text_muted,
+                ))
+                .child(count.to_string())
+                .into_any_element(),
+        )
+    }
+
+    /// The primary send control. `running` selects the glyph that matches
+    /// what a send actually does (queue a follow-up / steer the live turn),
+    /// and `has_payload` drives the resting state: a disabled control when
+    /// there is nothing to send, so the button never accepts a click that
+    /// silently does nothing.
+    pub(super) fn send_button(
+        &self,
+        has_payload: bool,
+        running: bool,
+        theme: Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let mode = theme.ui.composer_send_mode;
+        let (icon_path, action) = if running {
+            match mode {
+                SendMode::FollowUp => ("icons/arrow-up.svg", tr!("composer.queue_follow_up")),
+                SendMode::Steer => ("icons/arrow-up-right.svg", tr!("composer.steer_task")),
+            }
+        } else {
+            ("icons/send.svg", tr!("composer.send"))
+        };
+        if !has_payload {
+            // Resting, unclickable: a darker well and a disabled glyph, with no
+            // pointer, hover, or click handler to invite a press that cannot
+            // land. The tooltip says why instead of naming a shortcut that
+            // would do nothing.
+            let tooltip = tr!("composer.nothing_to_send");
+            return icon_button_frame(div().id("send-btn"), &theme, ButtonSize::Medium)
+                .rounded_full()
+                .bg(theme.overlay)
+                .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
+                .child(icon(
+                    icon_path,
+                    ButtonSize::Medium.icon_size().px(&theme),
+                    theme.text_disabled,
+                ))
+                .into_any_element();
+        }
+        let shortcut = if running {
+            mode.shortcut_label(mode)
+        } else {
+            platform::shortcuts::label(platform::shortcuts::SEND)
+        };
+        let tooltip = tr!(
+            "composer.shortcut_hint",
+            keys = shortcut,
+            action = action.clone()
+        );
+        icon_button_frame(div().id("send-btn"), &theme, ButtonSize::Medium)
+            .rounded_full()
+            .raised(theme.action, &theme)
+            .hover(|s| s.raised(theme.action_hover, &theme))
+            .active(|s| s.raised(theme.action_pressed, &theme))
+            .cursor_pointer()
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_send_click))
+            .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
+            .child(icon(
+                icon_path,
+                ButtonSize::Medium.icon_size().px(&theme),
+                theme.action_fg,
+            ))
+            .into_any_element()
+    }
+
+    /// Stop the run. Neutral at rest — stopping is routine, not a failure — and
+    /// only takes the error color under the pointer, so it is unmissable when
+    /// actually aimed at and never the loudest thing on a streaming page.
+    fn stop_button(&self, theme: Theme, cx: &Context<Self>) -> AnyElement {
+        let tooltip = tr!(
+            "composer.shortcut_hint",
+            keys = platform::shortcuts::label(platform::shortcuts::STOP),
+            action = tr!("shortcut.stop")
+        );
+        icon_button_frame(div().id("stop-btn"), &theme, ButtonSize::Medium)
+            .group(BUTTON_GROUP)
+            .rounded_full()
+            .raised(theme.surface_elevated, &theme)
+            .hover(|s| s.raised(theme.error, &theme))
+            .active(|s| s.raised(theme.error_hover, &theme))
+            .cursor_pointer()
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_abort_mouse))
+            .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
+            .child(icon(
+                "icons/stop.svg",
+                ButtonSize::Medium.icon_size().px(&theme),
+                theme.text_primary,
+            ))
+            .into_any_element()
     }
 
     /// Persistent run-status strip above the composer: a calm, single-line
@@ -3892,7 +4065,7 @@ impl OrbitApp {
                     .mb(DynamicSpacing::Base08.px(&theme))
                     .px(px(10.))
                     .py(px(7.))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.surface_elevated)
@@ -3942,7 +4115,7 @@ impl OrbitApp {
                     .mb(DynamicSpacing::Base08.px(&theme))
                     .px(px(10.))
                     .py(px(7.))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.surface_elevated)
@@ -3993,7 +4166,7 @@ impl OrbitApp {
             .id("ask-panel")
             .w_full()
             .mb(DynamicSpacing::Base08.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.accent.opacity(0.3))
             .bg(theme.surface_elevated)
@@ -4152,7 +4325,7 @@ impl OrbitApp {
                 } else {
                     gpui::transparent_black()
                 })
-                .when(row_highlighted, |row| row.bg(theme.selection))
+                .when(row_highlighted, |row| row.bg(theme.surface_selected))
                 .when(!submitted, |row| row.cursor_pointer())
                 .flex()
                 .items_center()
@@ -4189,7 +4362,7 @@ impl OrbitApp {
                 } else {
                     gpui::transparent_black()
                 })
-                .when(row_highlighted, |row| row.bg(theme.selection))
+                .when(row_highlighted, |row| row.bg(theme.surface_selected))
                 .when(!submitted, |row| row.cursor_pointer())
                 .flex()
                 .items_center()
@@ -4236,7 +4409,7 @@ impl OrbitApp {
                         div()
                             .mx(DynamicSpacing::Base12.px(&theme))
                             .mb(px(10.))
-                            .rounded(Radius::Large.px(&theme))
+                            .rounded(panel::RADIUS.px(&theme))
                             .border_1()
                             .border_color(theme.border)
                             .bg(theme.background)
@@ -4453,7 +4626,7 @@ impl OrbitApp {
             .h(px(BAR_H))
             .mb(px(GAP))
             .px(DynamicSpacing::Base12.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.accent.opacity(0.3))
             .bg(theme.surface_elevated)
@@ -4471,7 +4644,7 @@ impl OrbitApp {
                 div()
                     .flex_none()
                     .size(px(28.))
-                    .rounded(Radius::Large.px(&theme))
+                    .rounded(button::RADIUS.px(&theme))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -4566,7 +4739,7 @@ impl OrbitApp {
                 .debug_selector(|| "queue-bar".to_string())
                 .w_full()
                 .mb(DynamicSpacing::Base08.px(&theme))
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -4641,7 +4814,7 @@ impl OrbitApp {
                 .bg(theme.error.opacity(0.1))
                 .border_1()
                 .border_color(theme.error.opacity(0.45))
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .px(DynamicSpacing::Base12.px(&theme))
                 .py(px(9.))
                 .flex()

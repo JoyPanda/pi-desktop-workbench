@@ -910,7 +910,7 @@ fn quota_popup_moves_hidden_providers_into_their_own_group(cx: &mut gpui::TestAp
 
 /// The usage popover carries a second pane for MCP server status. The tab
 /// switch must swap the body — never draw both — and an MCP-only setup (no
-/// provider quota reports) must still get the pill, so the popover and the
+/// provider quota reports) must still get the chip, so the popover and the
 /// pane stay reachable.
 #[gpui::test]
 fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
@@ -929,7 +929,7 @@ fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
     );
 
     // A throwaway MCP configuration with one server, and no quota reports:
-    // the quiet pill must still render so the popover is reachable.
+    // the quiet chip must still render so the popover is reachable.
     let root = std::env::temp_dir().join(format!(
         "orbit-quota-mcp-popup-{}-{}",
         std::process::id(),
@@ -951,8 +951,8 @@ fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             app.mcp = McpManager::load_in(&home, Some(&workspace));
-            // The exact user flow: click the top-bar pill. With no quota
-            // reports and MCP configured, the pill IS the MCP chip, so the
+            // The exact user flow: click the top-bar chip. With no quota
+            // reports and MCP configured, the chip IS the MCP chip, so the
             // popover must open on the MCP pane — otherwise the server
             // names are hidden behind an empty Providers tab.
             app.toggle_quota_popup(cx);
@@ -966,7 +966,7 @@ fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
 
     assert!(
         cx.debug_bounds("quota-popup").is_some(),
-        "the popover is missing (the MCP-only pill must still render it)"
+        "the popover is missing (the MCP-only chip must still render it)"
     );
     let mcp_body = cx
         .debug_bounds("quota-mcp-body")

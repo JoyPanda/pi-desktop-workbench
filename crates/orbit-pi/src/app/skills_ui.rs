@@ -9,7 +9,9 @@
 use super::helpers::*;
 use super::*;
 use crate::skills::{self, Skill, SkillScope};
-use crate::theme::tokens::{input, ButtonSize, DynamicSpacing, IconSize, Radius, TextSize};
+use crate::theme::tokens::{
+    input, list_item, ButtonSize, DynamicSpacing, IconSize, Radius, TextSize,
+};
 
 /// A Skills-page control, dispatched through one entry point.
 #[derive(Clone)]
@@ -74,7 +76,7 @@ impl OrbitApp {
             .mb(px(10.))
             .h(px(30.))
             .px(DynamicSpacing::Base08.px(&theme))
-            .rounded(Radius::Large.px(&theme))
+            .rounded(list_item::RADIUS.px(&theme))
             .bg(theme.surface_elevated)
             .border_1()
             .border_color(theme.border)
@@ -213,7 +215,7 @@ impl OrbitApp {
             .items_start()
             .gap_2p5()
             .cursor_pointer()
-            .when(selected, |row| row.bg(theme.selection))
+            .when(selected, |row| row.bg(theme.surface_selected))
             .when(!selected, |row| {
                 row.hover(|style| style.bg(theme.surface_hover))
             })

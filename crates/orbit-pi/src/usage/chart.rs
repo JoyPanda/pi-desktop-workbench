@@ -53,16 +53,6 @@ pub fn point_value(
     }
 }
 
-/// The formatted figure for a bucket, in the metric's own register — shared by
-/// the chart axis and the "View data" table so they always agree (§52).
-pub fn format_point(
-    metric: ChartMetric,
-    latency_metric: LatencyMetric,
-    point: &super::aggregate::SeriesPoint,
-) -> String {
-    axis_label(point_value(metric, latency_metric, point), metric)
-}
-
 /// Round a maximum up to a friendly axis top (1/2/2.5/5 × 10ⁿ).
 fn nice_max(max: f64) -> f64 {
     if !max.is_finite() || max <= 0.0 {

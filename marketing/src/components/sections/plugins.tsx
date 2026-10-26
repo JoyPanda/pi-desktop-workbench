@@ -1,23 +1,23 @@
 import { Shot } from "@/components/shot";
 import { Story } from "@/components/sections/story";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
-export function Plugins() {
+export async function Plugins({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.plugins");
+
   return (
     <Story
       id="plugins"
-      label="Plugins"
-      title="Extend pi with packages."
-      copy="Install pi packages from npm, git, or a local path — globally or for this project. Orbit shows what's configured and its version, updates it, and pi picks changes up at its next restart."
-      points={[
-        "npm, git, or local-path packages, global or project scope.",
-        "Install, update, and remove without leaving the window.",
-        "Loaded at startup — restart pi to apply changes.",
-      ]}
+      label={t("label")}
+      title={t("title")}
+      copy={t("copy")}
+      points={t.raw("points") as string[]}
       visual={
         <Shot
           src="/screens/plugins.png"
           srcLight="/screens/plugins-light.png"
-          alt="Orbit's Plugins page listing installed pi packages with an install field above and update and remove actions per package."
+          alt={t("shotAlt")}
           sizes="(max-width: 1024px) 100vw, 560px"
         />
       }

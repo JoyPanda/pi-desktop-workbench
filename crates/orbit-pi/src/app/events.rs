@@ -117,6 +117,10 @@ impl OrbitApp {
         }
         // Images pasted in the composer become message attachments.
         self.drain_pasted_images(cx);
+        // Long pastes become collapsible pills above the composer.
+        self.drain_pasted_texts(cx);
+        // The placeholder names what Enter will do right now.
+        self.sync_composer_placeholder(cx);
         // Refresh the in-transcript find hits when the query or messages moved.
         self.sync_transcript_search(cx);
         // A drag that left the window clears gpui's active drag without any
@@ -208,8 +212,13 @@ impl OrbitApp {
                 Event::AutoRetryEnd { value } => {
                     self.retrying = false;
                     self.retry_detail = None;
+                    let cancelled = std::mem::replace(&mut self.abort_requested, false);
                     let success = value.get("success").and_then(|v| v.as_bool());
-                    if success == Some(false) {
+                    // A retry the user stopped is a cancel, not a failed retry:
+                    // pi answers the abort with `success: false` and
+                    // `finalError: "Retry cancelled"`, and raising a banner for
+                    // it would report a failure the user asked for (issue #76).
+                    if success == Some(false) && !cancelled {
                         let error = value
                             .get("finalError")
                             .and_then(|v| v.as_str())
@@ -260,6 +269,7 @@ impl OrbitApp {
                     self.title_generating = false;
                 }
                 Event::AgentSettled => {
+                    self.abort_requested = false;
                     self.busy = false;
                     self.retrying = false;
                     self.retry_detail = None;
@@ -325,10 +335,23 @@ impl OrbitApp {
                     self.dialog_focus_pending = false;
                     self.approval = None;
                     self.approval_focus_pending = false;
+                    // Every custom surface belonged to that process too: the
+                    // promise behind it can no longer resolve, so a form left on
+                    // screen would swallow keystrokes forever. Compaction and the
+                    // title command also die with the process, and `is_compacting`
+                    // alone keeps `is_running()` true — the composer would stay on
+                    // Stop over a dead pi.
+                    self.custom_ui.clear();
+                    self.custom_ui_focus_pending = false;
+                    self.is_compacting = false;
+                    self.title_generating = false;
                     self.runtime.alive = false;
                     self.runtime.exited = true;
+                    self.abort_requested = false;
                     self.auth.on_disconnect();
-                    self.set_error(tr!("events.process_exited"));
+                    // An exit the app can recover from on its own is a restart,
+                    // not a failure to leave on screen — see `on_process_exited`.
+                    self.on_process_exited(cx);
                 }
                 Event::MessageEnd { value } => {
                     // A failed LLM call ends the assistant message with
@@ -336,13 +359,15 @@ impl OrbitApp {
                     // unsupported model). Surface it in the banner; the
                     // transcript renders the same text inline.
                     if let Some(error) = transcript::message_error(value) {
-                        self.set_error(tr!("events.agent_error", error = error));
-                    } else if self.error.as_deref().is_some_and(|error| {
-                        error.starts_with(tr!("events.agent_error_prefix").as_str())
-                    }) {
+                        self.set_error_from(
+                            AGENT_ERROR_SOURCE,
+                            tr!("events.agent_error", error = error),
+                        );
+                    } else {
                         // The next attempt produced a message — clear the
-                        // stale agent-error banner.
-                        self.error = None;
+                        // stale agent-error banner. Matched by source, so a
+                        // language change never strands it (issue #76).
+                        self.clear_error_from(AGENT_ERROR_SOURCE);
                     }
                     // Real edit stats from finalized tool calls.
                     let (a, r) = transcript::diff_from_message(value);
@@ -354,13 +379,14 @@ impl OrbitApp {
                     success,
                     data,
                     error,
-                    id: _,
+                    id,
                 } => {
                     self.on_response(
                         command,
                         *success,
                         data.as_ref(),
                         error.as_deref(),
+                        id,
                         &mut refresh_sessions,
                         cx,
                     );
@@ -655,12 +681,16 @@ impl OrbitApp {
         }
     }
 
+    /// Apply a command response to the app. The arguments are the response's
+    /// own fields; `id` is what tells one `prompt` from another.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn on_response(
         &mut self,
         command: &str,
         success: bool,
         data: Option<&serde_json::Value>,
         error: Option<&str>,
+        id: &str,
         refresh_sessions: &mut bool,
         cx: &mut Context<Self>,
     ) {
@@ -717,7 +747,7 @@ impl OrbitApp {
             return;
         }
         // A successful retry clears the banner it raised earlier.
-        self.clear_error_for(command);
+        self.clear_error_from(command);
         // Commands whose replies carry no payload (e.g. `set_thinking_level`
         // answers `{"success":true}` with no `data`). They still need their
         // follow-up state refresh, so they are matched BEFORE the
@@ -744,6 +774,39 @@ impl OrbitApp {
             | "set_session_name"
             | "steer"
             | "follow_up" => {
+                return;
+            }
+            // A prompt pi hands to an *extension command* never starts a run:
+            // the answer is `{disposition: "handled"}` and no `agent_start` or
+            // `agent_settled` follows. The composer arms the live "Working
+            // for…" row optimistically at the send, so without this the row and
+            // the Stop button stay up for a turn that does not exist — the
+            // `/review` custom UI case in issue #76, where cancelling the
+            // surface could not help because there was nothing to settle.
+            // `started` and `queued` both mean a run is coming or continuing.
+            "prompt" => {
+                let handled = data
+                    .as_ref()
+                    .and_then(|data| data.get("disposition"))
+                    .and_then(Value::as_str)
+                    == Some("handled");
+                // `prompt` is also how Orbit sends extension commands (the
+                // title regenerator), and pi answers those `handled` too. Only
+                // the composer's own prompt was armed for a run, so only its
+                // reply may unwind one — otherwise regenerating a title mid-run
+                // would abandon the live row of a run still streaming.
+                if self.prompt_in_flight.as_deref() != Some(id) {
+                    return;
+                }
+                self.prompt_in_flight = None;
+                if handled {
+                    self.busy = false;
+                    self.transcript.abandon_reply();
+                    // The checkpoint turn opened at the send never ran: close its
+                    // range now so the next prompt starts a fresh one instead of
+                    // inheriting this start in Review's **Last Turn**.
+                    self.finish_turn(cx);
+                }
                 return;
             }
             // `compact` also has a result payload on success; clearing the
@@ -897,6 +960,9 @@ impl OrbitApp {
                 // The model catalog arrived after the session: retry a default
                 // that could not be resolved yet.
                 self.apply_default_model(cx);
+                // The Git page sizes its commit-message prompt from the model's
+                // context window, which only the catalog knows.
+                self.sync_review_context(cx);
             }
             "get_available_thinking_levels" => {
                 self.available_thinking_levels = data
@@ -1113,8 +1179,8 @@ impl OrbitApp {
             .input
             .update(cx, |input, _| std::mem::take(&mut input.pasted_images));
         for image in &pasted {
-            if self.attachments.len() >= MAX_ATTACHMENTS {
-                self.set_status(tr!("composer_ops.max_attachments", count = MAX_ATTACHMENTS));
+            if self.attachment_budget_exhausted() {
+                self.report_attachment_limit();
                 break;
             }
             let index = self.attachments.len();
@@ -1123,6 +1189,42 @@ impl OrbitApp {
         if !pasted.is_empty() {
             cx.notify();
         }
+    }
+
+    /// Move long pastes the composer set aside into pill attachments. Called
+    /// on tick and again at submit, so paste-then-Enter never loses the text.
+    pub(super) fn drain_pasted_texts(&mut self, cx: &mut Context<Self>) {
+        if !self.input.read(cx).has_pasted_texts() {
+            return;
+        }
+        let pasted = self
+            .input
+            .update(cx, |input, _| std::mem::take(&mut input.pasted_texts));
+        for text in pasted {
+            if self.attachment_budget_exhausted() {
+                self.report_attachment_limit();
+                break;
+            }
+            self.pasted_texts.push(PastedText::new(text));
+        }
+        cx.notify();
+    }
+
+    /// Keep the chat composer's placeholder honest about what Enter does: an
+    /// idle send starts a prompt, a send mid-run queues a follow-up or steers
+    /// the live turn, depending on the configured send mode. The key changes
+    /// only when that answer changes, so the heartbeat stays quiet.
+    pub(super) fn sync_composer_placeholder(&mut self, cx: &mut Context<Self>) {
+        let key = if self.is_running() {
+            match theme::get(cx).ui.composer_send_mode {
+                SendMode::FollowUp => Some("composer.placeholder_follow_up"),
+                SendMode::Steer => Some("composer.placeholder_steer"),
+            }
+        } else {
+            None
+        };
+        self.input
+            .update(cx, |input, cx| input.set_placeholder_key(key, cx));
     }
 
     /// Post the "turn finished" notification for a settle. Nothing is posted

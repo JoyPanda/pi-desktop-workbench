@@ -1,24 +1,24 @@
 import { Shot } from "@/components/shot";
 import { Story } from "@/components/sections/story";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
-export function Mcp() {
+export async function Mcp({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.mcp");
+
   return (
     <Story
       id="mcp"
-      label="MCP"
-      title="Wire in your tools over MCP."
-      copy="Orbit manages Model Context Protocol servers for the agent — global or scoped to a project. Add a server, see its tool count and connection status, and flip a switch to enable or disable it."
-      points={[
-        "Global and project-scoped servers, side by side.",
-        "Connection status and tool counts at a glance.",
-        "Enable, edit, or remove a server without editing JSON.",
-      ]}
+      label={t("label")}
+      title={t("title")}
+      copy={t("copy")}
+      points={t.raw("points") as string[]}
       flip
       visual={
         <Shot
           src="/screens/mcp.png"
           srcLight="/screens/mcp-light.png"
-          alt="Orbit's MCP page listing global and project MCP servers with connection status and enable toggles."
+          alt={t("shotAlt")}
           sizes="(max-width: 1024px) 100vw, 560px"
         />
       }

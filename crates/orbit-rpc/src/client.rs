@@ -20,6 +20,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Stdio},
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
         Arc, Mutex,
     },
@@ -94,6 +95,11 @@ pub struct PiClient {
     pending: Arc<Mutex<HashMap<String, Sender<Event>>>>,
     stderr_ring: Arc<Mutex<VecDeque<String>>>,
     next_id: std::sync::atomic::AtomicU64,
+    /// False once the writer thread has given up on stdin. The child can still
+    /// be running, so `try_wait` alone reads as alive forever: commands queue
+    /// onto a stdin nobody will ever drain, and the app looks live but deaf
+    /// (issue #76).
+    writer_alive: Arc<AtomicBool>,
 }
 
 struct Outgoing {
@@ -300,8 +306,9 @@ impl PiClient {
         let (events_tx, events_rx) = mpsc::channel::<Event>();
         let pending = Arc::new(Mutex::new(HashMap::<String, Sender<Event>>::new()));
         let stderr_ring: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let writer_alive = Arc::new(AtomicBool::new(true));
 
-        Self::spawn_writer(stdin, commands_rx);
+        Self::spawn_writer(stdin, commands_rx, &writer_alive, &events_tx);
         Self::spawn_reader(stdout, &events_tx, &pending);
         Self::spawn_stderr_drain(stderr, &stderr_ring);
 
@@ -312,11 +319,17 @@ impl PiClient {
             pending,
             stderr_ring,
             next_id: std::sync::atomic::AtomicU64::new(1),
+            writer_alive,
         })
     }
 
-    /// Send a command and get the receiver for its matched `response` event.
-    pub fn send(&self, body: CommandBody) -> Result<Receiver<Event>> {
+    /// Send a command and get the id pi will answer it under, plus the
+    /// receiver for that matched `response` event. Callers that must match a
+    /// reply to the exact command they sent keep the id.
+    pub fn send(&self, body: CommandBody) -> Result<(String, Receiver<Event>)> {
+        if !self.writer_alive.load(Ordering::Relaxed) {
+            return Err(anyhow!("pi is not reading its stdin"));
+        }
         let id = self.next_id_fetch();
         let command = crate::types::Command::new(id.clone(), body);
         let wire = command.to_wire()?;
@@ -324,16 +337,28 @@ impl PiClient {
         self.pending
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(id, tx);
-        self.commands_tx
-            .send(Outgoing { wire })
-            .map_err(|_| anyhow!("pi process is not running"))?;
-        Ok(rx)
+            .insert(id.clone(), tx);
+        if let Err(err) = self.commands_tx.send(Outgoing { wire }) {
+            // The writer thread is gone; a waiter nobody will ever resolve is a
+            // leak, and the child may still look alive for the rest of the run.
+            self.forget_pending(&id);
+            self.writer_alive.store(false, Ordering::Relaxed);
+            return Err(anyhow!("pi process is not running: {err}"));
+        }
+        Ok((id, rx))
+    }
+
+    /// Drop a command's response waiter, e.g. after its write never landed.
+    fn forget_pending(&self, id: &str) {
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(id);
     }
 
     /// Convenience for commands whose response we inspect immediately.
     pub fn send_blocking(&self, body: CommandBody, timeout: std::time::Duration) -> Result<Event> {
-        let rx = self.send(body)?;
+        let (_, rx) = self.send(body)?;
         rx.recv_timeout(timeout)
             .map_err(|e| anyhow!("no response within {timeout:?}: {e}"))
     }
@@ -374,9 +399,33 @@ impl PiClient {
         self.child.id()
     }
 
-    /// True while the pi process is still running.
+    /// True while commands sent here can still reach pi: the process is running
+    /// **and** the writer thread has not given up on its stdin. Checking only
+    /// `try_wait` kept a broken-pipe child reporting alive, so every later
+    /// command was written into a stdin nobody read (issue #76).
     pub fn is_alive(&mut self) -> bool {
-        self.child.try_wait().map(|s| s.is_none()).unwrap_or(false)
+        self.writer_alive.load(Ordering::Relaxed)
+            && self.child.try_wait().map(|s| s.is_none()).unwrap_or(false)
+    }
+
+    /// Whether the writer thread can still put bytes on stdin, without
+    /// reaping the child. Inspection hook for the dead-stdin tests — it says
+    /// nothing about the child itself, so it is not a liveness check; use
+    /// [`Self::is_alive`] for that.
+    #[doc(hidden)]
+    pub fn writer_alive(&self) -> bool {
+        self.writer_alive.load(Ordering::Relaxed)
+    }
+
+    /// How many sent commands are still waiting for their `response`. A write
+    /// that never landed must not leave a waiter behind, so the dead-stdin
+    /// test checks this to catch that leak.
+    #[doc(hidden)]
+    pub fn pending_responses(&self) -> usize {
+        self.pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 
     fn next_id_fetch(&self) -> String {
@@ -390,12 +439,29 @@ impl PiClient {
         format!("orbit-{n}-{nanos:x}")
     }
 
-    fn spawn_writer(mut stdin: ChildStdin, commands_rx: Receiver<Outgoing>) {
+    fn spawn_writer(
+        mut stdin: ChildStdin,
+        commands_rx: Receiver<Outgoing>,
+        writer_alive: &Arc<AtomicBool>,
+        events_tx: &Sender<Event>,
+    ) {
+        let writer_alive = Arc::clone(writer_alive);
+        // A stdin nobody will drain again means the session is unreachable even
+        // while the child keeps running. Report it as an exit: the reader is
+        // blocked in `read_until` on a live process and would never notice, so
+        // without this the app holds a zombie it cannot command and offers no
+        // way back (issue #76).
+        let exit_tx = events_tx.clone();
         thread::Builder::new()
             .name("orbit-pi-writer".into())
             .spawn(move || {
                 while let Ok(outgoing) = commands_rx.recv() {
-                    if write_json_line(&mut stdin, &outgoing.wire).is_err() {
+                    if let Err(_err) = write_json_line(&mut stdin, &outgoing.wire) {
+                        // Terminal: stdin cannot be written again. Publish that
+                        // before exiting, so the app stops offering commands to
+                        // a process it can no longer reach.
+                        writer_alive.store(false, Ordering::Relaxed);
+                        let _ = exit_tx.send(Event::ProcessExited);
                         break;
                     }
                 }
@@ -815,10 +881,122 @@ pub fn augmented_path(bin_dir: Option<&Path>) -> OsString {
         }
     }
     dirs.extend(PATH_EXTRA_DIRS.iter().map(PathBuf::from));
+    if let Some(home) = home_dir() {
+        dirs.extend(home_bin_dirs(&home));
+    }
+    #[cfg(windows)]
+    dirs.extend(windows_search_dirs());
     if let Some(path) = std::env::var_os("PATH") {
         dirs.extend(std::env::split_paths(&path));
     }
     std::env::join_paths(dirs).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
+/// The home-relative dirs a GUI launch cannot see: the same install dirs
+/// [`pi_bin_candidates`] probes, plus the `node` a version manager keeps
+/// outside `PATH`. pi's launcher ends in `#!/usr/bin/env node`, so a child
+/// PATH without one of these dies with `env: node: No such file or
+/// directory` — instantly, and with nothing on stdout (issue #81).
+fn home_bin_dirs(home: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = HOME_SEARCH_DIRS.iter().map(|sub| home.join(sub)).collect();
+    // pi's managed installer ships its own node. Its launcher prepends that
+    // dir itself, but every other pi invocation (update, mcp probe, patches)
+    // needs it on PATH too.
+    dirs.push(home.join(".local/share/pi-node/current/bin"));
+    // nvm and fnm keep node under a version directory, not a stable path.
+    // Newest first: an old node cannot run a current pi.
+    dirs.extend(newest_version_bin(
+        &home.join(".nvm/versions/node"),
+        Path::new("bin"),
+    ));
+    for root in [
+        home.join("Library/Application Support/fnm/node-versions"),
+        home.join(".local/share/fnm/node-versions"),
+    ] {
+        dirs.extend(newest_version_bin(&root, Path::new("installation/bin")));
+    }
+    dirs.retain(|dir| dir.is_dir());
+    dirs
+}
+
+/// The `bin` dir of the newest version under a version-manager root, when the
+/// root exists. Versions are compared numerically: lexically `v9` sorts above
+/// `v24`.
+fn newest_version_bin(root: &Path, suffix: &Path) -> Option<PathBuf> {
+    let mut newest: Option<(Vec<u64>, PathBuf)> = None;
+    for entry in fs::read_dir(root).ok()?.flatten() {
+        let version = version_key(&entry.file_name().to_string_lossy());
+        if version.is_empty() {
+            continue;
+        }
+        let dir = entry.path().join(suffix);
+        if !dir.is_dir() {
+            continue;
+        }
+        if newest.as_ref().is_none_or(|(best, _)| version > *best) {
+            newest = Some((version, dir));
+        }
+    }
+    newest.map(|(_, dir)| dir)
+}
+
+#[cfg(test)]
+mod augmented_path_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn scratch_home() -> PathBuf {
+        let unique = format!(
+            "orbit-rpc-home-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let home = std::env::temp_dir().join(unique);
+        fs::create_dir_all(&home).unwrap();
+        home
+    }
+
+    /// A bundled `.app` cannot see nvm/fnm: their node lives under a version
+    /// dir no `PATH` entry points at. pi's launcher is `#!/usr/bin/env node`,
+    /// so the child PATH has to carry the newest one or pi dies before it can
+    /// say why (issue #81).
+    #[test]
+    fn the_node_a_version_manager_hides_is_on_the_path() {
+        let home = scratch_home();
+        for version in ["v9.11.2", "v24.1.0"] {
+            fs::create_dir_all(home.join(".nvm/versions/node").join(version).join("bin")).unwrap();
+        }
+        fs::create_dir_all(
+            home.join("Library/Application Support/fnm/node-versions/v22.4.1/installation/bin"),
+        )
+        .unwrap();
+
+        let dirs = home_bin_dirs(&home);
+        assert!(
+            dirs.contains(&home.join(".nvm/versions/node/v24.1.0/bin")),
+            "the newest nvm node is offered: {dirs:?}"
+        );
+        assert!(
+            !dirs.contains(&home.join(".nvm/versions/node/v9.11.2/bin")),
+            "v9 sorts above v24 lexically but must not win: {dirs:?}"
+        );
+        assert!(dirs.contains(
+            &home.join("Library/Application Support/fnm/node-versions/v22.4.1/installation/bin")
+        ));
+        let _ = fs::remove_dir_all(&home);
+    }
+
+    /// Only real dirs go on a child's PATH, and a home with no version
+    /// manager is not an error.
+    #[test]
+    fn absent_install_dirs_are_skipped() {
+        let home = scratch_home();
+        assert!(home_bin_dirs(&home).is_empty());
+        let _ = fs::remove_dir_all(&home);
+    }
 }
 
 #[cfg(test)]

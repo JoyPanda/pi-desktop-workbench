@@ -7,26 +7,30 @@ import { OsDownloadButton } from "@/components/download-button";
 import { Shot } from "@/components/shot";
 import { Band, ButtonLink, Shell } from "@/components/ui";
 import { getLatestRelease, LATEST_RELEASE_URL } from "@/lib/releases";
+import { downloadLabels } from "@/i18n/labels";
 import { NO_DOWNLOADS, preferredDownload } from "@/lib/downloads";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
-export async function Hero() {
+export async function Hero({ locale }: { locale: Locale }) {
+  const t = getT(locale, "hero");
   const release = await getLatestRelease();
   const downloads = release?.downloads ?? NO_DOWNLOADS;
 
   const platforms = [
     {
       icon: <MacosIcon className="size-3.5" />,
-      label: "macOS 13+",
+      label: t("platforms.macos"),
       href: preferredDownload(downloads, "macos")?.url,
     },
     {
       icon: <WindowsIcon className="size-3.5" />,
-      label: "Windows",
+      label: t("platforms.windows"),
       href: preferredDownload(downloads, "windows")?.url,
     },
     {
       icon: <LinuxIcon className="size-3.5" />,
-      label: "Linux",
+      label: t("platforms.linux"),
       href: preferredDownload(downloads, "linux")?.url,
     },
   ];
@@ -46,7 +50,7 @@ export async function Hero() {
                 {release.tag}
               </span>
               <span className="text-ink-2 transition-colors group-hover:text-ink">
-                Release notes
+                {t("releaseNotes")}
               </span>
               <HugeiconsIcon
                 icon={ArrowRight01Icon}
@@ -59,15 +63,14 @@ export async function Hero() {
             className="rise mt-8 text-balance text-[clamp(36px,5vw,56px)] font-semibold leading-[1.08] tracking-[-0.032em] text-ink"
             style={{ animationDelay: "80ms" }}
           >
-            A native workbench for the pi coding agent.
+            {t("heading")}
           </h1>
 
           <p
             className="rise mt-6 max-w-[52ch] text-[15px] leading-[1.75] text-ink-2"
             style={{ animationDelay: "140ms" }}
           >
-            Your sessions, your models, your machine. Chat, review, and commit
-            in one window — the same sessions as the terminal, drawn natively.
+            {t("body")}
           </p>
 
           <div
@@ -78,6 +81,7 @@ export async function Hero() {
               downloads={downloads}
               fallback={LATEST_RELEASE_URL}
               className="min-h-12 px-6 text-sm sm:min-w-[208px]"
+              labels={downloadLabels(locale)}
             />
             <ButtonLink
               href="https://github.com/imrj05/orbit"
@@ -86,7 +90,7 @@ export async function Hero() {
               external
             >
               <HugeiconsIcon icon={GithubIcon} data-icon="inline-start" />
-              View on GitHub
+              {t("github")}
             </ButtonLink>
           </div>
 
@@ -138,7 +142,7 @@ export async function Hero() {
               src="/screens/session.png"
               srcLight="/screens/session-light.png"
               priority
-              alt="A completed Orbit session: the agent's notes on the Windows IME composer fix and a Changed 4 files card with per-file line counts, above the composer."
+              alt={t("shotAlt")}
             />
           </div>
         </div>

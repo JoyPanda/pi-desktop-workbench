@@ -105,15 +105,36 @@ const CONTENT_MAX_W: f32 = 960.;
 
 /// Rows shown in the `/`-command and `@`-file autocomplete menu.
 const AUTOCOMPLETE_LIMIT: usize = 8;
-/// Images that may ride along with one prompt.
+/// Attachments — images, pasted-text pills, and files, together — that may
+/// ride along with one prompt.
 const MAX_ATTACHMENTS: usize = 8;
 
 /// How long a status message stays visible in the status bar.
 const STATUS_MESSAGE_TTL: Duration = Duration::from_secs(6);
 
+/// Banner source tag for an error carried by an assistant message. Not a wire
+/// command, so it needs its own identity: the next clean `message_end` clears
+/// the banner by comparing this tag rather than the banner's translated text.
+const AGENT_ERROR_SOURCE: &str = "agent_error";
+
 /// How often the app polls pi for new quota-bridge session entries. The
 /// bridge appends only on change, so this is a cheap idempotent read.
 const QUOTA_ENTRY_POLL_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How long pi must have stayed up when it exits for that exit to count as a
+/// fresh failure rather than another lap of a crash loop. An automatic respawn
+/// resets its retry budget only against this: a process that answered commands
+/// for this long was healthy and simply died, while one that dies sooner never
+/// got going.
+const AUTO_RESTART_HEALTHY_UPTIME: Duration = Duration::from_secs(10);
+
+/// Consecutive automatic respawns before the app stops trying and hands
+/// recovery back to the Reconnect button (issue #76).
+const AUTO_RESTART_LIMIT: u8 = 3;
+
+/// Pause before an automatic respawn, so a crash loop backs off instead of
+/// spinning the CPU and the log.
+const AUTO_RESTART_DELAY: Duration = Duration::from_millis(400);
 
 /// Session start races the bridge's first fetch (it runs on `session_start`
 /// too), so the first few polls use a short interval until a snapshot lands
@@ -191,6 +212,25 @@ pub struct OrbitApp {
     client: Option<PiClient>,
     /// Live state of the active pi process, surfaced in Settings → Runtime.
     runtime: RuntimeStatus,
+    /// Automatic respawns since the last run that stayed up for
+    /// [`AUTO_RESTART_HEALTHY_UPTIME`]. Counts a crash loop so a pi that dies
+    /// on every start cannot be restarted forever.
+    auto_restarts: u8,
+    /// True while a delayed respawn is queued, so a second exit event cannot
+    /// queue another one behind it.
+    auto_restart_scheduled: bool,
+    /// True once the user has asked to stop the current run. pi reports a
+    /// cancelled automatic retry as `auto_retry_end { success: false }` — the
+    /// same shape an exhausted retry uses — so the request itself, not the
+    /// wording, decides whether that is a failure (issue #76).
+    abort_requested: bool,
+    /// pi's id for the composer's own `prompt`, while its answer is still
+    /// outstanding. pi answers a prompt two ways: it starts a run, or an
+    /// extension command takes it (`disposition: "handled"`) and nothing runs.
+    /// Only this prompt may be unwound on `handled` — the title regenerator
+    /// sends a `prompt` too, and tearing the live run down over its reply would
+    /// stop showing a run that is still streaming.
+    prompt_in_flight: Option<String>,
     /// Result of auto-applying pi's RPC patches before this launch, surfaced
     /// in Settings → Runtime. See [`crate::rpc_patches`].
     rpc_patches: crate::rpc_patches::PatchReport,
@@ -276,6 +316,9 @@ pub struct OrbitApp {
     /// Settings → Agent: auto session titles. Persisted to
     /// `~/.orbit-pi/auto-title.json`, which the bundled title extension reads.
     auto_title: crate::auto_title::AutoTitleConfig,
+    /// Settings → Agent: whether an agent call the reader has not toggled
+    /// opens. Persisted to `~/.orbit-pi/agent-calls.json` (issue #80).
+    agent_calls: crate::agent_call_display::AgentCallDisplay,
     /// Settings → Privacy: the session-retention policy. Persisted to
     /// `~/.orbit-pi/session-retention.json`; applied once per launch.
     retention: crate::session_retention::RetentionConfig,
@@ -300,6 +343,12 @@ pub struct OrbitApp {
     /// dismissible red banner until cleared — a failure is never dropped
     /// (docs: #error-handling).
     error: Option<String>,
+    /// The wire command that raised [`error`](Self::error), when a command did.
+    /// A later success on the same command clears the banner by comparing this,
+    /// never by matching a translated prefix — so the clear still works after a
+    /// language change, and still works for failures whose text is not shaped
+    /// like a command label (issue #76).
+    error_source: Option<String>,
     /// The in-app toast stack: action confirmations and notifications that
     /// land while the window is frontmost. Rendered bottom-right over every
     /// surface (see [`toast_ui`]).
@@ -592,6 +641,8 @@ pub struct OrbitApp {
     /// Shared `/`-command and `@`-file menu state between the composer
     /// (which owns ↑/↓) and this app (which owns Enter/Escape + rendering).
     autocomplete: SharedAutocomplete,
+    /// Sent-prompt log the chat composer's ↑/↓ recall pages through.
+    prompt_history: crate::composer::SharedPromptHistory,
     /// Dismissed via outside mouse-down; cleared when the trigger changes.
     autocomplete_dismissed: bool,
     /// Trigger (kind + query) the autocomplete highlight was synced against.
@@ -603,6 +654,18 @@ pub struct OrbitApp {
     mention_files_workspace: Option<PathBuf>,
     /// Images queued to ride along with the next prompt (pasted or picked).
     attachments: Vec<Attachment>,
+    /// Non-image files queued for the next prompt. They travel to pi as
+    /// `@path` mentions in the prompt text; the chip is how the composer
+    /// holds them.
+    files: Vec<AttachedFile>,
+    /// Long pasted text collapsed into pills (sent as prompt text).
+    pasted_texts: Vec<PastedText>,
+    /// Unsent composer drafts, keyed by session file. Saved when a session is
+    /// parked, restored when it is re-opened — switching sessions never
+    /// carries one task's half-written prompt into another.
+    drafts: HashMap<PathBuf, ComposerDraft>,
+    /// The draft for the New Task page, which has no session file yet.
+    new_task_draft: Option<ComposerDraft>,
     /// Files are being dragged over the composer (external OS drag).
     file_drag_hovered: bool,
     /// Installed folder-capable apps for the header's "open in" control.
@@ -956,7 +1019,94 @@ pub struct OrbitApp {
     mcp_external_check_at: Option<Instant>,
 }
 
+/// Long text pasted into the composer, collapsed into a pill instead of
+/// flooding the box (see `composer.rs`'s paste gate).
+#[derive(Clone)]
+struct PastedText {
+    /// First non-empty line, for the chip label.
+    title: String,
+    /// Total line count, for the chip label.
+    lines: usize,
+    /// The full pasted text, folded back into the prompt on submit.
+    content: String,
+}
+
+impl PastedText {
+    fn new(content: String) -> Self {
+        let title = content
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(80)
+            .collect::<String>();
+        Self {
+            title,
+            lines: content.lines().count(),
+            content,
+        }
+    }
+}
+
+/// A non-image file queued to ride along with the next prompt.
+///
+/// pi's `prompt` payload carries text and images only, so a file cannot ride
+/// the wire as bytes. It travels as an `@path` mention in the prompt text —
+/// the agent opens it with its own read tools — and the composer holds it as
+/// a chip so attaching a file reads like attaching a screenshot instead of
+/// splicing a path into the middle of the sentence being typed.
+#[derive(Clone)]
+struct AttachedFile {
+    /// Absolute path on disk (what the agent resolves).
+    path: PathBuf,
+    /// File name, for the chip label.
+    name: String,
+    /// Byte size, for the chip's secondary label.
+    size: u64,
+}
+
+impl AttachedFile {
+    /// Queue `path` when it names a regular file. `None` for directories and
+    /// unreadable paths, which fall back to a plain path reference at the
+    /// caret (an agent can still list a folder, but it is not an attachment).
+    fn from_path(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        if !meta.is_file() {
+            return None;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        Some(Self {
+            path: path.to_path_buf(),
+            name,
+            size: meta.len(),
+        })
+    }
+}
+
+/// The composer's unsent state, parked with its session.
+#[derive(Clone, Default)]
+struct ComposerDraft {
+    text: String,
+    attachments: Vec<Attachment>,
+    files: Vec<AttachedFile>,
+    pasted_texts: Vec<PastedText>,
+}
+
+impl ComposerDraft {
+    fn is_empty(&self) -> bool {
+        self.text.trim().is_empty()
+            && self.attachments.is_empty()
+            && self.files.is_empty()
+            && self.pasted_texts.is_empty()
+    }
+}
+
 /// An image queued to ride along with the next prompt.
+#[derive(Clone)]
 struct Attachment {
     name: String,
     mime: String,
@@ -1049,11 +1199,30 @@ impl Attachment {
 }
 
 impl OrbitApp {
+    /// Every queued attachment — images, files, and pasted-text pills — counts
+    /// against one budget, so a message can never grow a tray no one budgeted
+    /// for by mixing kinds.
+    fn attachment_slots_used(&self) -> usize {
+        self.attachments.len() + self.files.len() + self.pasted_texts.len()
+    }
+
+    /// Whether the tray is full and one more attachment of any kind must be
+    /// turned away.
+    fn attachment_budget_exhausted(&self) -> bool {
+        self.attachment_slots_used() >= MAX_ATTACHMENTS
+    }
+
+    /// Report a full tray. One wording for every attachment kind, so the cap
+    /// reads as a rule about the composer rather than about images alone.
+    fn report_attachment_limit(&mut self) {
+        self.set_status(tr!("composer_ops.max_attachments", count = MAX_ATTACHMENTS));
+    }
+
     /// Queue one prepared attachment, honoring the cap and reporting
     /// compression so a large screenshot visibly shrinks before it ships.
     fn push_attachment(&mut self, attachment: Attachment, cx: &mut Context<Self>) {
-        if self.attachments.len() >= MAX_ATTACHMENTS {
-            self.set_status(tr!("composer_ops.max_attachments", count = MAX_ATTACHMENTS));
+        if self.attachment_budget_exhausted() {
+            self.report_attachment_limit();
             return;
         }
         if attachment.compressed {
@@ -1064,6 +1233,31 @@ impl OrbitApp {
             ));
         }
         self.attachments.push(attachment);
+        cx.notify();
+    }
+
+    /// Queue one non-image file. Re-attaching the same path is a no-op: the
+    /// prompt needs the mention once, and a duplicate chip would only look
+    /// like a mistake to remove.
+    fn push_file(&mut self, file: AttachedFile, cx: &mut Context<Self>) {
+        if self.files.iter().any(|queued| queued.path == file.path) {
+            cx.notify();
+            return;
+        }
+        if self.attachment_budget_exhausted() {
+            self.report_attachment_limit();
+            cx.notify();
+            return;
+        }
+        self.files.push(file);
+        cx.notify();
+    }
+
+    /// Drop every queued attachment and leave the typed text alone.
+    fn clear_attachments(&mut self, cx: &mut Context<Self>) {
+        self.attachments.clear();
+        self.files.clear();
+        self.pasted_texts.clear();
         cx.notify();
     }
 }
@@ -1117,10 +1311,12 @@ impl OrbitApp {
         let autocomplete: SharedAutocomplete = Rc::new(std::cell::RefCell::new(
             mentions::AutocompleteState::default(),
         ));
+        let prompt_history = crate::composer::PromptHistory::shared();
         let input = cx.new(|cx| {
             ComposerInput::new(cx)
                 .with_key_context("Composer ChatComposer")
                 .with_autocomplete(autocomplete.clone())
+                .with_prompt_history(prompt_history.clone())
         });
         // The chat input is the workbench's home tab stop; every other
         // ComposerInput (filters, rename fields, pickers) stays out of the
@@ -1569,6 +1765,7 @@ impl OrbitApp {
             auto_compaction: true,
             auto_retry: true,
             auto_title: crate::auto_title::AutoTitleConfig::load(),
+            agent_calls: crate::agent_call_display::AgentCallDisplay::load(),
             retention: crate::session_retention::RetentionConfig::load(),
             retention_ran: false,
             temp_files: crate::temp_files::TempFiles::default(),
@@ -1577,6 +1774,11 @@ impl OrbitApp {
             retrying: false,
             retry_detail: None,
             error: None,
+            error_source: None,
+            auto_restarts: 0,
+            auto_restart_scheduled: false,
+            abort_requested: false,
+            prompt_in_flight: None,
             toasts: toast::Toasts::new(),
             pending_follow_up: None,
             session_name_input,
@@ -1693,12 +1895,17 @@ impl OrbitApp {
             session_usage: None,
             context_popup: ContextPopup::None,
             autocomplete,
+            prompt_history,
             autocomplete_dismissed: false,
             last_ac_trigger: None,
             slash_commands: Vec::new(),
             mention_files: Vec::new(),
             mention_files_workspace: None,
             attachments: Vec::new(),
+            files: Vec::new(),
+            pasted_texts: Vec::new(),
+            drafts: HashMap::new(),
+            new_task_draft: None,
             file_drag_hovered: false,
             open_in_apps: Rc::new(Vec::new()),
             open_in_menu_open: false,
@@ -2077,8 +2284,15 @@ impl OrbitApp {
             .update(cx, |panel, cx| panel.set_workspace(workspace.clone(), cx));
         let provider = self.model_provider.clone();
         let model = self.model_id.clone();
+        // The commit-message prompt is sized from the model's window, so a big
+        // change set stays inside it. `None` until the catalog reports one.
+        let context_window = self
+            .available_models
+            .iter()
+            .find(|entry| entry.id == model && entry.provider == provider)
+            .and_then(|entry| entry.context_window);
         self.git_panel.update(cx, |panel, cx| {
-            panel.set_context(workspace.clone(), provider, model, cx);
+            panel.set_context(workspace.clone(), provider, model, context_window, cx);
         });
         self.project_panel
             .update(cx, |panel, cx| panel.set_workspace(workspace.clone(), cx));
@@ -3049,6 +3263,8 @@ enum SettingsSelect {
     BackdropFade,
     /// The model the auto-title extension asks (Settings → Agent).
     TitleModel,
+    /// How agent call details open in the transcript (Settings → Agent).
+    AgentCalls,
     /// The model new sessions start on (Settings → Agent).
     DefaultModel,
     /// The default model's thinking level (Settings → Agent).
@@ -3091,7 +3307,15 @@ mod view;
 mod worktrees;
 
 #[cfg(test)]
+mod attachment_tray_tests;
+#[cfg(test)]
+mod auto_restart_tests;
+#[cfg(test)]
 mod backdrop_layout_tests;
+#[cfg(test)]
+mod cancel_tests;
+#[cfg(test)]
+mod composer_draft_tests;
 #[cfg(test)]
 mod composer_layout_tests;
 #[cfg(test)]
@@ -3105,7 +3329,11 @@ mod new_task_reconnect_tests;
 #[cfg(test)]
 mod popup_layout_tests;
 #[cfg(test)]
+mod process_exit_cleanup_tests;
+#[cfg(test)]
 mod refresh_tests;
+#[cfg(test)]
+mod send_control_tests;
 #[cfg(test)]
 mod send_progress_tests;
 #[cfg(test)]
@@ -3125,6 +3353,8 @@ mod sidebar_sort_tests;
 #[cfg(test)]
 mod sidepane_full_width_tests;
 #[cfg(test)]
+mod stale_error_tests;
+#[cfg(test)]
 mod theme_switch_tests;
 #[cfg(test)]
 mod titlebar_layout_tests;
@@ -3140,8 +3370,8 @@ mod worktree_howto_tests;
 pub(crate) use crate::theme::tokens::RaisedExt;
 pub(crate) use helpers::{
     button_frame, context_menu_entry, context_menu_separator, context_menu_surface, empty_state,
-    file_badge, file_glyph, icon, icon_button_frame, icon_dyn, input_field_frame, menu_header,
-    nerd_font_family, picker_entry, picker_search_frame, picker_surface, press,
+    file_badge, file_glyph, file_icon_tile, icon, icon_button_frame, icon_dyn, input_field_frame,
+    menu_header, nerd_font_family, picker_entry, picker_search_frame, picker_surface, press,
     provider_mark_color, refresh_glyph, running_spinner, spinner, EmptyFill, TipExt, BUTTON_GROUP,
     PRESS_DIM,
 };

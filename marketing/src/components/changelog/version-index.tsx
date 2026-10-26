@@ -13,7 +13,14 @@ export type VersionIndexItem = {
  * Release navigation that tracks the entry currently in view. Keeps the
  * changelog scannable without a full client-side router.
  */
-export function VersionIndex({ entries }: { entries: VersionIndexItem[] }) {
+export function VersionIndex({
+  entries,
+  label,
+}: {
+  entries: VersionIndexItem[];
+  /** Accessible name for the release list ("Jump to a release"). */
+  label: string;
+}) {
   const [active, setActive] = useState(entries[0]?.version ?? "");
 
   useEffect(() => {
@@ -37,7 +44,7 @@ export function VersionIndex({ entries }: { entries: VersionIndexItem[] }) {
   }, [entries]);
 
   return (
-    <nav aria-label="Jump to a release">
+    <nav aria-label={label}>
       <ul className="flex flex-col gap-0.5">
         {entries.map((entry) => {
           const isActive = entry.version === active;

@@ -821,3 +821,64 @@ GLOSSARY = {
         "Verify a new release now; a staged update downloads, verifies, and installs after Orbit quits.": "Verifica ora una nuova versione; un aggiornamento preparato viene scaricato, verificato e installato dopo la chiusura di Orbit.",
     },
 }
+
+# The Appearance design-system switch. Kept here so a future
+# `scripts/gen_locales.py` run preserves these translations instead of falling
+# back to English.
+for _locale, _table in {
+    "zh-CN": {
+        "Design system": "设计系统",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "选择视觉语言。经典保留 Orbit 当前设计；运营模式应用克制的运营极简主义。",
+        "Classic": "经典",
+        "Operational": "运营",
+    },
+    "ja": {
+        "Design system": "デザインシステム",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "ビジュアル言語を選択します。クラシックはOrbitの現在のデザインを維持し、オペレーショナルは抑制された運用ミニマリズムを適用します。",
+        "Classic": "クラシック",
+        "Operational": "オペレーショナル",
+    },
+    "ko": {
+        "Design system": "디자인 시스템",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "시각 언어를 선택합니다. 클래식은 Orbit의 현재 디자인을 유지하고, 오퍼레이셔널은 절제된 운영 미니멀리즘을 적용합니다.",
+        "Classic": "클래식",
+        "Operational": "오퍼레이셔널",
+    },
+    "es": {
+        "Design system": "Sistema de diseño",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "Elige el lenguaje visual. Clásico mantiene el diseño actual de Orbit; Operativo aplica Minimalismo Operativo Contenido.",
+        "Classic": "Clásico",
+        "Operational": "Operativo",
+    },
+    "fr": {
+        "Design system": "Système de design",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "Choisissez le langage visuel. Classique conserve le design actuel d’Orbit ; Opérationnel applique le minimalisme opérationnel sobre.",
+        "Classic": "Classique",
+        "Operational": "Opérationnel",
+    },
+    "de": {
+        "Design system": "Designsystem",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "Wähle die visuelle Sprache. Klassisch behält Orbits aktuelles Design; Operativ verwendet Restrained Operational Minimalism.",
+        "Classic": "Klassisch",
+        "Operational": "Operativ",
+    },
+    "pt-BR": {
+        "Design system": "Sistema de design",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "Escolha a linguagem visual. Clássico mantém o design atual do Orbit; Operacional aplica o Minimalismo Operacional Contido.",
+        "Classic": "Clássico",
+        "Operational": "Operacional",
+    },
+    "ru": {
+        "Design system": "Система оформления",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "Выберите визуальный язык. «Классическая» сохраняет текущий дизайн Orbit; «Операционная» применяет сдержанный операционный минимализм.",
+        "Classic": "Классическая",
+        "Operational": "Операционная",
+    },
+    "it": {
+        "Design system": "Sistema di design",
+        "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "Scegli il linguaggio visivo. Classico mantiene il design attuale di Orbit; Operativo applica il Minimalismo Operativo Sobrio.",
+        "Classic": "Classico",
+        "Operational": "Operativo",
+    },
+}.items():
+    GLOSSARY.setdefault(_locale, {}).update(_table)

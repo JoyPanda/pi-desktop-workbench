@@ -1,0 +1,613 @@
+{
+  "meta": {
+    "title": "Eine native Arbeitsumgebung für den pi Coding-Agent",
+    "description": "Eine native Desktop-Arbeitsumgebung für den pi Coding-Agent: deine Sitzungen, deine Modelle, dein Rechner — chatten, prüfen und committen in einem Fenster."
+  },
+  "nav": {
+    "home": "Orbit-Startseite",
+    "links": {
+      "agent": "Agent",
+      "sessions": "Sitzungen",
+      "git": "Git",
+      "usage": "Nutzung",
+      "skills": "Skills",
+      "mcp": "MCP",
+      "docs": "Doku",
+      "changelog": "Changelog"
+    },
+    "github": "GitHub",
+    "stars": "GitHub — {count} Sterne"
+  },
+  "switcher": {
+    "label": "Sprache"
+  },
+  "hero": {
+    "releaseNotes": "Versionshinweise",
+    "heading": "Eine native Arbeitsumgebung für den pi Coding-Agent.",
+    "body": "Deine Sitzungen, deine Modelle, dein Rechner. Chatten, prüfen und committen in einem Fenster — dieselben Sitzungen wie im Terminal, nativ gezeichnet.",
+    "github": "Auf GitHub ansehen",
+    "platforms": {
+      "macos": "macOS 13+",
+      "windows": "Windows",
+      "linux": "Linux"
+    },
+    "shotAlt": "Eine abgeschlossene Orbit-Sitzung: die Notizen des Agenten zum Windows-IME-Fix im Composer und eine Karte „4 Dateien geändert“ mit Zeilenzahlen pro Datei, über dem Composer."
+  },
+  "trust": {
+    "items": [
+      {
+        "title": "Kostenlos & Open Source",
+        "copy": "Apache-2.0. Kein Konto, keine Bindung."
+      },
+      {
+        "title": "Lokal zuerst",
+        "copy": "Nutzt deine eigene pi-Installation. Der Code bleibt auf deinem Rechner."
+      },
+      {
+        "title": "Nativ, kein Webview",
+        "copy": "Rust + GPUI, auf der GPU gezeichnet."
+      },
+      {
+        "title": "macOS · Windows · Linux",
+        "copy": "Eine App, dieselben Sitzungen wie im Terminal."
+      }
+    ]
+  },
+  "faq": {
+    "label": "FAQ",
+    "heading": "Fragen, beantwortet.",
+    "body": "Was pi-Nutzer fragen, bevor sie ihr Terminal gegen ein Fenster tauschen.",
+    "items": [
+      {
+        "q": "Ist Orbit kostenlos?",
+        "a": "Ja. Orbit ist kostenlos und Open Source unter der Apache-2.0-Lizenz — kein Konto, kein Abo und keine bezahlten Funktionen. Die Modellanbieter bringst du selbst mit."
+      },
+      {
+        "q": "Ersetzt Orbit pi oder bringt es pi mit?",
+        "a": "Weder noch. Orbit ist ein nativer Desktop-Client, der die pi-CLI, die du bereits installiert hast, über die RPC-Schnittstelle von pi steuert — mit deiner vorhandenen Konfiguration, deinen Sitzungen, Anbietern, Tools und Erweiterungen. Terminal und App bleiben synchron."
+      },
+      {
+        "q": "Welche Plattformen unterstützt Orbit?",
+        "a": "macOS 13+, Windows und Linux. Orbit ist eine native Anwendung mit Rust und GPUI — kein Electron und kein Webview — startet also schnell und bleibt schlank."
+      },
+      {
+        "q": "Worin unterscheidet sich Orbit von der pi TUI oder pi-web?",
+        "a": "Die pi TUI lebt im Terminal, pi-web packt pi in einen Browser. Orbit ist eine native Desktop-Arbeitsumgebung: mehrere Sitzungen und Workspaces, eine Diff-Ansicht zum Prüfen, Git und GitHub, Nutzungsstatistik, MCP und Plugins in einem Fenster."
+      },
+      {
+        "q": "Funktioniert Orbit mit meinen pi-Erweiterungen und Plugins?",
+        "a": "Ja. Orbit spricht über RPC mit pi, agentenseitige pi-Erweiterungen funktionieren also weiter, und Orbit stellt Ereignisse wie Rückfragen und Freigaben nativ dar. Plugins installiert, aktualisiert und entfernt außerdem pi-Pakete."
+      },
+      {
+        "q": "Wohin gehen meine Daten? Sendet Orbit Telemetrie?",
+        "a": "Orbit ist lokal zuerst: Dein Code und deine Sitzungen bleiben auf deinem Rechner. Die App erhebt keine Telemetrie — keinen Analytics-Client, keine Installations-ID und keine Nutzungsmeldungen."
+      },
+      {
+        "q": "Kann ich mehrere pi-Sitzungen gleichzeitig laufen lassen?",
+        "a": "Ja. Orbit ist für parallele Sitzungen und Workspaces gebaut, jede gestützt auf deine lokale pi-Installation — du kannst also mehrere Agenten laufen lassen, ohne Terminalfenster zu jonglieren."
+      }
+    ]
+  },
+  "closer": {
+    "heading": "Bau mit Orbit.",
+    "body": "Richte Orbit auf die Projekte, in denen du pi schon nutzt. Dieselben Sitzungen, dieselben Modelle, dieselben Tools — nativ auf der GPU gezeichnet.",
+    "github": "Auf GitHub ansehen",
+    "platforms": {
+      "macos": "macOS",
+      "windows": "Windows",
+      "linux": "Linux"
+    },
+    "releaseNotes": "Versionshinweise · {tag}"
+  },
+  "footer": {
+    "tagline": "Eine native Arbeitsumgebung für den pi Coding-Agent. Deine Sitzungen, deine Modelle, dein Rechner — chatten, prüfen und committen in einem Fenster.",
+    "columns": {
+      "product": "Produkt",
+      "resources": "Ressourcen",
+      "elsewhere": "Anderswo",
+      "legal": "Rechtliches"
+    },
+    "links": {
+      "agent": "Agent",
+      "sessions": "Sitzungen",
+      "modelsProviders": "Modelle & Anbieter",
+      "git": "Git",
+      "usage": "Nutzung",
+      "reviews": "Stimmen",
+      "faq": "FAQ",
+      "download": "Download",
+      "docs": "Doku",
+      "install": "Installation",
+      "worktrees": "Worktrees",
+      "mcpServers": "MCP-Server",
+      "shortcuts": "Tastenkürzel",
+      "changelog": "Changelog",
+      "github": "GitHub",
+      "pi": "pi Coding-Agent",
+      "reportIssue": "Problem melden",
+      "email": "E-Mail",
+      "privacy": "Datenschutz",
+      "terms": "Nutzungsbedingungen",
+      "security": "Sicherheit",
+      "contact": "Kontakt"
+    },
+    "latest": "Neueste",
+    "release": "Version {tag}",
+    "copyright": "© {year} Orbit · dieselben Sitzungen wie im Terminal"
+  },
+  "download": {
+    "download": "Herunterladen",
+    "forPlatform": "Für {platform} herunterladen",
+    "otherPlatforms": "Andere Plattformen und Formate"
+  },
+  "sections": {
+    "agent": {
+      "label": "Der Agent",
+      "title": "Sieh ihm beim Denken, Aufrufen und Bearbeiten zu.",
+      "copy": "Denken, Werkzeugaufrufe und Dateibearbeitungen strömen in ein auf der GPU gezeichnetes Transkript, das nie neu umbricht. Steuere mitten im Lauf oder reihe eine Nachfrage im Composer ein — Modell und Denkaufwand sind eine Tastenkombination entfernt.",
+      "points": [
+        "Zusammengefasstes Streaming, GFM-Markdown und Syntax-Hervorhebung, die nur neu malt.",
+        "Prompt, steuern, einreihen oder abbrechen — alles gegen den laufenden pi-Prozess.",
+        "Jeder Werkzeugaufruf klappt zu Argumenten, Ausgabe und Inline-Diffs auf."
+      ]
+    },
+    "sessions": {
+      "label": "Sitzungen",
+      "title": "Sitzungen leben dort, wo pi sie ablegt.",
+      "copy": "Deine Liste wird direkt aus pi gelesen und nach Projekt gruppiert — dieselben Sitzungen, die das Terminal sieht. Öffne, klone oder verstecke einen Workspace, ohne etwas auf der Festplatte anzufassen; aktuelle Sitzungen bleiben warm."
+    },
+    "newTask": {
+      "label": "Neue Aufgabe",
+      "title": "Workspace wählen. Aufgabe beschreiben.",
+      "copy": "Wähle Plan, Bauen oder Fragen, richte Orbit auf einen Workspace und sag, was du willst. Modell, Denkaufwand und Zugriffsmodus sitzen direkt im Composer — senden, und der Lauf beginnt in einer Live-Sitzung.",
+      "points": [
+        "Plan, Bauen oder Fragen — ein Schalter vor dem Start.",
+        "Workspace aus deinen Projekten gewählt, über Sitzungen hinweg gemerkt.",
+        "Zugriffsmodus, Modell und Denkstufe neben dem Composer."
+      ],
+      "shotAlt": "Orbits Seite „Neue Aufgabe“ mit den Modus-Schaltern Plan, Bauen und Fragen, einer Workspace-Auswahl und dem Composer darunter."
+    },
+    "providers": {
+      "label": "Modelle & Anbieter",
+      "title": "Jeder Anbieter. Jedes Modell. Ein Fenster.",
+      "copy": "pi’s laufender Katalog plus eigene Anbieter — melde dich mit Schlüssel oder OAuth an und wähle dann pro Aufgabe ein Modell, mit Denkaufwand daneben. Lokale Modelle aus Ollama stehen neben den gehosteten.",
+      "points": [
+        "Anthropic, OpenAI, Bedrock, OpenCode Go und deine eigenen Endpunkte.",
+        "Richte Orbit auf ein lokales Ollama, und alles bleibt auf deinem Rechner.",
+        "Favoriten und Kontextgrößen, nach Anbieter gruppiert."
+      ],
+      "shotAlt": "Orbits Modellseite mit nach Anbieter gruppierten Modellen, Kontextgrößen und Favoriten-Schaltern."
+    },
+    "skills": {
+      "label": "Skills",
+      "title": "Bring ihm das Playbook deines Teams bei.",
+      "copy": "Skills sind SKILL.md-Playbooks, die pi beim Start lädt — auf Nutzer- und Projektebene. Durchstöbere sie in Orbit, lies die vollständigen Anweisungen und aktiviere oder deaktiviere jede mit einem Schalter.",
+      "points": [
+        "Projekt- und Nutzer-Skills, durchsuchbar mit vollständiger SKILL.md-Vorschau.",
+        "Skill aktivieren oder deaktivieren, ohne Dateien zu bearbeiten.",
+        "Als /skill:-Befehle direkt aus dem Composer aufgerufen."
+      ],
+      "shotAlt": "Orbits Skill-Seite mit der Skill-Liste links und der vollständigen SKILL.md des gewählten Skills rechts."
+    },
+    "git": {
+      "label": "Git",
+      "title": "Lies den Diff, bevor du die App wechselst.",
+      "copy": "Der Agent bearbeitet Dateien hinter dem Transkript. Orbit hält einen Live-Diff in einem rechten Panel und eine vollständige Git-Seite daneben — stagen, prüfen und committen, ohne das Fenster zu verlassen.",
+      "points": [
+        "Ein Live-Git-Diff des Workspace, aktualisiert, wenn ein Lauf zur Ruhe kommt.",
+        "Commit-Nachricht generieren, gewünschte Änderungen stagen und direkt pushen.",
+        "Verlauf und Graph für den Branch, auf dem du stehst."
+      ],
+      "shotAlt": "Das Orbit-Review-Panel neben einer Sitzung: links der Inline-Diff der gewählten Datei, rechts der Baum der geänderten Dateien."
+    },
+    "usage": {
+      "label": "Nutzung",
+      "title": "Weiß, was jeder Lauf kostet.",
+      "copy": "Anfragen, Tokens, Kosten und Cache — gelesen von pi’s eigenem Zähler, über alle Sitzungen auf deinem Rechner. Keine Drittanbieter-Analytics, kein Raten, wo der Kontext geblieben ist.",
+      "points": [
+        "Werte pro Lauf und pro Anbieter, mit Cache- und Kontext-Tokens.",
+        "Eine 30-Tage-Ansicht der Tokens über die Zeit, vollständig lokal."
+      ],
+      "shotAlt": "Orbits Nutzungsseite mit Anfragen-, Token-, Kosten- und Cache-Werten über einem Diagramm der Tokens über die Zeit."
+    },
+    "mcp": {
+      "label": "MCP",
+      "title": "Binde deine Tools über MCP ein.",
+      "copy": "Orbit verwaltet Model-Context-Protocol-Server für den Agenten — global oder auf ein Projekt begrenzt. Füge einen Server hinzu, sieh Tool-Anzahl und Verbindungsstatus und schalte ihn mit einem Schalter ein oder aus.",
+      "points": [
+        "Globale und projektgebundene Server nebeneinander.",
+        "Verbindungsstatus und Tool-Anzahl auf einen Blick.",
+        "Server aktivieren, bearbeiten oder entfernen, ohne JSON zu bearbeiten."
+      ],
+      "shotAlt": "Orbits MCP-Seite mit globalen und projektgebundenen MCP-Servern, Verbindungsstatus und Aktivierungs-Schaltern."
+    },
+    "plugins": {
+      "label": "Plugins",
+      "title": "Erweitere pi mit Paketen.",
+      "copy": "Installiere pi-Pakete aus npm, git oder einem lokalen Pfad — global oder für dieses Projekt. Orbit zeigt, was konfiguriert ist samt Version, aktualisiert es, und pi übernimmt Änderungen beim nächsten Neustart.",
+      "points": [
+        "npm-, git- oder lokale Pfad-Pakete, global oder projektweit.",
+        "Installieren, aktualisieren und entfernen, ohne das Fenster zu verlassen.",
+        "Beim Start geladen — starte pi neu, um Änderungen zu übernehmen."
+      ],
+      "shotAlt": "Orbits Plugin-Seite mit installierten pi-Paketen, einem Installationsfeld darüber und Aktualisieren-/Entfernen-Aktionen je Paket."
+    },
+    "appearance": {
+      "label": "Erscheinungsbild",
+      "title": "Mach es zu deinem.",
+      "copy": "Helle und dunkle Themes, Oberflächen- und Codeschriften, Größen und Sprache — Erscheinungsbild deckt das Fenster selbst ab, und jede andere Einstellung ist eine Suche entfernt.",
+      "points": [
+        "Helle und dunkle Themes mit eigenen Paletten.",
+        "Oberflächen- und Codeschriften, Größen und eine Live-Terminalvorschau.",
+        "Alle Einstellungen aus einem Feld durchsuchen."
+      ],
+      "shotAlt": "Orbits Erscheinungsbild-Einstellungen mit Theme-Auswahl über Schriftart-, Codeschrift- und Größenreglern."
+    },
+    "native": {
+      "label": "Nativ",
+      "title": "Eine echte Desktop-App. Du hältst die Zügel.",
+      "copy": "Orbit ist eine native App für macOS, Windows und Linux — Rust und GPUI, tastaturzentriert, keine Webviews. Und jeder verändernde Werkzeugaufruf läuft durch einen Zugriffsmodus, den du pro Aufgabe setzt, sodass der Agent dir nie vorauseilt.",
+      "points": [
+        "Beaufsichtigt — fragt vor jeder Bearbeitung und jedem Befehl.",
+        "Bearbeitungen automatisch übernehmen — wendet Dateiänderungen an, fragt weiter vor Befehlen.",
+        "Vollzugriff — läuft ohne Rückfragen, bewusst pro Aufgabe gewählt."
+      ]
+    },
+    "contributors": {
+      "label": "Mitwirkende",
+      "heading": "Offen gebaut.",
+      "body": "Orbit wird von allen geprägt, die ein Issue öffnen, einen Patch schicken oder eine Version prüfen.",
+      "github": "Auf GitHub ansehen",
+      "more": "{count} weitere Mitwirkende auf GitHub"
+    },
+    "reviews": {
+      "label": "Stimmen",
+      "heading": "Was Leute sagen.",
+      "body": "Unbearbeitete Kommentare aus den r/PiCodingAgent-Startthreads.",
+      "read": "Review von {handle} auf {platform} lesen",
+      "platforms": {
+        "reddit": "Reddit",
+        "x": "X"
+      }
+    }
+  },
+  "docs": {
+    "label": "Doku",
+    "documentation": "Dokumentation",
+    "previous": "Zurück",
+    "next": "Weiter",
+    "nav": {
+      "groups": {
+        "getStarted": "Erste Schritte",
+        "workbench": "Werkbank",
+        "safeguards": "Schutzmaßnahmen",
+        "reference": "Referenz"
+      },
+      "links": {
+        "overview": "Übersicht",
+        "overviewDescription": "Was Orbit ist, wie es funktioniert und wo deine Daten liegen.",
+        "install": "Installation",
+        "installDescription": "Lade die Version für deine Plattform, erfülle die Prüfungen beim ersten Start und sende einen ersten Prompt.",
+        "sessions": "Sitzungen",
+        "sessionsDescription": "Projekte, Sitzungen, Navigation, Workflow und Zugriffsmodi sowie Benachrichtigungen.",
+        "worktrees": "Worktrees",
+        "worktreesDescription": "Parallele Branches als vollwertige Arbeitsbereiche, mit optionalem Setup-Skript.",
+        "mcp": "MCP-Server",
+        "mcpDescription": "Verwalte die Model-Context-Protocol-Server, die der Agent aufrufen kann — mit lokalem Secret-Speicher.",
+        "accessModes": "Zugriffsmodi",
+        "accessModesDescription": "Überwacht, Änderungen automatisch übernehmen und Voller Zugriff: was ohne Nachfrage läuft und wie Freigaben funktionieren.",
+        "shortcuts": "Tastenkürzel",
+        "shortcutsDescription": "Jedes Kürzel, gruppiert nach der Oberfläche, in der es wirkt."
+      }
+    },
+    "index": {
+      "metaTitle": "Doku",
+      "description": "Anleitungen für Orbit, die native Desktop-Arbeitsumgebung für den pi Coding-Agent: Installation, Sitzungen, Worktrees, MCP-Server und Tastenkürzel.",
+      "title": "Orbit-Dokumentation",
+      "intro": "Alles, was du brauchst, um Orbit zu installieren, Agentensitzungen zu fahren, mit Git-Worktrees zu arbeiten, MCP-Server anzubinden und die Tastatur zu lernen.",
+      "headings": {
+        "what": "Was Orbit ist",
+        "how": "Wie es funktioniert",
+        "need": "Was du brauchst",
+        "data": "Wo deine Daten liegen",
+        "guides": "Anleitungen"
+      },
+      "what": {
+        "p1": "Orbit ist eine native Desktop-Arbeitsumgebung für den <pi>pi Coding-Agent</pi>. Es ist eine Rust-App, gezeichnet mit GPUI, dem GPU-beschleunigten UI-Framework hinter Zed — kein Browser, kein Webview, keine Node-UI-Schicht.",
+        "p2": "Orbit ist kein Chat-Wrapper um eine Modell-API. Es startet die <code>pi</code>-CLI als Kindprozess und spricht pis eigenes RPC-Protokoll über stdio. Modellkatalog, Tools, Denkstufen und Sitzungen bleiben die von pi; Orbit ist das Fenster darauf. Eine Sitzung, die du in Orbit anlegst, und eine im Terminal sind dieselbe Datei."
+      },
+      "how": {
+        "diagram": "Orbit (Rust · GPUI)\n   │  zeilenweise abgegrenztes JSON-RPC über stdio\n   ▼\npi CLI (ein Kindprozess pro offener Sitzung)\n   │\n   ▼\n~/.pi/agent/   Sitzungen · Konfiguration · Nutzung",
+        "body": "Anfragen gehen als JSON über stdin an pi; pi streamt Ereignisse als JSON-Zeilen über stdout zurück — Text- und Denk-Deltas, Werkzeugaufrufe, Rückfrage-Dialoge und Settle-Signale. Weil die Laufzeit pi selbst ist, kann Orbit alles steuern, was die CLI kann, und nichts wird doppelt implementiert."
+      },
+      "need": {
+        "pi": "<strong>pi</strong> — die Coding-Agent-CLI, die die Arbeit macht. Installiere sie aus dem <pi>pi-Repository</pi>.",
+        "node": "<strong>Node.js</strong> — wird von vielen MCP-Servern (ausgeführt über <code>npx</code>) und von pi-Paketen gebraucht.",
+        "git": "<strong>Git</strong> — treibt das Review-Panel, die Git-Seite und Worktrees.",
+        "note": "Beim ersten Start prüft Orbit alle drei und meldet Fehlendes samt Befehl zum Installieren. Du kannst das jederzeit in den Einstellungen erneut ansehen."
+      },
+      "data": {
+        "path": "Pfad",
+        "what": "Was dort liegt",
+        "sessions": "Deine Sitzungen — dieselben Dateien, die die <code>pi</code>-CLI liest und schreibt.",
+        "config": "pi-Konfiguration, inklusive MCP-Konfiguration und Zugangsdaten.",
+        "orbit": "Orbit-Einstellungen: Layout, Zugriffsmodus, Workflow-Modus, Benachrichtigungen, das Worktree-Wurzelverzeichnis und der MCP-Secret-Speicher.",
+        "project": "Projektgebundene pi-Konfiguration, inklusive einer <code>mcp.json</code> im Projekt."
+      },
+      "missing": "Fehlt etwas? Öffne ein Issue auf <github>GitHub</github>."
+    },
+    "install": {
+      "metaTitle": "Installation",
+      "description": "Lade Orbit für macOS, Windows oder Linux, kläre die Abhängigkeitsprüfung beim ersten Start, verbinde einen Anbieter und sende deinen ersten Prompt.",
+      "title": "Installation und erster Start",
+      "intro": "Orbit liefert signierte Builds für macOS, Windows und Linux, mit signierten In-App-Updates. Diese Seite führt dich vom Download bis zum ersten Prompt.",
+      "headings": {
+        "download": "Download",
+        "requirements": "Voraussetzungen",
+        "firstLaunch": "Erster Start",
+        "updates": "Updates",
+        "next": "Weiter"
+      },
+      "download": {
+        "body": "Hol dir die Version für deine Plattform aus dem <release>neuesten Release</release>. Der Button <strong>Herunterladen</strong> im Kopf dieser Website wählt automatisch die richtige.",
+        "platform": "Plattform",
+        "formats": "Formate",
+        "macos": "<code>.dmg</code> (signiert und notarisiert, universal) und <code>.tar.gz</code>",
+        "windows": "<code>.exe</code> und <code>.zip</code>",
+        "linux": "<code>.deb</code> und <code>.tar.gz</code>, für x86_64 und Arm64"
+      },
+      "callout": "Orbit bringt keine Agenten-Laufzeit mit. Es steuert die <code>pi</code>-CLI, die du schon hast, sodass sich beide unabhängig aktualisieren.",
+      "requirements": {
+        "body": "Orbit steuert Werkzeuge, die außerhalb der App liegen. Installiere diese zuerst, oder lass die Prüfung beim ersten Start sagen, was fehlt:",
+        "pi": "<strong>pi</strong> — die Coding-Agent-CLI. Orbit startet sie für jede Sitzung als Kindprozess.",
+        "node": "<strong>Node.js</strong> — viele MCP-Server laufen über <code>npx</code>, und pi-Pakete laufen auf Node.",
+        "git": "<strong>Git</strong> — für das Review-Panel, die Git-Seite und Worktrees."
+      },
+      "firstLaunch": {
+        "open": "<strong>Orbit öffnen.</strong> Beim ersten Start prüft es <code>pi</code>, <code>node</code> und <code>git</code> und listet alles auf, was es nicht findet — samt Befehl zum Installieren.",
+        "provider": "<strong>Anbieter verbinden.</strong> Öffne <strong>Einstellungen → Anbieter</strong> und melde dich mit API-Schlüssel oder OAuth an. Orbit liest pis laufenden Modellkatalog, die Liste entspricht also dem, was die CLI erreichen kann.",
+        "workspace": "<strong>Workspace wählen.</strong> Ein Workspace ist einfach ein Projektordner. <strong>Neue Aufgabe</strong> hat eine Workspace-Auswahl mit zuletzt genutzten Ordnern und einem nativen Durchsuchen-Button.",
+        "model": "<strong>Modell und Denkstufe wählen.</strong> Einstellungen → Agent legt das Standardmodell und die Denkstufe fest, mit der jede neue Sitzung startet.",
+        "accessMode": "<strong>Zugriffsmodus wählen.</strong> Überwacht fragt vor jedem verändernden Aufruf; Änderungen automatisch übernehmen wendet Dateiänderungen an, fragt aber weiter vor Befehlen; Voller Zugriff läuft ohne Rückfragen.",
+        "send": "<strong>Prompt senden.</strong> Drücke <kbd>Enter</kbd> zum Senden oder <kbd>Shift</kbd>+<kbd>Enter</kbd> für eine neue Zeile."
+      },
+      "updates": {
+        "body": "Release-Builds suchen im Hintergrund nach Updates und installieren sie über einen signierten In-App-Updater. Starte <strong>Nach Updates suchen</strong> manuell mit <kbd>⌘</kbd>+<kbd>⇧</kbd>+<kbd>U</kbd> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>U</kbd> unter Windows und Linux) oder öffne den Versionsverlauf im Updater-Dialog."
+      },
+      "next": {
+        "body": "Wenn die App läuft, deckt die Anleitung <sessions>Sitzungen</sessions> die tägliche Arbeit ab, und <shortcuts>Tastenkürzel</shortcuts> hat die komplette Tastenbelegung."
+      }
+    }
+  },
+  "changelog": {
+    "label": "Changelog",
+    "heading": "Jede Version, wie sie ausgeliefert wurde.",
+    "body": "Orbit Pi ist schnell unterwegs. Diese Seite spiegelt das Changelog und den Release-Feed des Repositories — du liest hier also die Notizen, die auch wirklich ausgeliefert wurden.",
+    "download": "Version {tag} laden",
+    "downloadFallback": "Für macOS laden",
+    "latest": "Neueste",
+    "source": "Quelle",
+    "releases": "Versionen",
+    "jumpToRelease": "Zu einer Version springen",
+    "copyLink": "Link auf {tag} kopieren",
+    "allReleases": "Alle Versionen",
+    "releaseNotes": "Versionshinweise",
+    "onGithub": "Release auf GitHub",
+    "previous": "Zurück",
+    "next": "Weiter",
+    "unavailableTitle": "Versionshinweise sind gerade nicht verfügbar",
+    "unavailableBody": "GitHub war nicht erreichbar. Lies das Neueste auf der <link>Seite der Releases</link>."
+  },
+  "legal": {
+    "label": "Rechtliches",
+    "updated": "Zuletzt aktualisiert: {date}",
+    "privacy": {
+      "title": "Datenschutz",
+      "description": "Wie Orbit mit deinen Daten umgeht — lokal zuerst. Die Desktop-App erhebt keine Telemetrie; diese Website nutzt selbst gehostete, cookie-freie Analyse.",
+      "intro": "Orbit ist lokal zuerst. Dein Quellcode, deine Projekte, dein Terminal und deine KI-Gespräche gehören dir und bleiben auf deinem Rechner. Die Desktop-App erhebt keine Telemetrie; diese Seite erklärt, was deinen Rechner verlässt, wenn du Orbit nutzt, und wie wenig Analyse diese Website verwendet.",
+      "headings": {
+        "shortVersion": "Die Kurzfassung",
+        "desktopApp": "Desktop-App",
+        "notCollected": "Was Orbit nicht wissentlich erhebt",
+        "localData": "Lokale Daten",
+        "website": "Diese Website",
+        "thirdParty": "Dienste Dritter",
+        "retention": "Aufbewahrung und Weitergabe",
+        "changes": "Änderungen dieser Richtlinie",
+        "contact": "Kontakt"
+      },
+      "shortVersion": {
+        "telemetry": "Die Desktop-App erhebt keine Telemetrie — keinen Analyse-Client, keine Installations- oder Sitzungskennung und keine Nutzungsmeldungen.",
+        "never": "Orbit erhebt niemals wissentlich deinen Quellcode, Dateinamen, Terminalinhalte, Prompts, Gespräche oder Zugangsdaten.",
+        "analytics": "Diese Website nutzt selbst gehostete, cookie-freie Analyse, die nur in der Produktion geladen wird.",
+        "ads": "Es gibt keine Werbung, keine Tracker Dritter und kein site-übergreifendes Profiling."
+      },
+      "desktop": {
+        "telemetry": "Orbit bringt keine Telemetrie mit. Es gibt keine Analytics-Crate und keinen -Client, keine Installations- oder Sitzungskennung, keinen Ereignisstrom zur Nutzung und kein Tracking-SDK Dritter. Nichts darüber, wie du die App nutzt, wird an das Projekt oder an sonst jemanden gesendet.",
+        "network": "Orbit geht nur für Dinge ins Netz, die du angefordert hast: nach Updates suchen und sie herunterladen, GitHub-Metadaten für die Git- und GitHub-Panels abrufen und Prompts an die Modellanbieter senden, für die dein <code>pi</code>-Agent konfiguriert ist. Nichts davon trägt eine Telemetrie-Kennung."
+      },
+      "notCollected": {
+        "source": "Quellcode, Dateinamen, Dateiinhalte oder Projekt- und Repository-Pfade;",
+        "terminal": "Terminalbefehle oder Terminalausgaben oder Shell-Verlauf;",
+        "ai": "KI-Prompts oder -Antworten oder Gesprächsinhalte;",
+        "credentials": "API-Schlüssel, Access-Tokens, Passwörter, MCP-Zugangsdaten oder Auth-Cookies;",
+        "env": "Umgebungsvariablen oder Zwischenablageninhalte;",
+        "ip": "deine IP-Adresse als Analyse-Merkmal, den genauen Standort oder private URLs;",
+        "machine": "Rechnernamen, MAC-Adresse, Seriennummern oder Datenträgerkennungen.",
+        "note": "Prompts und Tool-Ausgaben, die du sendest, werden von dem Modellanbieter verarbeitet, den du konfiguriert hast, und unterliegen dessen Richtlinie, nicht dieser."
+      },
+      "localData": {
+        "body": "Orbit hält Einstellungen und Zustand unter <code>~/.orbit-pi/</code> und liest Sitzungsdaten, die <code>pi</code> schreibt. Beides bleibt auf deinem Rechner. Einstellungen → Datenschutz enthält die Sitzungsaufbewahrung, die alte Sitzungen nach einem von dir gewählten Zeitplan archiviert oder löscht; hochgeladen werden sie nie."
+      },
+      "website": {
+        "analytics": "{site} lädt ein kleines, selbst gehostetes Analyse-Skript <strong>nur in Produktions-Builds</strong> — nie in der Entwicklung. Es dient dazu, aggregiert zu verstehen, welche Seiten und Versionen gelesen werden.",
+        "records": "Das Skript erfasst:",
+        "recordPath": "den Pfad der Seite, den Query-String und den Referrer;",
+        "recordBrowser": "deine Browsersprache und Bildschirmgröße;",
+        "recordId": "eine zufällige Besucherkennung im <code>localStorage</code> — kein Cookie.",
+        "note": "Es setzt keine Werbe-Cookies, erstellt keinen Fingerabdruck deines Geräts und verfolgt dich nicht über andere Websites hinweg. Wenn du in deinem Browser Skripte blockierst oder den lokalen Speicher löschst, funktioniert die Website normal weiter."
+      },
+      "thirdParty": {
+        "downloads": "<strong>Downloads und Issue-Tracking</strong> laufen auf GitHub. Für den Besuch von GitHub-Links gilt GitHubs eigene Datenschutzerklärung.",
+        "providers": "<strong>Modellanbieter</strong>, die du in Orbit konfigurierst, sind deine eigenen Konten. Prompts, die du an sie sendest, unterliegen deren Bedingungen und Datenschutzerklärungen, nicht dieser."
+      },
+      "retention": {
+        "body": "Die Website-Analyse wird selbst auf Infrastruktur des Projekts gehostet und nicht verkauft, vermietet oder mit Werbetreibenden oder Datenhändlern geteilt. Daten werden nur so lange aufbewahrt, wie sie für aggregierte Produktentscheidungen nützlich sind. Da die Desktop-App nichts erhebt, gibt es keine App-Daten, die aufbewahrt oder weitergegeben werden könnten."
+      },
+      "changes": {
+        "body": "Ändert sich diese Richtlinie wesentlich, ändert sich das Datum oben auf dieser Seite. Die weitere Nutzung von Orbit nach einer Aktualisierung bedeutet, dass du die überarbeitete Richtlinie akzeptierst."
+      },
+      "contact": {
+        "body": "Fragen zum Datenschutz? Schreib an <mail>{email}</mail>."
+      },
+      "updated": "2026-10-14"
+    },
+    "terms": {
+      "title": "Nutzungsbedingungen",
+      "metaTitle": "Nutzungsbedingungen",
+      "description": "Die Bedingungen für die Nutzung der Orbit-Desktop-App und dieser Website — Open Source unter Apache-2.0, bereitgestellt wie besehen.",
+      "intro": "Bedingungen in einfacher Sprache für die Nutzung der Orbit-Desktop-App und dieser Website. Die Software selbst ist Open Source unter der Apache License 2.0, die deine Nutzung des Codes regelt.",
+      "headings": {
+        "overview": "Überblick",
+        "software": "Die Software",
+        "responsible": "Die App verantwortungsvoll nutzen",
+        "providers": "Modellanbieter",
+        "website": "Diese Website",
+        "acceptableUse": "Zulässige Nutzung",
+        "intellectualProperty": "Geistiges Eigentum",
+        "disclaimer": "Gewährleistungsausschluss",
+        "liability": "Haftungsbeschränkung",
+        "changes": "Änderungen dieser Bedingungen",
+        "contact": "Kontakt"
+      },
+      "overview": {
+        "body": "Diese Bedingungen gelten für deine Nutzung der Orbit-Desktop-Anwendung („Orbit“, „die App“) und der Website unter {site} („die Website“). Mit dem Herunterladen, Installieren oder Nutzen von Orbit oder der Nutzung der Website stimmst du ihnen zu. Wenn du nicht zustimmst, nutze Orbit und die Website nicht."
+      },
+      "software": {
+        "body": "Orbit ist freie Open-Source-Software unter der <license>Apache License 2.0</license>. Diese Lizenz regelt deine Rechte, den Code zu nutzen, zu ändern und weiterzugeben, und enthält ihren eigenen Gewährleistungsausschluss und ihre eigene Haftungsbeschränkung. Wo diese Bedingungen und die Lizenz in Bezug auf die Software im Widerspruch stehen, gilt die Lizenz."
+      },
+      "responsible": {
+        "body": "Orbit ist ein lokaler Desktop-Client, der einen KI-Coding-Agenten mit demselben lokalen Zugriff ausführt, den du in einem Terminal hättest. Das heißt:",
+        "action": "<strong>Du bist verantwortlich für das, was der Agent tut.</strong> Er kann in deinem Arbeitsbereich als dein Benutzer lesen, bearbeiten und Befehle ausführen.",
+        "accessModes": "<strong>Zugriffsmodi sind eine Bestätigungssperre, keine Sandbox.</strong> Sie entscheiden, welche Aktionen zuerst nachfragen, sind aber keine Isolationsgrenze.",
+        "backUp": "Sichere deine Arbeit und prüfe Änderungen, bevor du sie annimmst — besonders im Modus <strong>Voller Zugriff</strong>."
+      },
+      "providers": {
+        "body": "Orbit verbindet sich mit Modell- und Tool-Anbietern, die du mit deinen eigenen Zugangsdaten konfigurierst. Deine Nutzung dieser Dienste unterliegt deren Bedingungen und Preisen, nicht diesen Bedingungen. Du bist verantwortlich für alle Kosten und für die Einhaltung der Nutzungsregeln der jeweiligen Anbieter."
+      },
+      "website": {
+        "body": "Die Website beschreibt Orbit und verlinkt Downloads und Versionshinweise. Sie dient nur der Information. Downloads werden von GitHub gehostet; deine Nutzung von GitHub unterliegt GitHubs Bedingungen. Wie die Website Analyse handhabt, steht auf der Seite <privacy>Datenschutz</privacy>."
+      },
+      "acceptableUse": {
+        "body": "Du verpflichtest dich, nicht:",
+        "law": "Orbit oder die Website zu nutzen, um Gesetze zu brechen oder Rechte anderer zu verletzen;",
+        "access": "zu versuchen, unbefugten Zugriff auf die Website, ihre Infrastruktur oder verbundene Dienste zu erlangen;",
+        "interfere": "die Website oder ihre Analyse zu stören oder sie in einem Maß zu scrapen, das den Dienst für andere verschlechtert."
+      },
+      "intellectualProperty": {
+        "body": "Name, Logo und Wortmarke von Orbit kennzeichnen das Projekt und werden durch die Softwarelizenz nicht zur Nutzung freigegeben. Der Quellcode ist, wie oben beschrieben, unter Apache-2.0 lizenziert."
+      },
+      "disclaimer": {
+        "body": "Orbit und die Website werden <strong>„wie besehen“</strong> bereitgestellt, ohne jegliche ausdrückliche oder stillschweigende Gewährleistung, einschließlich — ohne Einschränkung — jeglicher Gewährleistung der Marktgängigkeit, der Eignung für einen bestimmten Zweck oder der Nichtverletzung von Rechten Dritter. Du nutzt Orbit auf eigenes Risiko."
+      },
+      "liability": {
+        "body": "Soweit gesetzlich zulässig, haften die Maintainer und Mitwirkenden von Orbit nicht für mittelbare, zufällige, besondere, Folge- oder Strafschäden oder für Daten-, Gewinn- oder Rufschäden, die aus deiner Nutzung von Orbit oder der Website entstehen oder damit zusammenhängen — einschließlich Änderungen, die der Agent an deinen Dateien oder Systemen vornimmt."
+      },
+      "changes": {
+        "body": "Diese Bedingungen können von Zeit zu Zeit aktualisiert werden; das Datum oben auf der Seite ändert sich dann. Die weitere Nutzung nach einer Aktualisierung bedeutet, dass du die überarbeiteten Bedingungen akzeptierst."
+      },
+      "contact": {
+        "body": "Fragen zu diesen Bedingungen? Schreib an <mail>{email}</mail>."
+      },
+      "updated": "2026-10-10"
+    },
+    "security": {
+      "label": "Vertrauen",
+      "title": "Sicherheit",
+      "description": "Wie du eine Schwachstelle in Orbit meldest, was im Geltungsbereich liegt und welches Sicherheitsmodell hinter dem lokalen Agentenzugriff der App steht.",
+      "intro": "Orbit führt einen KI-Agenten mit lokalem Tool-Zugriff auf deiner Maschine aus. Deshalb lohnt es sich, das Sicherheitsmodell klar zu benennen. Hier steht, wie du ein Problem meldest und was als eines gilt.",
+      "headings": {
+        "supported": "Unterstützte Versionen",
+        "reporting": "Eine Schwachstelle melden",
+        "include": "Was dazugehören sollte",
+        "expect": "Was du erwarten kannst",
+        "scope": "Geltungsbereich und Sicherheitsmodell"
+      },
+      "supported": {
+        "body": "Orbit ist vor 1.0. Sicherheitsfixes erscheinen für die neueste Version und den Branch <code>main</code>.",
+        "main": "<strong>main</strong> (neueste) — unterstützt",
+        "tagged": "<strong>Neueste getaggte Version</strong> — unterstützt",
+        "older": "<strong>Ältere Versionen</strong> — nicht unterstützt"
+      },
+      "reporting": {
+        "body": "Melde Schwachstellen bitte <strong>vertraulich</strong> — öffne kein öffentliches Issue. Nutze GitHubs <reporting>vertrauliche Schwachstellenmeldung</reporting> oder schreib eine E-Mail an <mail>{email}</mail>."
+      },
+      "include": {
+        "issue": "eine Beschreibung des Problems und seiner Auswirkungen;",
+        "steps": "Schritte zum Nachvollziehen oder einen Proof of Concept;",
+        "version": "die Orbit-Version, deine Betriebssystemversion und wie Orbit installiert wurde (<code>cargo run</code>, ein <code>.app</code>-Bundle oder ein DMG);",
+        "pi": "die Version der <code>pi</code>-CLI (<code>pi --version</code>)."
+      },
+      "expect": {
+        "body": "Du bekommst innerhalb weniger Tage eine Bestätigung und ein Statusupdate, sobald die Meldung bewertet ist. Gib uns ein angemessenes Zeitfenster, um einen Fix zu liefern, bevor du öffentlich berichtest."
+      },
+      "scope": {
+        "body": "Orbit ist ein lokaler Desktop-Client. Er startet den <code>pi</code> Coding-Agenten als Kindprozess und gibt ihm denselben lokalen Tool-Zugriff, den du in einem Terminal hättest. Einige Eigenschaften sind <strong>so gewollt</strong> und für sich genommen keine Schwachstellen:",
+        "access": "<strong>Orbit führt den Agenten mit vollem lokalem Tool-Zugriff aus.</strong> Der Agent kann als dein Benutzer in deinem Arbeitsbereich lesen, bearbeiten und Befehle ausführen. Genau das ist der Zweck des Tools.",
+        "accessModes": "<strong>Zugriffsmodi sind eine Bestätigungssperre, keine Sandbox.</strong> Überwacht, Änderungen automatisch übernehmen und Voller Zugriff entscheiden, welche verändernden Tool-Aufrufe zuerst nachfragen. <code>pi</code> bringt keine Sandbox mit, und Orbit fügt keine hinzu. Ein Modus, der einen Aufruf automatisch genehmigt, ist keine Isolationsgrenze.",
+        "store": "<strong>Sitzungsdaten liegen in pis eigenem Speicher</strong> (<code>~/.pi/agent/</code>, <code>~/.orbit-pi/</code>). Orbit liest und schreibt dieselben Dateien wie die <code>pi</code>-CLI.",
+        "wanted": "Meldungen, die wir wollen:",
+        "memory": "Speichersicherheitsfehler;",
+        "injection": "Befehls- oder Prompt-Injection, die eine Grenze überschreitet, die Orbit zu schützen behauptet;",
+        "credentials": "Zugangsdaten, die über die RPC-Oberfläche abfließen;",
+        "updater": "der signierte Updater, der ein nicht überprüfbares Artefakt akzeptiert."
+      },
+      "updated": "2026-10-10"
+    }
+  },
+  "contact": {
+    "label": "Kontakt",
+    "heading": "Sprich mit uns.",
+    "body": "Eine Frage, Feedback oder ein Fehler? Wähle den Weg, der passt — er landet an der richtigen Stelle.",
+    "private": "Vertrauliche Sicherheitsmeldungen bitte per E-Mail an <link>{email}</link>.",
+    "channels": {
+      "general": {
+        "title": "Allgemein & Presse",
+        "body": "Fragen, Feedback, Partnerschaften oder alles, was kein Fehlerbericht ist."
+      },
+      "bugs": {
+        "title": "Fehler & Funktionswünsche",
+        "body": "Öffne ein Issue auf GitHub. Suche vorher — vielleicht ist es schon erfasst.",
+        "action": "Issue öffnen"
+      },
+      "security": {
+        "title": "Sicherheit",
+        "body": "Melde Schwachstellen vertraulich — bitte kein öffentliches Issue.",
+        "action": "So meldest du"
+      },
+      "source": {
+        "title": "Quellcode & Releases",
+        "body": "Sieh dir den Code an, gib dem Repo einen Stern und folge den Releases auf GitHub."
+      }
+    }
+  },
+  "errors": {
+    "notFound": {
+      "label": "Fehler 404",
+      "heading": "Diese Seite ist vom Kurs abgekommen.",
+      "body": "Die gesuchte Seite existiert nicht, wurde verschoben oder war nie in dieser Umlaufbahn. Bringen wir dich zurück auf Kurs.",
+      "home": "Zurück nach Hause",
+      "releases": "Versionen ansehen",
+      "bug": "Vermutest du einen Fehler?",
+      "report": "Issue melden"
+    },
+    "boundary": {
+      "label": "Fehler",
+      "heading": "Etwas ist schiefgelaufen.",
+      "body": "Ein unerwarteter Fehler hat diese Seite unterbrochen. Ein neuer Versuch hilft meistens.",
+      "retry": "Erneut versuchen",
+      "home": "Zurück nach Hause",
+      "reference": "Referenz {digest}"
+    }
+  }
+}

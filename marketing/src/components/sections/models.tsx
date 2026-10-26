@@ -1,5 +1,7 @@
 import { Shot } from "@/components/shot";
 import { Story } from "@/components/sections/story";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
 function ModelCard() {
   const rows = [
@@ -29,25 +31,23 @@ function ModelCard() {
   );
 }
 
-export function Models() {
+export async function Models({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.providers");
+
   return (
     <Story
       id="providers"
-      label="Models & providers"
-      title="Every provider. Every model. One window."
-      copy="pi's live catalog plus custom providers — sign in with a key or OAuth, then pick any model per task, with thinking effort set alongside it. Local models from Ollama sit next to the hosted ones."
-      points={[
-        "Anthropic, OpenAI, Bedrock, OpenCode Go, and your own endpoints.",
-        "Point Orbit at a local Ollama and everything stays on your machine.",
-        "Favorites and context sizes, grouped by provider.",
-      ]}
+      label={t("label")}
+      title={t("title")}
+      copy={t("copy")}
+      points={t.raw("points") as string[]}
       flip
       visual={
         <div className="relative">
           <Shot
             src="/screens/models.png"
             srcLight="/screens/models-light.png"
-            alt="Orbit's Models page listing models grouped by provider with context sizes and favorite toggles."
+            alt={t("shotAlt")}
             sizes="(max-width: 1024px) 100vw, 560px"
           />
           <ModelCard />

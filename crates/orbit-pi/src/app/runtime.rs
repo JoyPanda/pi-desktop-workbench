@@ -1,5 +1,6 @@
 use super::helpers::*;
 use super::*;
+use gpui::Timer;
 
 impl OrbitApp {
     /// Record a status message; the status bar surfaces it briefly (see
@@ -14,6 +15,18 @@ impl OrbitApp {
     /// status line, errors persist (in a red banner) until dismissed or
     /// superseded, so a failure is never silently lost.
     pub(super) fn set_error(&mut self, message: impl Into<String>) {
+        self.raise_error(message, None);
+    }
+
+    /// Record an error raised by a named source — a wire command, or a
+    /// non-command event such as a failed assistant message. A later success
+    /// on the same source retires the banner by comparing it, never by
+    /// matching the banner's translated text.
+    pub(super) fn set_error_from(&mut self, source: &str, message: impl Into<String>) {
+        self.raise_error(message, Some(source.to_string()));
+    }
+
+    fn raise_error(&mut self, message: impl Into<String>, source: Option<String>) {
         let message = message.into();
         // The banner renders on the chat and settings surfaces. The Git and
         // Usage pages own the main area, so an error raised while one of them
@@ -22,6 +35,7 @@ impl OrbitApp {
             self.toast_error(message.clone());
         }
         self.error = Some(message);
+        self.error_source = source;
     }
 
     /// Dismiss the current error banner.
@@ -32,16 +46,18 @@ impl OrbitApp {
         cx: &mut Context<Self>,
     ) {
         self.error = None;
+        self.error_source = None;
         cx.notify();
     }
 
     /// A successful command clears the banner it previously raised (e.g. a
-    /// retried `set_model`), so a fixed error doesn't linger.
-    pub(super) fn clear_error_for(&mut self, command: &str) {
-        if let Some(error) = &self.error {
-            if error.starts_with(&humanize_command(command)) {
-                self.error = None;
-            }
+    /// retried `set_model`), so a fixed error doesn't linger. A banner raised
+    /// by something else — another command, or an event that names no command —
+    /// is left alone.
+    pub(super) fn clear_error_from(&mut self, source: &str) {
+        if self.error_source.as_deref() == Some(source) {
+            self.error = None;
+            self.error_source = None;
         }
     }
 
@@ -54,10 +70,13 @@ impl OrbitApp {
         cx: &mut Context<Self>,
     ) {
         if command == "parse" {
-            self.set_error(tr!(
-                "runtime.protocol_error",
-                error = error.unwrap_or(&tr!("runtime.parse_failed"))
-            ));
+            self.set_error_from(
+                "parse",
+                tr!(
+                    "runtime.protocol_error",
+                    error = error.unwrap_or(&tr!("runtime.parse_failed"))
+                ),
+            );
             return;
         }
         // A rejected follow-up/steer never entered pi's queue: drop the
@@ -85,25 +104,41 @@ impl OrbitApp {
         }
         let fallback = tr!("runtime.unspecified_error");
         let detail = error.unwrap_or(&fallback);
-        self.set_error(tr!(
-            "helpers.command_failed_detail",
-            label = humanize_command(command),
-            detail = detail
-        ));
+        self.set_error_from(
+            command,
+            tr!(
+                "helpers.command_failed_detail",
+                label = humanize_command(command),
+                detail = detail
+            ),
+        );
     }
 
     /// Send a command to pi. Returns `false` when the write failed (or
     /// there is no process) so callers can keep the user's input intact.
     pub(super) fn send(&mut self, body: CommandBody, label: &str) -> bool {
+        self.send_tracked(body, label).is_some()
+    }
+
+    /// [`Self::send`], returning pi's id for the command it queued. A caller
+    /// that must recognise that command's own reply (a `prompt` and its
+    /// `disposition`) keeps the id; everyone else drops it.
+    pub(super) fn send_tracked(&mut self, body: CommandBody, label: &str) -> Option<String> {
         let Some(client) = self.client.as_ref() else {
             self.toast_warning(tr!("runtime.pi_not_running"));
-            return false;
+            return None;
         };
         match client.send(body) {
-            Ok(_) => true,
+            Ok((id, _)) => Some(id),
             Err(err) => {
-                self.set_error(tr!("runtime.send_failed", label = label, error = err));
-                false
+                // Tagged with `label`: a later success on the same command
+                // clears this banner, so a transient write failure cannot
+                // strand a red banner the user has no way to dismiss.
+                self.set_error_from(
+                    label,
+                    tr!("runtime.send_failed", label = label, error = err),
+                );
+                None
             }
         }
     }
@@ -149,17 +184,43 @@ impl OrbitApp {
         // restart paths, and an explicit stop acknowledges it.
         if self.runtime.exited {
             self.error = None;
+            self.error_source = None;
         }
         self.client = None;
         self.runtime = RuntimeStatus::default();
+        self.abort_requested = false;
+        // A prompt the departing process never answered cannot be recognised
+        // later, and the next process starts its own id sequence.
+        self.prompt_in_flight = None;
         // Extension widgets belonged to the departing process.
         self.extension_widgets.clear();
+        // So did every custom UI surface: its extension is gone with the
+        // process, so nothing can answer it (issue #76).
+        self.custom_ui.clear();
+        self.custom_ui_focus_pending = false;
+        self.is_compacting = false;
+        self.title_generating = false;
+        // A modal dialog or approval belonged to that process too: it can never
+        // be answered, and its keys would land in the next one.
+        self.dialog = None;
+        self.dialog_focus_pending = false;
+        self.approval = None;
+        self.approval_focus_pending = false;
+        // Queued messages were queued for a run that no longer exists, and the
+        // retry counter was counting that run's attempts.
+        self.reset_queue();
+        self.pending_follow_up = None;
+        self.retrying = false;
+        self.retry_detail = None;
         // A login in flight dies with its process; remember the provider so
         // the next `auth.list` can reconcile a completion that happened while
         // Orbit was reconnecting.
         self.auth.on_disconnect();
         self.quota.on_disconnect();
         self.reset_quota_entries();
+        // A `get_entries` still in flight dies with its process; without this the
+        // poll would stay blocked forever on a response that can never arrive.
+        self.quota_entries_inflight = false;
     }
 
     /// Forget the bridge cursor and schedule an immediate poll. Called when
@@ -528,10 +589,115 @@ impl OrbitApp {
         cx.notify();
     }
 
-    /// Stop then start the pi process (Restart button).
+    /// Stop then start the pi process (Restart button, and the automatic
+    /// respawn after an exit).
     pub(super) fn runtime_restart(&mut self, cx: &mut Context<Self>) {
         self.drop_client();
         self.runtime_start(cx);
+        self.reattach_current_session();
+    }
+
+    /// Point a just-spawned process back at the session the UI is showing. A
+    /// fresh launch opens a *new* session, so without this pi answers on an
+    /// empty one while the transcript still shows the old conversation and the
+    /// next prompt reaches a model with none of it — the same reattach the MCP
+    /// restart performs.
+    pub(super) fn reattach_current_session(&mut self) {
+        let Some(session_path) = self.current_session_path.clone() else {
+            return;
+        };
+        if self.client.is_none() {
+            // The spawn failed; its own banner says why.
+            return;
+        }
+        self.send(
+            CommandBody::SwitchSession {
+                session_path: session_path.to_string_lossy().into_owned(),
+            },
+            "switch_session",
+        );
+    }
+
+    /// Decide whether an exit is worth respawning on its own, consuming one
+    /// attempt when it is. A process that stayed up for
+    /// [`AUTO_RESTART_HEALTHY_UPTIME`] resets the count first: that is a new
+    /// failure, not a crash loop, so the budget refills.
+    pub(super) fn take_auto_restart(&mut self) -> bool {
+        if self
+            .runtime
+            .started_at
+            .is_some_and(|at| at.elapsed() >= AUTO_RESTART_HEALTHY_UPTIME)
+        {
+            self.auto_restarts = 0;
+        }
+        if self.auto_restarts >= AUTO_RESTART_LIMIT {
+            return false;
+        }
+        self.auto_restarts += 1;
+        true
+    }
+
+    /// Whether the queued respawn should still happen. A Start or Stop while
+    /// it waits clears `exited` or fills `client`, so the user wins.
+    pub(super) fn should_auto_restart_now(&self) -> bool {
+        self.client.is_none() && self.runtime.exited
+    }
+
+    /// Handle the active process exiting: respawn it on its own, or — once the
+    /// retry budget is spent — raise the banner that points at the Reconnect
+    /// button (issue #76).
+    ///
+    /// One death can arrive as two events (the writer reports a dead stdin, the
+    /// reader its EOF), so an exit that finds a respawn already queued is
+    /// ignored: it must neither spend a second attempt nor raise a banner over
+    /// a recovery that is already on its way.
+    pub(super) fn on_process_exited(&mut self, cx: &mut Context<Self>) {
+        if self.auto_restart_scheduled {
+            return;
+        }
+        if !self.take_auto_restart() {
+            self.set_error(self.process_exited_banner());
+            return;
+        }
+        self.auto_restart_scheduled = true;
+        cx.spawn(async move |this, cx| {
+            Timer::after(AUTO_RESTART_DELAY).await;
+            let _ = this.update(cx, |app, cx| {
+                app.auto_restart_scheduled = false;
+                if app.should_auto_restart_now() {
+                    app.runtime_restart(cx);
+                } else {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The banner for a dead process: pi's own last stderr line when it left
+    /// one, so "process exited" is not a dead end. A bundled `.app` is the
+    /// case that needs it most — a launch whose `PATH` cannot reach `node`
+    /// dies on the shim's `env: node: No such file or directory`, which used
+    /// to reach the user as nothing at all (issue #81).
+    ///
+    /// The line is redacted (MCP secret values never reach a banner) and
+    /// clipped, so a stack trace cannot take over the bar.
+    fn process_exited_banner(&self) -> String {
+        let detail = self
+            .client
+            .as_ref()
+            .and_then(|client| {
+                client
+                    .recent_stderr(8)
+                    .into_iter()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+            })
+            .map(|line| clip_stderr_line(&self.mcp.redact_text(line.trim())));
+        match detail {
+            Some(detail) => tr!("events.process_exited_detail", error = detail),
+            None => tr!("events.process_exited"),
+        }
     }
 
     /// Register the active client under the session file pi reports. The
@@ -577,4 +743,16 @@ impl OrbitApp {
         self.lives.retain(|_, parked| alive(parked));
         self.pending_parks.retain(alive);
     }
+}
+
+/// One stderr line, capped so a multi-kilobyte stack trace cannot take over
+/// the error banner.
+fn clip_stderr_line(line: &str) -> String {
+    const MAX_CHARS: usize = 200;
+    if line.chars().count() <= MAX_CHARS {
+        return line.to_string();
+    }
+    let mut out: String = line.chars().take(MAX_CHARS).collect();
+    out.push('…');
+    out
 }

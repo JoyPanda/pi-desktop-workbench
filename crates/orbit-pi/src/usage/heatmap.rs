@@ -43,6 +43,13 @@ const ROW_LABEL_W: f32 = 28.;
 const MONTH_STRIP_H: f32 = 16.;
 const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const TOOLTIP_W: f32 = 184.;
+/// The readout card's line heights, fixed so the card's height is known
+/// before it is placed. The card is clamped to the calendar band, so its size
+/// has to be arithmetic rather than a guess at the text metrics.
+const LINE_H: f32 = 17.;
+const HEADER_H: f32 = 19.;
+/// The gap between the hovered cell and the readout card.
+const CARD_GAP: f32 = 8.;
 
 /// The page's hover callback: the day under the pointer, or nothing.
 type HoverFn = Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>;
@@ -395,8 +402,54 @@ fn day_cell(
     cell.into_any_element()
 }
 
-/// The hover readout, anchored to the hovered cell and flipped at the grid's
-/// edges so it never escapes the card.
+/// The grid's width: the label column, then one cell column per week.
+fn grid_width(geometry: &Geometry, weeks: usize) -> f32 {
+    ROW_LABEL_W + weeks as f32 * geometry.w + (weeks as f32 - 1.).max(0.) * geometry.gap
+}
+
+/// The band's height: the month strip, then seven rows of cells.
+fn band_height(geometry: &Geometry) -> f32 {
+    MONTH_STRIP_H + 7. * geometry.h + 6. * geometry.gap
+}
+
+/// Where the readout card goes, in the band's coordinates.
+///
+/// The card sits **beside** the hovered cell — to the right when the grid has
+/// room, else to the left — so the cell the pointer is on is never hidden by
+/// the card, and it is clamped inside the band so it can never paint over the
+/// legend below the grid.
+fn place_readout(
+    week: usize,
+    row: usize,
+    weeks: usize,
+    geometry: &Geometry,
+    card_w: f32,
+    card_h: f32,
+) -> (f32, f32) {
+    let cell_x = ROW_LABEL_W + week as f32 * (geometry.w + geometry.gap);
+    let cell_y = MONTH_STRIP_H + row as f32 * (geometry.h + geometry.gap);
+    let grid_w = grid_width(geometry, weeks);
+    let band_h = band_height(geometry);
+
+    // Beside the cell: right when the grid has room for it, else left. Only a
+    // grid too narrow for the card puts it over the cell.
+    let right = cell_x + geometry.w + CARD_GAP;
+    let left_of_cell = cell_x - CARD_GAP - card_w;
+    let left = if right + card_w <= grid_w {
+        right
+    } else if left_of_cell >= 0. {
+        left_of_cell
+    } else {
+        (cell_x + geometry.w / 2. - card_w / 2.).clamp(0., (grid_w - card_w).max(0.))
+    };
+
+    // Vertically centred on the cell, then clamped into the band.
+    let top = (cell_y + geometry.h / 2. - card_h / 2.).clamp(0., (band_h - card_h).max(0.));
+    (left, top)
+}
+
+/// The hover readout, anchored beside the hovered cell and clamped to the
+/// calendar band, so it never escapes the card or covers the legend.
 fn day_readout(
     day: &super::aggregate::DayCell,
     metric: ChartMetric,
@@ -430,56 +483,65 @@ fn day_readout(
         rows.push((tr!("usage.metric_errors"), format::exact(totals.errors)));
     }
 
+    // The band is the hard limit on the card's height: a short calendar drops
+    // the figures it cannot show rather than growing past the grid.
+    let pad = f32::from(DynamicSpacing::Base08.px(&theme)) * 2.;
+    let gap = f32::from(DynamicSpacing::Base02.px(&theme));
+    let band_h = band_height(geometry);
+    let fits = ((band_h - pad - HEADER_H) / (LINE_H + gap)).floor().max(0.) as usize;
+    let shown = &rows[..rows.len().min(fits)];
+
     let mut body = div()
         .flex()
         .flex_col()
         .gap(DynamicSpacing::Base02.px(&theme))
         .child(
             div()
+                .h(px(HEADER_H))
                 .text_size(TextSize::Small.px(&theme))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text_primary)
                 .child(stamp_label(day.start_ms, Granularity::Day)),
         );
-    for (label, value) in rows {
+    for (label, value) in shown {
         body = body.child(
             div()
+                .h(px(LINE_H))
                 .flex()
                 .items_center()
                 .justify_between()
                 .gap(DynamicSpacing::Base12.px(&theme))
                 .whitespace_nowrap()
                 .text_size(TextSize::Small.px(&theme))
-                .child(div().flex_none().text_color(theme.text_muted).child(label))
-                .child(div().min_w_0().text_color(theme.text_primary).child(value)),
+                .child(div().flex_none().text_color(theme.text_muted).child(label.clone()))
+                .child(
+                    div()
+                        .min_w_0()
+                        .text_color(theme.text_primary)
+                        .child(value.clone()),
+                ),
         );
     }
 
-    let card = div()
+    let grid_w = grid_width(geometry, weeks);
+    let card_w = TOOLTIP_W.min(grid_w.max(1.));
+    let card_h = pad + HEADER_H + shown.len() as f32 * (LINE_H + gap);
+    let (left, top) = place_readout(week, row, weeks, geometry, card_w, card_h);
+
+    div()
         .absolute()
-        .w(px(TOOLTIP_W))
+        .debug_selector(|| "usage-heatmap-readout".into())
+        .w(px(card_w))
+        .h(px(card_h))
         .p(DynamicSpacing::Base08.px(&theme))
         .elevation_2(&theme)
         .flex()
         .flex_col()
         .child(body)
-        .occlude();
-
-    // The card is placed against the grid and clamped to it, so a hovered cell
-    // at either edge — or a very wide cell — never pushes the readout off the
-    // card. It sits below the cell for the top rows and above it for the bottom.
-    let grid_w =
-        ROW_LABEL_W + weeks as f32 * geometry.w + (weeks as f32 - 1.).max(0.) * geometry.gap;
-    let center_x = ROW_LABEL_W + week as f32 * (geometry.w + geometry.gap) + geometry.w / 2.;
-    let left = (center_x - TOOLTIP_W / 2.).clamp(0., (grid_w - TOOLTIP_W).max(0.));
-    let box_h = MONTH_STRIP_H + 7. * geometry.h + 6. * geometry.gap;
-    let cell_top = MONTH_STRIP_H + row as f32 * (geometry.h + geometry.gap);
-    let card = if row >= 4 {
-        card.bottom(px(box_h - cell_top + 6.))
-    } else {
-        card.top(px(cell_top + geometry.h + 6.))
-    };
-    card.left(px(left)).into_any_element()
+        .occlude()
+        .left(px(left))
+        .top(px(top))
+        .into_any_element()
 }
 
 /// "Less ▢▢▢▢▢ More", the shade key.
@@ -500,6 +562,7 @@ fn legend(theme: Theme) -> AnyElement {
     }
     div()
         .pt(DynamicSpacing::Base08.px(&theme))
+        .debug_selector(|| "usage-heatmap-legend".into())
         .w_full()
         .flex()
         .items_center()
@@ -547,7 +610,6 @@ mod tests {
 
     #[test]
     fn geometry_always_fills_the_width() {
-        // Whatever the span, the grid reaches the card's right edge.
         for (width, weeks) in [
             (1100., 53),
             (1100., 26),
@@ -570,5 +632,144 @@ mod tests {
         let ultra = geometry(2600., 53);
         assert_eq!(ultra.h, MAX_CELL_H);
         assert!(ultra.w > ultra.h);
+    }
+
+    /// The readout card must never leave the calendar band: the legend sits
+    /// right below it, and a card that spills past the band paints over the
+    /// legend and the section below it.
+    #[test]
+    fn the_readout_stays_inside_the_calendar_band() {
+        for width in [1400., 1100., 700., 420.] {
+            for weeks in [53, 26, 8, 1] {
+                let geometry = geometry(width, weeks);
+                let grid_w = grid_width(&geometry, weeks);
+                let band_h = band_height(&geometry);
+                for card_h in [50f32, 92., 130.] {
+                    for week in 0..weeks {
+                        for row in 0..7 {
+                            let (left, top) = place_readout(
+                                week,
+                                row,
+                                weeks,
+                                &geometry,
+                                TOOLTIP_W.min(grid_w),
+                                card_h.min(band_h),
+                            );
+                            assert!(top >= 0., "above the band: {top}");
+                            assert!(
+                                top + card_h.min(band_h) <= band_h + 0.01,
+                                "past the band: {top} + {card_h} > {band_h}"
+                            );
+                            assert!(left >= 0., "left of the grid: {left}");
+                            assert!(
+                                left + TOOLTIP_W.min(grid_w) <= grid_w + 0.01,
+                                "right of the grid: {left} + {card_w} > {grid_w}",
+                                card_w = TOOLTIP_W.min(grid_w)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The hovered cell stays visible: the card sits beside it, never on it.
+    #[test]
+    fn the_readout_sits_beside_the_hovered_cell() {
+        let weeks = 53;
+        let geometry = geometry(1100., weeks);
+        let grid_w = grid_width(&geometry, weeks);
+        let card_w = TOOLTIP_W;
+        for week in [0usize, 1, 26, weeks - 1] {
+            for row in 0..7 {
+                let (left, _top) = place_readout(week, row, weeks, &geometry, card_w, 92.);
+                let cell_x = ROW_LABEL_W + week as f32 * (geometry.w + geometry.gap);
+                let cell_right = cell_x + geometry.w;
+                // Either the card starts after the cell, or it ends before it.
+                let clear = left >= cell_right || left + card_w <= cell_x;
+                assert!(
+                    clear,
+                    "week {week} row {row}: card at {left} covers the cell at {cell_x}"
+                );
+                assert!(left >= 0. && left + card_w <= grid_w, "off the grid");
+            }
+        }
+    }
+
+    /// The rendered card must not reach the legend below the grid. This is the
+    /// regression the placement was rewritten for: a hovered day in a middle
+    /// row used to push the readout past the bottom of the band, where it
+    /// painted straight over the "Less ▢▢▢ More" key.
+    #[gpui::test]
+    fn the_readout_never_covers_the_legend(cx: &mut gpui::TestAppContext) {
+        use gpui::prelude::*;
+        use gpui::{point, px, AvailableSpace, Context, Render, Window};
+
+        use crate::theme::ThemeId;
+
+        /// The calendar, rendered with one day hovered.
+        struct CalendarProbe {
+            calendar: DailyCalendar,
+            hover: Option<usize>,
+            theme: Theme,
+            width: f32,
+        }
+
+        impl Render for CalendarProbe {
+            fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(self.width)).child(super::calendar(
+                    "usage-calendar",
+                    &self.calendar,
+                    ChartMetric::Tokens,
+                    self.hover,
+                    None,
+                    self.theme,
+                    self.width,
+                    |_, _, _| {},
+                    |_, _, _| {},
+                ))
+            }
+        }
+
+        let theme = Theme::for_id(ThemeId::Orbit);
+        // 53 weeks of days, every one in range, so the grid is a full year.
+        let days: Vec<super::super::aggregate::DayCell> = (0..53 * 7)
+            .map(|ix| super::super::aggregate::DayCell {
+                start_ms: ix as i64 * 86_400_000,
+                totals: super::super::aggregate::Totals::default(),
+                in_range: true,
+            })
+            .collect();
+        let calendar = DailyCalendar { start_ms: 0, days };
+        let width = 1100.;
+        let cx = cx.add_empty_window();
+
+        // Every row of the grid, including the middle ones that used to
+        // overflow.
+        for row in 0..7 {
+            let hover = Some(20 * 7 + row);
+            let _ = cx.draw(
+                point(px(0.), px(0.)),
+                AvailableSpace::min_size(),
+                |_, cx| {
+                    cx.new(|_| CalendarProbe {
+                        calendar: calendar.clone(),
+                        hover,
+                        theme,
+                        width,
+                    })
+                },
+            );
+            let readout = cx
+                .debug_bounds("usage-heatmap-readout")
+                .expect("the readout is laid out");
+            let legend = cx
+                .debug_bounds("usage-heatmap-legend")
+                .expect("the legend is laid out");
+            assert!(
+                readout.bottom() <= legend.top(),
+                "row {row}: the readout covers the legend ({readout:?} vs {legend:?})"
+            );
+        }
     }
 }

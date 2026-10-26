@@ -2,10 +2,12 @@
 //!
 //! Colors are semantic roles (backgrounds, text, borders, transcript
 //! surfaces) rather than raw steps, so every paint site reads from one
-//! place. A [`ThemeId`] names a palette; [`AppearancePrefs`] chooses which
-//! light or dark palette to use, optionally following the system. The UI
-//! face is Zed's bundled IBM Plex Sans (`.ZedSans`); code surfaces use
-//! Zed's Lilex (`.ZedMono`).
+//! place. A [`ThemeId`] names a palette; [`DesignSystem`] names a visual
+//! language; [`AppearancePrefs`] chooses the system, which light or dark
+//! palette to use, and optionally follows the system appearance. Classic is
+//! the existing catalog; Operational is the opt-in Restrained Operational
+//! Minimalism layer. The UI face is Zed's bundled IBM Plex Sans
+//! (`.ZedSans`); code surfaces use Zed's Lilex (`.ZedMono`).
 
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -29,6 +31,50 @@ pub enum ThemeMode {
     Light,
 }
 
+/// A visual language, independent of light/dark appearance. Existing palettes
+/// are [`DesignSystem::Classic`]; [`DesignSystem::Operational`] is the opt-in
+/// Restrained Operational Minimalism system. The choice is persisted with the
+/// appearance preferences, so switching systems restores the previous palette
+/// choice within each system.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum DesignSystem {
+    /// Orbit's existing palette and token geometry. The default; unchanged.
+    #[default]
+    Classic,
+    /// Near-black neutral surfaces, lime interaction accent, tighter radii,
+    /// flatter elevation, and 11px captions.
+    Operational,
+}
+
+impl DesignSystem {
+    pub const ALL: [Self; 2] = [Self::Classic, Self::Operational];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Operational => "operational",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "classic" | "legacy" | "orbit" => Some(Self::Classic),
+            "operational" | "restrained" | "operational-minimalism" => Some(Self::Operational),
+            _ => None,
+        }
+    }
+
+    /// The palette this system uses for `mode`.
+    pub fn theme_id(self, mode: ThemeMode) -> ThemeId {
+        match (self, mode) {
+            (Self::Classic, ThemeMode::Dark) => ThemeId::OrbitAzure,
+            (Self::Classic, ThemeMode::Light) => ThemeId::OrbitAzureLight,
+            (Self::Operational, ThemeMode::Dark) => ThemeId::Operational,
+            (Self::Operational, ThemeMode::Light) => ThemeId::OperationalLight,
+        }
+    }
+}
+
 /// One of the selectable Orbit palettes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThemeId {
@@ -49,22 +95,32 @@ pub enum ThemeId {
     FlexokiLight,
     /// Light counterpart to [`Self::OrbitAzure`].
     OrbitAzureLight,
+    /// Restrained Operational Minimalism, dark: near-black canvas, neutral
+    /// charcoal layers, lime interaction accent.
+    Operational,
+    /// Restrained Operational Minimalism, light: warm off-white canvas, white
+    /// panels, olive interaction accent.
+    OperationalLight,
 }
 
 impl ThemeId {
     /// Every palette the app ships, dark first, in the order the settings
-    /// dropdown paints them.
-    pub const ALL: [ThemeId; 10] = [
+    /// dropdown paints them. The settings dropdown filters this list to the
+    /// active [`DesignSystem`]; this catalog stays complete so palette
+    /// invariants cover every shipped color set.
+    pub const ALL: [ThemeId; 12] = [
         Self::Orbit,
         Self::OrbitDarker,
         Self::OrbitCobalt,
         Self::OrbitAzure,
         Self::Flexoki,
+        Self::Operational,
         Self::OrbitLight,
         Self::OrbitAzureLight,
         Self::OrbitPaper,
         Self::OrbitContrast,
         Self::FlexokiLight,
+        Self::OperationalLight,
     ];
 
     /// Persisted key; also accepts legacy theme names (mapped to Orbit).
@@ -80,6 +136,16 @@ impl ThemeId {
             Self::Flexoki => "flexoki",
             Self::FlexokiLight => "flexoki-light",
             Self::OrbitAzureLight => "orbit-azure-light",
+            Self::Operational => "operational",
+            Self::OperationalLight => "operational-light",
+        }
+    }
+
+    /// The design system this palette belongs to.
+    pub fn design_system(self) -> DesignSystem {
+        match self {
+            Self::Operational | Self::OperationalLight => DesignSystem::Operational,
+            _ => DesignSystem::Classic,
         }
     }
 
@@ -169,6 +235,10 @@ impl ThemeId {
             }
             "flexoki" | "flexoki-dark" => Some(Self::Flexoki),
             "flexoki-light" => Some(Self::FlexokiLight),
+            "operational" | "operational-dark" | "operational-minimalism" => {
+                Some(Self::Operational)
+            }
+            "operational-light" | "operational-minimalism-light" => Some(Self::OperationalLight),
             _ => None,
         }
     }
@@ -186,6 +256,8 @@ impl ThemeId {
             Self::Flexoki => "Flexoki",
             Self::FlexokiLight => "Flexoki Light",
             Self::OrbitAzureLight => "Orbit Azure Light",
+            Self::Operational => "Operational",
+            Self::OperationalLight => "Operational Light",
         }
     }
 
@@ -195,12 +267,14 @@ impl ThemeId {
             | Self::OrbitAzureLight
             | Self::OrbitPaper
             | Self::OrbitContrast
-            | Self::FlexokiLight => ThemeMode::Light,
+            | Self::FlexokiLight
+            | Self::OperationalLight => ThemeMode::Light,
             Self::Orbit
             | Self::OrbitAzure
             | Self::OrbitDarker
             | Self::OrbitCobalt
-            | Self::Flexoki => ThemeMode::Dark,
+            | Self::Flexoki
+            | Self::Operational => ThemeMode::Dark,
         }
     }
 }
@@ -217,6 +291,9 @@ impl ThemeId {
 pub struct Theme {
     pub theme_id: ThemeId,
     pub mode: ThemeMode,
+    /// Active visual language. Existing palettes resolve to
+    /// [`DesignSystem::Classic`], so their paint is unchanged.
+    pub design_system: DesignSystem,
     /// UI customization (General settings): language + font sizes.
     pub ui: UiPrefs,
 
@@ -254,9 +331,12 @@ pub struct Theme {
     pub accent_fg: Hsla,
     /// Accent-colored text/icons on canvas or panel surfaces.
     pub accent_text: Hsla,
-    /// Selected navigation/list row wash.
+    /// Selected navigation/list row wash. Classic palettes share this with
+    /// [`Self::selection`]; Operational gives rows their own olive-tinted step.
+    pub surface_selected: Hsla,
+    /// Text selection and find-match wash (terminal, editor, transcript).
     pub selection: Hsla,
-    /// Foreground on [`Self::selection`].
+    /// Foreground on [`Self::surface_selected`] and [`Self::selection`].
     pub selection_fg: Hsla,
     /// Keyboard focus indicator.
     pub focus_ring: Hsla,
@@ -712,6 +792,8 @@ struct Palette {
     hover: u32,
     active: u32,
     selection: u32,
+    /// Selected navigation/list row wash. Classic palettes mirror `selection`.
+    selected_surface: u32,
     selection_fg: u32,
     border: u32,
     border_subtle: u32,
@@ -760,6 +842,7 @@ const ORBIT: Palette = Palette {
     hover: 0x262626,
     active: 0x2A2A2A,
     selection: 0x282828,
+    selected_surface: 0x282828,
     selection_fg: 0xE2E2E2,
     border: 0x2A2A2A,
     border_subtle: 0x232323,
@@ -806,6 +889,7 @@ const ORBIT_DARKER: Palette = Palette {
     hover: 0x1E1E1E,
     active: 0x232323,
     selection: 0x222A38,
+    selected_surface: 0x222A38,
     selection_fg: 0xF0F0F0,
     border: 0x252525,
     border_subtle: 0x1B1B1B,
@@ -852,6 +936,7 @@ const ORBIT_COBALT: Palette = Palette {
     hover: 0x242424,
     active: 0x292929,
     selection: 0x1D2B3F,
+    selected_surface: 0x1D2B3F,
     selection_fg: 0xF1F1F1,
     border: 0x2A2A2A,
     border_subtle: 0x202020,
@@ -901,6 +986,7 @@ const ORBIT_AZURE: Palette = Palette {
     // One step below the reference #303A4B so accent-colored labels on the
     // selected row still clear 4.5:1.
     selection: 0x2F3949,
+    selected_surface: 0x2F3949,
     selection_fg: 0xE5E5E5,
     border: 0x343434,
     border_subtle: 0x292929,
@@ -947,6 +1033,7 @@ const ORBIT_AZURE_LIGHT: Palette = Palette {
     hover: 0xEBEBEB,
     active: 0xE2E2E2,
     selection: 0xE8EEFA,
+    selected_surface: 0xE8EEFA,
     selection_fg: 0x171717,
     border: 0xE5E5E5,
     border_subtle: 0xEEEEEE,
@@ -993,6 +1080,7 @@ const ORBIT_LIGHT: Palette = Palette {
     hover: 0xE8E8E8,
     active: 0xE2E2E2,
     selection: 0xE5E5E5,
+    selected_surface: 0xE5E5E5,
     selection_fg: 0x242424,
     border: 0xE2E2E2,
     border_subtle: 0xECECEC,
@@ -1039,6 +1127,7 @@ const ORBIT_PAPER: Palette = Palette {
     hover: 0xE3E3E7,
     active: 0xDBDBE0,
     selection: 0xE3E9F7,
+    selected_surface: 0xE3E9F7,
     selection_fg: 0x232327,
     border: 0xE0E0E4,
     border_subtle: 0xE8E8EB,
@@ -1085,6 +1174,7 @@ const ORBIT_CONTRAST: Palette = Palette {
     hover: 0xE6E6E6,
     active: 0xDBDBDB,
     selection: 0xE4EBFA,
+    selected_surface: 0xE4EBFA,
     selection_fg: 0x0F0F0F,
     border: 0xC9C9C9,
     border_subtle: 0xE2E2E2,
@@ -1130,6 +1220,7 @@ const FLEXOKI_LIGHT: Palette = Palette {
     hover: 0xDAD8CE,
     active: 0xCECDC3,
     selection: 0xE7E4D6,
+    selected_surface: 0xE7E4D6,
     selection_fg: 0x282726,
     border: 0xDAD8CE,
     border_subtle: 0xE6E4D9,
@@ -1175,6 +1266,7 @@ const FLEXOKI: Palette = Palette {
     hover: 0x2D2B2B,
     active: 0x3E3B3B,
     selection: 0x26242C,
+    selected_surface: 0x26242C,
     selection_fg: 0xCECDC3,
     border: 0x2D2C2A,
     border_subtle: 0x252221,
@@ -1211,6 +1303,105 @@ const FLEXOKI: Palette = Palette {
     syn_operator: 0xD14D41,
 };
 
+/// Operational dark: Restrained Operational Minimalism. A near-black canvas,
+/// neutral charcoal layers, and a lime interaction accent. The muted ink is a
+/// step lighter than the reference draft so it clears AA on elevated panels;
+/// the row-selection wash is its own olive-tinted step, separate from the
+/// blue-gray text-selection wash.
+const OPERATIONAL: Palette = Palette {
+    background: 0x080A0B,
+    surface: 0x101112,
+    surface_secondary: 0x141618,
+    elevated: 0x181A1D,
+    hover: 0x1B1D20,
+    active: 0x232629,
+    selection: 0x303A4B,
+    selected_surface: 0x1B2115,
+    selection_fg: 0xE6E7E8,
+    border: 0x25272A,
+    border_subtle: 0x1B1D20,
+    text: 0xE6E7E8,
+    text_secondary: 0xA2A4A7,
+    text_muted: 0x8A8C90,
+    text_disabled: 0x5C5F63,
+    success: 0x36C979,
+    error: 0xF0444E,
+    error_hover: 0xFF6B73,
+    error_fg: 0x171A11,
+    accent: 0xC5F34A,
+    accent_hover: 0xD4FA6A,
+    accent_pressed: 0xACD936,
+    accent_fg: 0x171A11,
+    accent_text: 0xC5F34A,
+    focus_ring: 0xC5F34A,
+    action: 0xC5F34A,
+    action_hover: 0xD4FA6A,
+    action_pressed: 0xACD936,
+    action_fg: 0x171A11,
+    warning: 0xF5A623,
+    info: 0x65A4E8,
+    assistant_text: 0xE6E7E8,
+    code_bg: 0x0C0E0F,
+    code_text: 0xE6E7E8,
+    syn_string: 0x36C979,
+    syn_number: 0xF5B95C,
+    syn_function: 0xE6E7E8,
+    syn_type: 0xC6C9CD,
+    syn_comment: 0x8A8C90,
+    syn_literal: 0xD4FA6A,
+    syn_meta: 0xF07A82,
+    syn_operator: 0xA0A2A5,
+};
+
+/// Operational light: the same hierarchy on a warm off-white canvas. Panels
+/// are white and lift above the canvas; the olive accent and its darker text
+/// variant keep labels readable on both white and the selected-row wash.
+const OPERATIONAL_LIGHT: Palette = Palette {
+    background: 0xF4F4F1,
+    surface: 0xFFFFFF,
+    surface_secondary: 0xFAFAF8,
+    // A hair off white so a light toggle knob stays visible on its off track.
+    elevated: 0xF7F7F2,
+    hover: 0xEEEEEA,
+    active: 0xE4E5DF,
+    selection: 0xE1E9D1,
+    selected_surface: 0xEEF3DF,
+    selection_fg: 0x24291C,
+    border: 0xE1E2DC,
+    border_subtle: 0xECEDE7,
+    text: 0x171916,
+    text_secondary: 0x50544D,
+    text_muted: 0x6A6E66,
+    text_disabled: 0x989B93,
+    success: 0x187847,
+    error: 0xC4313D,
+    error_hover: 0xD63B47,
+    error_fg: 0xFFFFFF,
+    accent: 0x5C791C,
+    accent_hover: 0x4D6716,
+    accent_pressed: 0x405611,
+    accent_fg: 0xFFFFFF,
+    accent_text: 0x4D6716,
+    focus_ring: 0x5C791C,
+    action: 0x5C791C,
+    action_hover: 0x4D6716,
+    action_pressed: 0x405611,
+    action_fg: 0xFFFFFF,
+    warning: 0x94600D,
+    info: 0x2864A8,
+    assistant_text: 0x171916,
+    code_bg: 0xEEEDE5,
+    code_text: 0x171916,
+    syn_string: 0x187847,
+    syn_number: 0x94600D,
+    syn_function: 0x171916,
+    syn_type: 0x50544D,
+    syn_comment: 0x6A6E66,
+    syn_literal: 0x4D6716,
+    syn_meta: 0xC4313D,
+    syn_operator: 0x50544D,
+};
+
 fn palette(id: ThemeId) -> Palette {
     match id {
         ThemeId::Orbit => ORBIT,
@@ -1223,6 +1414,8 @@ fn palette(id: ThemeId) -> Palette {
         ThemeId::Flexoki => FLEXOKI,
         ThemeId::FlexokiLight => FLEXOKI_LIGHT,
         ThemeId::OrbitAzureLight => ORBIT_AZURE_LIGHT,
+        ThemeId::Operational => OPERATIONAL,
+        ThemeId::OperationalLight => OPERATIONAL_LIGHT,
     }
 }
 
@@ -1322,6 +1515,7 @@ impl Theme {
         Self {
             theme_id: id,
             mode,
+            design_system: id.design_system(),
             ui,
             background: hex(p.background),
             surface: hex(p.surface),
@@ -1340,6 +1534,7 @@ impl Theme {
             accent_pressed: hex(p.accent_pressed),
             accent_fg: hex(p.accent_fg),
             accent_text: hex(p.accent_text),
+            surface_selected: hex(p.selected_surface),
             selection: hex(p.selection),
             selection_fg: hex(p.selection_fg),
             focus_ring: hex(p.focus_ring),
@@ -1485,6 +1680,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn design_system_keys_round_trip() {
+        for system in DesignSystem::ALL {
+            assert_eq!(DesignSystem::parse(system.as_str()), Some(system));
+            assert_eq!(system.theme_id(ThemeMode::Dark).design_system(), system);
+            assert_eq!(system.theme_id(ThemeMode::Light).design_system(), system);
+        }
+    }
+
+    #[test]
     fn parse_theme_id() {
         assert_eq!(ThemeId::parse("orbit"), Some(ThemeId::Orbit));
         assert_eq!(ThemeId::parse("orbit-light"), Some(ThemeId::OrbitLight));
@@ -1513,6 +1717,17 @@ mod tests {
         assert_eq!(ThemeId::parse("orbit-minimal"), Some(ThemeId::OrbitCobalt));
         assert_eq!(ThemeId::parse("codex"), Some(ThemeId::OrbitCobalt));
         assert_eq!(ThemeId::OrbitCobalt.as_str(), "orbit-cobalt");
+        assert_eq!(ThemeId::parse("operational"), Some(ThemeId::Operational));
+        assert_eq!(
+            ThemeId::parse("operational-dark"),
+            Some(ThemeId::Operational)
+        );
+        assert_eq!(
+            ThemeId::parse("operational-light"),
+            Some(ThemeId::OperationalLight)
+        );
+        assert_eq!(ThemeId::Operational.as_str(), "operational");
+        assert_eq!(ThemeId::OperationalLight.as_str(), "operational-light");
         // Retired editor themes still load: dark onto Orbit, light onto Orbit
         // Light.
         assert_eq!(ThemeId::parse("dracula"), Some(ThemeId::Orbit));
@@ -1577,11 +1792,13 @@ mod tests {
                 "Orbit Cobalt",
                 "Orbit Azure",
                 "Flexoki",
+                "Operational",
                 "Orbit Light",
                 "Orbit Azure Light",
                 "Orbit Paper",
                 "Orbit Contrast",
                 "Flexoki Light",
+                "Operational Light",
             ]
         );
     }
@@ -1602,6 +1819,59 @@ mod tests {
         let (l1, l2) = (rel_lum(a), rel_lum(b));
         let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
         (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// A built theme's ink against a built theme's surface. The palette tests
+    /// below use the raw hex `Palette`; a color *derived* at build time (the
+    /// sidebar's accent-leaning project ink) can only be checked on the resolved
+    /// `Theme`.
+    fn theme_contrast(ink: Hsla, surface: Hsla) -> f64 {
+        let lum = |color: Hsla| {
+            let to_lin = |v: f32| -> f64 {
+                let v = v.clamp(0.0, 1.0) as f64;
+                if v <= 0.04045 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            let rgba = gpui::Rgba::from(color);
+            0.2126 * to_lin(rgba.r) + 0.7152 * to_lin(rgba.g) + 0.0722 * to_lin(rgba.b)
+        };
+        let (l1, l2) = (lum(ink), lum(surface));
+        let (hi, lo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// The sidebar's project ink is derived, not authored: primary ink leaned
+    /// toward the accent. Both inputs clear AA, and a shortest-arc blend of two
+    /// inks lands between them, so the derived name ink must clear AA too — on
+    /// the sidebar surface and on the hover pill it is painted over.
+    #[test]
+    fn the_project_name_ink_stays_readable_in_every_palette() {
+        for id in ThemeId::ALL {
+            let theme = Theme::for_id(id);
+            let ink = crate::workspace_mark::default_label_ink(&theme);
+            // Untinted is the common case; a tinted project is the user's own
+            // choice and is checked against the same floor.
+            for (label, ink) in [
+                ("untinted", ink),
+                (
+                    "tinted",
+                    crate::workspace_mark::label_ink(&theme, Some("accent")),
+                ),
+            ] {
+                for (surface_label, surface) in
+                    [("sidebar", theme.surface), ("hover", theme.surface_hover)]
+                {
+                    let ratio = theme_contrast(ink, surface);
+                    assert!(
+                        ratio >= 4.5,
+                        "{id:?}: {label} project name on {surface_label} is {ratio:.2}:1"
+                    );
+                }
+            }
+        }
     }
 
     /// Every palette must keep its foreground readable against the surfaces
@@ -1771,6 +2041,7 @@ mod tests {
                 ("surface_active", t.surface_active),
                 ("border", t.border),
                 ("border_subtle", t.border_subtle),
+                ("surface_selected", t.surface_selected),
                 ("text_primary", t.text_primary),
                 ("text_secondary", t.text_secondary),
                 ("text_muted", t.text_muted),
@@ -1875,18 +2146,23 @@ mod tests {
         for id in ThemeId::ALL {
             let p = palette(id);
             let c = |a, b| contrast(a, b);
-            assert!(
-                c(p.text_secondary, p.selection) >= 4.5,
-                "{id:?}: secondary text on the selection wash"
-            );
-            assert!(
-                c(p.selection_fg, p.selection) >= 7.0,
-                "{id:?}: primary ink on the selection wash"
-            );
-            assert!(
-                c(p.accent_text, p.selection) >= 4.5,
-                "{id:?}: accent text on the selection wash"
-            );
+            for (label, wash) in [
+                ("selection", p.selection),
+                ("selected row", p.selected_surface),
+            ] {
+                assert!(
+                    c(p.text_secondary, wash) >= 4.5,
+                    "{id:?}: secondary text on the {label} wash"
+                );
+                assert!(
+                    c(p.selection_fg, wash) >= 7.0,
+                    "{id:?}: primary ink on the {label} wash"
+                );
+                assert!(
+                    c(p.accent_text, wash) >= 4.5,
+                    "{id:?}: accent text on the {label} wash"
+                );
+            }
         }
     }
 
@@ -1917,6 +2193,28 @@ mod tests {
                     assert!(
                         l(p.active) >= l(p.hover),
                         "{id:?}: active must sit above hover"
+                    );
+                }
+                ThemeMode::Light if id.design_system() == DesignSystem::Operational => {
+                    // Operational light is paper-canvas + white panels: the
+                    // raised step is the brightest plane, so it lifts off the
+                    // warm canvas instead of recessing into it. The interaction
+                    // steps still recess from there.
+                    assert!(
+                        l(p.elevated) > l(p.background),
+                        "{id:?}: raised must lift off the paper canvas"
+                    );
+                    assert!(
+                        l(p.elevated) <= l(p.surface),
+                        "{id:?}: the primary panel must stay the brightest plane"
+                    );
+                    assert!(
+                        l(p.hover) <= l(p.elevated),
+                        "{id:?}: hover must recess below raised"
+                    );
+                    assert!(
+                        l(p.active) <= l(p.hover),
+                        "{id:?}: active must recess below hover"
                     );
                 }
                 ThemeMode::Light => {
@@ -1952,6 +2250,21 @@ mod tests {
 
     /// Every palette must carry a real accent hue (the composer derives
     /// `@file` by inverting it), so a grey accent is a defect.
+    /// Classic palettes must stay pixel-identical after the row-selection
+    /// role split: their selected-row wash is the old `selection` color.
+    #[test]
+    fn classic_row_selection_matches_the_existing_wash() {
+        for id in ThemeId::ALL {
+            if id.design_system() == DesignSystem::Classic {
+                let p = palette(id);
+                assert_eq!(
+                    p.selected_surface, p.selection,
+                    "{id:?}: Classic row selection drifted"
+                );
+            }
+        }
+    }
+
     #[test]
     fn accent_carries_chroma() {
         for id in ThemeId::ALL {
@@ -1975,6 +2288,8 @@ mod tests {
         assert_eq!(ThemeId::FlexokiLight.appearance(), ThemeMode::Light);
         assert_eq!(ThemeId::OrbitAzure.appearance(), ThemeMode::Dark);
         assert_eq!(ThemeId::OrbitAzureLight.appearance(), ThemeMode::Light);
+        assert_eq!(ThemeId::Operational.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeId::OperationalLight.appearance(), ThemeMode::Light);
         assert_eq!(ThemeId::Orbit.label(), "Orbit");
         assert_eq!(ThemeId::OrbitLight.label(), "Orbit Light");
         assert_eq!(ThemeId::OrbitPaper.label(), "Orbit Paper");
@@ -1985,6 +2300,13 @@ mod tests {
         assert_eq!(ThemeId::FlexokiLight.label(), "Flexoki Light");
         assert_eq!(ThemeId::OrbitAzure.label(), "Orbit Azure");
         assert_eq!(ThemeId::OrbitAzureLight.label(), "Orbit Azure Light");
+        assert_eq!(ThemeId::Operational.label(), "Operational");
+        assert_eq!(ThemeId::OperationalLight.label(), "Operational Light");
+        assert_eq!(
+            ThemeId::Operational.design_system(),
+            DesignSystem::Operational
+        );
+        assert_eq!(ThemeId::Orbit.design_system(), DesignSystem::Classic);
         // The reverted default is the ember identity; Azure is the blue design.
         assert_eq!(
             Theme::for_id(ThemeId::Orbit).accent,

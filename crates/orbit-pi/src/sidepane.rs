@@ -36,7 +36,8 @@ use crate::git;
 use crate::review::{self, ExpansionDirection, GapPosition, LineKind, Snapshot, Source};
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    context_menu, input, picker, popover, ButtonSize, DynamicSpacing, IconSize, Radius, TextSize,
+    context_menu, input, panel, picker, popover, ButtonSize, DynamicSpacing, IconSize, Radius,
+    TextSize,
 };
 use crate::theme::{self, Theme, ThemeMode};
 use crate::usage::tooltip::Tooltip;
@@ -2062,7 +2063,7 @@ impl SidePane {
                             .items_center()
                             .gap(DynamicSpacing::Base06.px(&theme))
                             .cursor_pointer()
-                            .when(selected, |row| row.bg(theme.selection))
+                            .when(selected, |row| row.bg(theme.surface_selected))
                             .when(!selected && cursor, |row| row.bg(theme.surface_hover))
                             .when(!selected && !cursor, |row| {
                                 row.hover(|row| row.bg(theme.surface_hover))
@@ -2188,7 +2189,7 @@ fn source_row(
     .h(picker::entry_height(&theme))
     .flex_none()
     .when(enabled, |row| row.cursor_pointer())
-    .when(selected, |row| row.bg(theme.selection))
+    .when(selected, |row| row.bg(theme.surface_selected))
     .when(enabled && !selected, |row| {
         row.hover(|s| s.bg(theme.surface_hover))
     })
@@ -2338,7 +2339,7 @@ impl Render for SidePane {
                     .bg(theme.background)
                     .border_1()
                     .border_color(theme.border)
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .overflow_hidden()
                     .flex()
                     .flex_col()

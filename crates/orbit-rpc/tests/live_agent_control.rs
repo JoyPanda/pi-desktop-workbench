@@ -31,7 +31,7 @@ fn pi_available() -> bool {
 /// Send a command and return `(success, data)` for its response, skipping
 /// unrelated events. Panics on timeout.
 fn round_trip(client: &PiClient, body: CommandBody, command: &str) -> (bool, Option<Value>) {
-    let rx = client.send(body).expect("send command");
+    let (_, rx) = client.send(body).expect("send command");
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
@@ -133,7 +133,7 @@ fn live_failed_command_reports_error() {
     let client =
         PiClient::spawn(&repo_root(), Some(Path::new("/tmp/orbit-pi-sessions"))).expect("spawn pi");
 
-    let rx = client
+    let (_, rx) = client
         .send(CommandBody::SetModel {
             provider: "no-such-provider".into(),
             model_id: "no-such-model".into(),

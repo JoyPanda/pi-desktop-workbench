@@ -111,7 +111,7 @@ fn collect_auth_events(
 }
 
 fn response(client: &PiClient, body: CommandBody) -> Event {
-    let rx = client.send(body).expect("send");
+    let (_, rx) = client.send(body).expect("send");
     rx.recv_timeout(Duration::from_secs(5))
         .unwrap_or_else(|err| panic!("response: {err}; stderr={:?}", client.recent_stderr(20)))
 }

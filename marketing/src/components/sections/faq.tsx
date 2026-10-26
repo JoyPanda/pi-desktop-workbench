@@ -3,48 +3,51 @@ import { HugeiconsIcon } from "@hugeicons/react";
 
 import { JsonLd } from "@/components/json-ld";
 import { Band, SectionLabel, Shell } from "@/components/ui";
-import { FAQ_ITEMS } from "@/lib/faq";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 import { SITE } from "@/lib/site";
-
-/**
- * `FAQPage` structured data, built from the same items the section renders so
- * they can never fall out of sync. Eligible for FAQ rich results.
- */
-const FAQ_JSON_LD = {
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "@id": `${SITE.url}/#faq`,
-  mainEntity: FAQ_ITEMS.map((item) => ({
-    "@type": "Question",
-    name: item.q,
-    acceptedAnswer: { "@type": "Answer", text: item.a },
-  })),
-};
 
 /**
  * Native `<details>` disclosures — no JavaScript, keyboard accessible, and the
  * answer text is in the initial HTML for crawlers.
  */
-export function Faq() {
+export async function Faq({ locale }: { locale: Locale }) {
+  const t = getT(locale, "faq");
+  const items = t.raw("items") as { q: string; a: string }[];
+  /**
+   * `FAQPage` structured data, built from the same items the section renders so
+   * they can never fall out of sync — and so the schema is translated with the
+   * page it describes. Eligible for FAQ rich results.
+   */
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "@id": `${SITE.url}/#faq`,
+    mainEntity: items.map((item) => ({
+      "@type": "Question",
+      name: item.q,
+      acceptedAnswer: { "@type": "Answer", text: item.a },
+    })),
+  };
+
   return (
     <Shell>
       <Band id="faq" dashed className="scroll-mt-20 py-20 sm:py-28">
-        <JsonLd data={FAQ_JSON_LD} />
+        <JsonLd data={jsonLd} />
 
         <div className="mx-auto max-w-[760px]">
           <div className="flex flex-col items-center text-center">
-            <SectionLabel>FAQ</SectionLabel>
+            <SectionLabel>{t("label")}</SectionLabel>
             <h2 className="mt-4 max-w-[24ch] text-balance text-[clamp(26px,2.8vw,34px)] font-semibold leading-[1.18] tracking-[-0.024em] text-ink">
-              Questions, answered.
+              {t("heading")}
             </h2>
             <p className="mt-4 max-w-[48ch] text-[14.5px] leading-[1.75] text-ink-2">
-              The things pi users ask before trading their terminal for a
-              window.
+              {t("body")}
             </p>
           </div>
 
           <div className="mt-12">
-            {FAQ_ITEMS.map((item) => (
+            {items.map((item) => (
               <details
                 key={item.q}
                 className="group border-b border-edge-subtle first:border-t"

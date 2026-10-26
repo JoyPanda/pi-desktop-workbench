@@ -1,18 +1,18 @@
 import { ComposerMock, ToolsMock, TranscriptMock } from "@/components/sections/mocks";
 import { MockFrame, Story } from "@/components/sections/story";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
-export function Agent() {
+export async function Agent({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.agent");
+
   return (
     <Story
       id="agent"
-      label="The agent"
-      title="Watch it think, call tools, and edit."
-      copy="Thinking, tool calls, and file edits stream into a GPU-rendered transcript that never reflows. Steer mid-run or queue a follow-up from the composer — model and thinking effort are a keystroke away."
-      points={[
-        "Coalesced streaming, GFM markdown, and paint-only syntax highlighting.",
-        "Prompt, steer, queue, or cancel — all against the live pi process.",
-        "Every tool call expands into arguments, output, and inline diffs.",
-      ]}
+      label={t("label")}
+      title={t("title")}
+      copy={t("copy")}
+      points={t.raw("points") as string[]}
       visual={
         <MockFrame>
           <div className="flex flex-col gap-5">

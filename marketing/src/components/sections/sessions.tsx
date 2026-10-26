@@ -1,13 +1,17 @@
 import { SessionsMock } from "@/components/sections/mocks";
 import { MockFrame, Story } from "@/components/sections/story";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
-export function Sessions() {
+export async function Sessions({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.sessions");
+
   return (
     <Story
       id="sessions"
-      label="Sessions"
-      title="Sessions live where pi put them."
-      copy="Your list is read straight from pi and grouped by project — the same sessions the terminal sees. Reopen, clone, or hide a workspace without touching anything on disk; recent sessions stay warm."
+      label={t("label")}
+      title={t("title")}
+      copy={t("copy")}
       flip
       visual={
         <MockFrame>

@@ -71,7 +71,7 @@ fn routes_quota_list_and_parses_reports() {
     let client =
         PiClient::spawn_with_bin(bin.to_str().unwrap(), &workspace, None).expect("spawn fake pi");
 
-    let rx = client
+    let (_, rx) = client
         .send(CommandBody::QuotaList { provider: None })
         .expect("send quota.list");
     let event = rx

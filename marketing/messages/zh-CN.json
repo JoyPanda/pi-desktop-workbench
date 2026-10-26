@@ -1,0 +1,613 @@
+{
+  "meta": {
+    "title": "面向 pi 编码智能体的原生工作台",
+    "description": "面向 pi 编码智能体的原生桌面工作台：你的会话、你的模型、你的机器——在同一个窗口里对话、审查和提交。"
+  },
+  "nav": {
+    "home": "Orbit 首页",
+    "links": {
+      "agent": "智能体",
+      "sessions": "会话",
+      "git": "Git",
+      "usage": "用量",
+      "skills": "技能",
+      "mcp": "MCP",
+      "docs": "文档",
+      "changelog": "更新日志"
+    },
+    "github": "GitHub",
+    "stars": "GitHub — {count} 个星标"
+  },
+  "switcher": {
+    "label": "语言"
+  },
+  "hero": {
+    "releaseNotes": "发行说明",
+    "heading": "pi 编码智能体的原生工作台。",
+    "body": "你的会话、你的模型、你的机器。在同一个窗口里对话、审查和提交——与终端相同的会话，由原生绘制。",
+    "github": "在 GitHub 上查看",
+    "platforms": {
+      "macos": "macOS 13+",
+      "windows": "Windows",
+      "linux": "Linux"
+    },
+    "shotAlt": "一个已完成的 Orbit 会话：智能体关于 Windows 输入法编辑器修复的笔记，以及带有逐文件行数的「已更改 4 个文件」卡片，位于输入框上方。"
+  },
+  "trust": {
+    "items": [
+      {
+        "title": "免费且开源",
+        "copy": "Apache-2.0。无需账号，无锁定。"
+      },
+      {
+        "title": "本地优先",
+        "copy": "使用你自己的 pi 安装。代码留在你的机器上。"
+      },
+      {
+        "title": "原生，而非 WebView",
+        "copy": "Rust + GPUI，由 GPU 绘制。"
+      },
+      {
+        "title": "macOS · Windows · Linux",
+        "copy": "一个应用，与终端相同的会话。"
+      }
+    ]
+  },
+  "faq": {
+    "label": "常见问题",
+    "heading": "问题，都有答案。",
+    "body": "把终端换成窗口之前，pi 用户最想知道的那些事。",
+    "items": [
+      {
+        "q": "Orbit 免费吗？",
+        "a": "免费。Orbit 基于 Apache-2.0 许可开源免费——没有账号，没有订阅，也没有付费功能。模型服务商由你自己接入。"
+      },
+      {
+        "q": "Orbit 会取代 pi，还是把 pi 打包进来？",
+        "a": "都不是。Orbit 是一个原生桌面客户端，通过 pi 的 RPC 接口驱动你已安装的 pi CLI，沿用你现有的配置、会话、服务商、工具和扩展。终端与应用始终保持同步。"
+      },
+      {
+        "q": "Orbit 支持哪些平台？",
+        "a": "macOS 13+、Windows 和 Linux。Orbit 是用 Rust 和 GPUI 写的原生应用——没有 Electron，也没有 WebView，所以启动快、占用低。"
+      },
+      {
+        "q": "Orbit 和 pi TUI 或 pi-web 有什么不同？",
+        "a": "pi TUI 活在终端里，pi-web 把 pi 包进浏览器。Orbit 是原生桌面工作台：多个会话与工作区、内联的差异审查面板、Git 与 GitHub、用量统计、MCP 和插件，都在一个窗口里。"
+      },
+      {
+        "q": "Orbit 兼容我的 pi 扩展和插件吗？",
+        "a": "兼容。Orbit 通过 RPC 与 pi 通信，因此智能体侧的 pi 扩展照常工作，提问、审批等事件也由 Orbit 原生渲染。插件页还能安装、更新和移除 pi 包。"
+      },
+      {
+        "q": "我的数据去哪了？Orbit 会发送遥测吗？",
+        "a": "Orbit 本地优先：代码和会话都留在你的机器上。应用不收集任何遥测——没有分析客户端，没有安装标识，也没有使用上报。"
+      },
+      {
+        "q": "可以同时运行多个 pi 会话吗？",
+        "a": "可以。Orbit 就是为并发的会话和工作区设计的，每一个都由你本地的 pi 支撑，因此可以同时跑多个智能体，而不用在终端窗口之间来回切换。"
+      }
+    ]
+  },
+  "closer": {
+    "heading": "用 Orbit 来构建。",
+    "body": "把 Orbit 指向你已经用 pi 的项目。相同的会话、相同的模型、相同的工具——由 GPU 原生绘制。",
+    "github": "在 GitHub 上查看",
+    "platforms": {
+      "macos": "macOS",
+      "windows": "Windows",
+      "linux": "Linux"
+    },
+    "releaseNotes": "发行说明 · {tag}"
+  },
+  "footer": {
+    "tagline": "面向 pi 编码智能体的原生工作台。你的会话、你的模型、你的机器——在同一个窗口里对话、审查和提交。",
+    "columns": {
+      "product": "产品",
+      "resources": "资源",
+      "elsewhere": "其他",
+      "legal": "法律"
+    },
+    "links": {
+      "agent": "智能体",
+      "sessions": "会话",
+      "modelsProviders": "模型与服务商",
+      "git": "Git",
+      "usage": "用量",
+      "reviews": "评价",
+      "faq": "常见问题",
+      "download": "下载",
+      "docs": "文档",
+      "install": "安装",
+      "worktrees": "工作树",
+      "mcpServers": "MCP 服务器",
+      "shortcuts": "快捷键",
+      "changelog": "更新日志",
+      "github": "GitHub",
+      "pi": "pi 编码智能体",
+      "reportIssue": "报告问题",
+      "email": "邮件",
+      "privacy": "隐私",
+      "terms": "条款",
+      "security": "安全",
+      "contact": "联系"
+    },
+    "latest": "最新",
+    "release": "版本 {tag}",
+    "copyright": "© {year} Orbit · 与终端相同的会话"
+  },
+  "download": {
+    "download": "下载",
+    "forPlatform": "下载 {platform} 版",
+    "otherPlatforms": "其他平台和格式"
+  },
+  "sections": {
+    "agent": {
+      "label": "智能体",
+      "title": "看着它思考、调用工具和编辑。",
+      "copy": "思考、工具调用和文件编辑会流入一份由 GPU 绘制、永不重排的转录中。可以在运行中引导，或从输入框排队一条后续消息——模型与思考深度只隔一个按键。",
+      "points": [
+        "合并的流式输出、GFM Markdown，以及只重绘的语法高亮。",
+        "提示、引导、排队或取消——全都针对正在运行的 pi 进程。",
+        "每次工具调用都会展开为参数、输出和内联差异。"
+      ]
+    },
+    "sessions": {
+      "label": "会话",
+      "title": "会话就在 pi 放手的地方。",
+      "copy": "列表直接从 pi 读取并按项目分组——与终端看到的是同一批会话。可以重开、复制或隐藏工作区，而不触碰磁盘上的任何东西；最近的会话始终保持温热。"
+    },
+    "newTask": {
+      "label": "新任务",
+      "title": "选一个工作区，描述任务。",
+      "copy": "选择计划、构建或提问，把 Orbit 指向一个工作区，然后说出你想要什么。模型、思考深度和访问模式就在输入框里——按下发送，任务在实时会话中开始。",
+      "points": [
+        "计划、构建或提问——开始前的一个开关。",
+        "工作区从你的项目中选取，并在会话之间记住。",
+        "访问模式、模型和思考级别就在输入框旁设置。"
+      ],
+      "shotAlt": "Orbit 的「新任务」页面：计划、构建、提问三个模式开关，工作区选择器，下方是输入框。"
+    },
+    "providers": {
+      "label": "模型与服务商",
+      "title": "每个服务商。每个模型。一个窗口。",
+      "copy": "pi 的实时目录加上自定义服务商——用密钥或 OAuth 登录，然后为每个任务选模型，思考深度就在旁边设置。Ollama 的本地模型与托管模型并列。",
+      "points": [
+        "Anthropic、OpenAI、Bedrock、OpenCode Go，以及你自己的端点。",
+        "把 Orbit 指向本地 Ollama，一切都留在你的机器上。",
+        "收藏与上下文大小，按服务商分组。"
+      ],
+      "shotAlt": "Orbit 的模型页面：按服务商分组的模型、上下文大小和收藏开关。"
+    },
+    "skills": {
+      "label": "技能",
+      "title": "把团队的打法教给它。",
+      "copy": "技能是 pi 启动时加载的 SKILL.md 打法手册，分用户级和项目级。在 Orbit 里浏览，读完整指令，用一个开关就能启用或停用任意一个。",
+      "points": [
+        "项目与用户技能，可连完整 SKILL.md 一起预览。",
+        "不编辑文件就能启用或停用技能。",
+        "直接在输入框里以 /skill: 命令调用。"
+      ],
+      "shotAlt": "Orbit 的技能页面：左侧技能列表，右侧是所选技能的完整 SKILL.md。"
+    },
+    "git": {
+      "label": "Git",
+      "title": "切换应用之前先读差异。",
+      "copy": "智能体在转录背后编辑文件。Orbit 在右侧面板保留实时差异，旁边是一整页 Git——不离开窗口就能暂存、审查和提交。",
+      "points": [
+        "工作区的实时 git 差异，运行停下后自动刷新。",
+        "生成提交信息，暂存你想要的，就地推送。",
+        "当前分支的历史与图谱视图。"
+      ],
+      "shotAlt": "会话旁边打开的 Orbit 审查面板：左侧是所选文件的内联差异，右侧是更改文件树。"
+    },
+    "usage": {
+      "label": "用量",
+      "title": "知道每次运行花了多少。",
+      "copy": "请求、token、成本与缓存——取自 pi 自己的计量，覆盖你机器上的所有会话。没有第三方分析，也不用猜上下文去了哪里。",
+      "points": [
+        "按运行、按服务商的数字，含缓存与上下文的 token。",
+        "30 天的 token 走势，完全保存在本地。"
+      ],
+      "shotAlt": "Orbit 的用量页面：请求、token、成本与缓存指标，上方是 token 走势图。"
+    },
+    "mcp": {
+      "label": "MCP",
+      "title": "通过 MCP 接入你的工具。",
+      "copy": "Orbit 为智能体管理 Model Context Protocol 服务器——全局或限定到某个项目。添加服务器，查看工具数量与连接状态，一个开关就能启用或停用。",
+      "points": [
+        "全局与项目级服务器并排展示。",
+        "连接状态和工具数量一目了然。",
+        "不编辑 JSON 就能启用、编辑或移除服务器。"
+      ],
+      "shotAlt": "Orbit 的 MCP 页面：全局与项目 MCP 服务器、连接状态和启用开关。"
+    },
+    "plugins": {
+      "label": "插件",
+      "title": "用包来扩展 pi。",
+      "copy": "从 npm、git 或本地路径安装 pi 包——全局或仅限此项目。Orbit 显示已配置的内容与版本，并负责更新，pi 会在下次重启时生效。",
+      "points": [
+        "npm、git 或本地路径的包，全局或项目范围。",
+        "不离开窗口就能安装、更新和移除。",
+        "启动时加载——重启 pi 以应用更改。"
+      ],
+      "shotAlt": "Orbit 的插件页面：已安装的 pi 包，上方是安装输入框，每个包都有更新和移除操作。"
+    },
+    "appearance": {
+      "label": "外观",
+      "title": "让它变成你的。",
+      "copy": "明暗主题、界面与代码字体、尺寸和语言——外观管的是窗口本身，而其他任何设置都只隔一次搜索。",
+      "points": [
+        "明亮与暗色主题，各有自己的调色板。",
+        "界面与代码字体、尺寸，以及终端实时预览。",
+        "用一个搜索框搜遍所有设置。"
+      ],
+      "shotAlt": "Orbit 的外观设置：主题选择在上，其下是界面字体、代码字体和尺寸控件。"
+    },
+    "native": {
+      "label": "原生",
+      "title": "真正的桌面应用。主动权在你手里。",
+      "copy": "Orbit 是 macOS、Windows 和 Linux 上的原生应用——Rust 与 GPUI，键盘优先，没有 WebView。而且每一次会修改内容的工具调用都要经过你按任务设定的访问模式，智能体不会跑到你前面。",
+      "points": [
+        "受监督——每次编辑和每条命令前都会询问。",
+        "自动接受编辑——应用文件编辑，命令前仍然询问。",
+        "完全访问——不询问直接运行，按任务刻意选择。"
+      ]
+    },
+    "contributors": {
+      "label": "贡献者",
+      "heading": "公开构建。",
+      "body": "Orbit 由每一个提议题、发补丁或审查版本的人共同塑造。",
+      "github": "在 GitHub 上查看",
+      "more": "GitHub 上还有 {count} 位贡献者"
+    },
+    "reviews": {
+      "label": "评价",
+      "heading": "大家怎么说。",
+      "body": "来自 r/PiCodingAgent 发布帖的未编辑评论。",
+      "read": "阅读 {handle} 在 {platform} 上的评价",
+      "platforms": {
+        "reddit": "Reddit",
+        "x": "X"
+      }
+    }
+  },
+  "docs": {
+    "label": "文档",
+    "documentation": "文档",
+    "previous": "上一页",
+    "next": "下一页",
+    "nav": {
+      "groups": {
+        "getStarted": "入门",
+        "workbench": "工作台",
+        "safeguards": "防护",
+        "reference": "参考"
+      },
+      "links": {
+        "overview": "概览",
+        "overviewDescription": "Orbit 是什么、如何工作，以及你的数据在哪里。",
+        "install": "安装",
+        "installDescription": "下载适配你平台的版本，通过首次启动检查，然后发出第一条提示。",
+        "sessions": "会话",
+        "sessionsDescription": "项目、会话、导航、工作流与访问模式，以及通知。",
+        "worktrees": "工作树",
+        "worktreesDescription": "把并行分支当作一等工作区来运行，可附带可选的初始化脚本。",
+        "mcp": "MCP 服务器",
+        "mcpDescription": "管理智能体可以调用的 Model Context Protocol 服务器，并配有本地密钥库。",
+        "accessModes": "访问模式",
+        "accessModesDescription": "监管、自动接受编辑、完全访问：什么会不经询问直接执行，以及审批如何工作。",
+        "shortcuts": "键盘快捷键",
+        "shortcutsDescription": "所有快捷键，按生效的界面分组。"
+      }
+    },
+    "index": {
+      "metaTitle": "文档",
+      "description": "Orbit 指南 —— 面向 pi 编程智能体的原生桌面工作台：安装、会话、工作树、MCP 服务器和键盘快捷键。",
+      "title": "Orbit 文档",
+      "intro": "安装 Orbit、运行智能体会话、在 Git 工作树之间工作、连接 MCP 服务器并掌握键盘，你需要的一切都在这里。",
+      "headings": {
+        "what": "Orbit 是什么",
+        "how": "工作原理",
+        "need": "你需要什么",
+        "data": "数据在哪里",
+        "guides": "指南"
+      },
+      "what": {
+        "p1": "Orbit 是面向<pi>pi 编程智能体</pi>的原生桌面工作台。它是一款用 GPUI 绘制的 Rust 应用 —— GPUI 是 Zed 背后那套 GPU 加速的界面框架 —— 没有浏览器，没有 webview，也没有 Node 界面层。",
+        "p2": "Orbit 不是套在模型 API 外面的聊天壳。它把 <code>pi</code> CLI 作为子进程启动，通过 stdio 使用 pi 自己的 RPC 协议。模型目录、工具、思考等级和会话都归 pi 所有；Orbit 是照见它们的窗口。你在 Orbit 中创建的会话和在终端中创建的会话是同一个文件。"
+      },
+      "how": {
+        "diagram": "Orbit (Rust · GPUI)\n   │  基于 stdio 的按行 JSON RPC\n   ▼\npi CLI（每个打开的会话一个子进程）\n   │\n   ▼\n~/.pi/agent/   会话 · 配置 · 用量",
+        "body": "请求以 JSON 通过 stdin 发给 pi；pi 把事件以 JSON 行从 stdout 流回来 —— 文本与思考增量、工具调用、提问对话框和结束信号。因为运行时就是 pi 本身，CLI 能做的事 Orbit 都能驱动，没有任何逻辑被实现两遍。"
+      },
+      "need": {
+        "pi": "<strong>pi</strong> —— 真正干活的编程智能体 CLI。从 <pi>pi 仓库</pi>安装。",
+        "node": "<strong>Node.js</strong> —— 许多 MCP 服务器（通过 <code>npx</code> 运行）和 pi 包都需要它。",
+        "git": "<strong>Git</strong> —— 支撑 Review 面板、Git 页面和工作树。",
+        "note": "首次启动时 Orbit 会检查这三项，并列出找不到的项目以及安装命令。你随时可以在设置中重新查看。"
+      },
+      "data": {
+        "path": "路径",
+        "what": "内容",
+        "sessions": "你的会话 —— 与 <code>pi</code> CLI 读写的是同一批文件。",
+        "config": "pi 配置，包括 MCP 配置和凭据。",
+        "orbit": "Orbit 偏好设置：布局、访问模式、工作流模式、通知、工作树根目录和 MCP 密钥库。",
+        "project": "项目级 pi 配置，包括项目中的 <code>mcp.json</code>。"
+      },
+      "missing": "缺少什么？在 <github>GitHub</github> 上开一个 issue。"
+    },
+    "install": {
+      "metaTitle": "安装",
+      "description": "为 macOS、Windows 或 Linux 下载 Orbit，通过首次启动的依赖检查，连接供应商并发送第一条提示。",
+      "title": "安装与首次启动",
+      "intro": "Orbit 为 macOS、Windows 和 Linux 提供签名构建，并支持签名过的应用内更新。本页带你从下载走到第一条提示。",
+      "headings": {
+        "download": "下载",
+        "requirements": "要求",
+        "firstLaunch": "首次启动",
+        "updates": "更新",
+        "next": "下一步"
+      },
+      "download": {
+        "body": "从<release>最新发布</release>获取适配你平台的构建。本站页眉中的<strong>下载</strong>按钮会自动挑对的那一个。",
+        "platform": "平台",
+        "formats": "格式",
+        "macos": "<code>.dmg</code>（已签名并公证，通用）和 <code>.tar.gz</code>",
+        "windows": "<code>.exe</code> 和 <code>.zip</code>",
+        "linux": "<code>.deb</code> 和 <code>.tar.gz</code>，适用于 x86_64 和 Arm64"
+      },
+      "callout": "Orbit 不打包任何智能体运行时。它驱动你已有的 <code>pi</code> CLI，因此两者各自独立更新。",
+      "requirements": {
+        "body": "Orbit 驱动的是应用之外的这些工具。请先安装它们，或者让首次启动检查告诉你缺了什么：",
+        "pi": "<strong>pi</strong> —— 编程智能体 CLI。Orbit 会为每个会话把它作为子进程启动。",
+        "node": "<strong>Node.js</strong> —— 许多 MCP 服务器通过 <code>npx</code> 运行，pi 包也运行在 Node 上。",
+        "git": "<strong>Git</strong> —— 用于 Review 面板、Git 页面和工作树。"
+      },
+      "firstLaunch": {
+        "open": "<strong>打开 Orbit。</strong> 首次运行时它会检查 <code>pi</code>、<code>node</code> 和 <code>git</code>，并列出找不到的项目及相应的安装命令。",
+        "provider": "<strong>连接供应商。</strong> 打开<strong>设置 → 供应商</strong>，用 API 密钥或 OAuth 登录。Orbit 读取 pi 实时的模型目录，因此这份列表与 CLI 能访问到的一致。",
+        "workspace": "<strong>选择工作区。</strong> 工作区就是一个项目文件夹。<strong>新建任务</strong>里有带最近文件夹的选择器和原生浏览按钮。",
+        "model": "<strong>选择模型和思考等级。</strong> 设置 → 智能体 决定每个新会话启动时使用的默认模型和思考等级。",
+        "accessMode": "<strong>选择访问模式。</strong> 监管会在每次改变状态的调用前询问；自动接受编辑会应用文件编辑，但在命令前仍会询问；完全访问则不再询问。",
+        "send": "<strong>发送提示。</strong> 按 <kbd>Enter</kbd> 发送，按 <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行。"
+      },
+      "updates": {
+        "body": "发布构建会在后台检查更新，并用签名过的应用内更新器安装。<strong>检查更新</strong>可以手动运行：<kbd>⌘</kbd>+<kbd>⇧</kbd>+<kbd>U</kbd>（Windows 和 Linux 上是 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>U</kbd>），或从更新器对话框打开版本历史。"
+      },
+      "next": {
+        "body": "应用跑起来之后，<sessions>会话</sessions>指南讲日常用法，<shortcuts>键盘快捷键</shortcuts>有完整的键位表。"
+      }
+    }
+  },
+  "changelog": {
+    "label": "更新日志",
+    "heading": "每一次发布，都按实际交付的样子。",
+    "body": "Orbit Pi 迭代很快。这个页面直接镜像仓库的更新日志与发布源，所以你在这里读到的说明就是实际发布的说明。",
+    "download": "下载 {tag}",
+    "downloadFallback": "下载 macOS 版",
+    "latest": "最新",
+    "source": "来源",
+    "releases": "发布",
+    "jumpToRelease": "跳转到某个发布",
+    "copyLink": "复制 {tag} 的链接",
+    "allReleases": "所有发布",
+    "releaseNotes": "发布说明",
+    "onGithub": "在 GitHub 上查看发布",
+    "previous": "上一页",
+    "next": "下一页",
+    "unavailableTitle": "暂时无法获取发布说明",
+    "unavailableBody": "无法连接 GitHub。最新内容可以在<link>发布页面</link>阅读。"
+  },
+  "legal": {
+    "label": "法律",
+    "updated": "最后更新：{date}",
+    "privacy": {
+      "title": "隐私",
+      "description": "Orbit 如何处理你的数据 —— 默认本地优先。桌面应用不收集遥测；本网站使用自托管、无 Cookie 的分析。",
+      "intro": "Orbit 以本地优先。你的源代码、项目、终端和 AI 对话属于你，并且留在你的机器上。桌面应用不收集遥测；本页说明你使用 Orbit 时有哪些内容离开你的机器，以及本网站使用的少量分析。",
+      "headings": {
+        "shortVersion": "简要说明",
+        "desktopApp": "桌面应用",
+        "notCollected": "Orbit 不会有意收集的内容",
+        "localData": "本地数据",
+        "website": "本网站",
+        "thirdParty": "第三方服务",
+        "retention": "保留与共享",
+        "changes": "本政策的变更",
+        "contact": "联系方式"
+      },
+      "shortVersion": {
+        "telemetry": "桌面应用不收集遥测：没有分析客户端，没有安装或会话标识符，也没有使用情况上报。",
+        "never": "Orbit 从不有意收集你的源代码、文件名、终端内容、提示词、对话或凭据。",
+        "analytics": "本网站使用自托管、无 Cookie 的分析，且仅在正式环境中加载。",
+        "ads": "没有广告，没有第三方跟踪器，也没有跨站画像。"
+      },
+      "desktop": {
+        "telemetry": "Orbit 不含任何遥测。没有分析 crate 或客户端，没有安装或会话标识符，没有使用事件流，也没有第三方跟踪 SDK。关于你如何使用应用的信息，不会发送给项目或任何其他人。",
+        "network": "Orbit 只在你要它做的事情上联网：检查并下载更新、获取 Git 和 GitHub 面板中显示的 GitHub 元数据，以及把提示词发送给 <code>pi</code> 智能体所配置的模型供应商。这些都不带遥测标识符。"
+      },
+      "notCollected": {
+        "source": "源代码、文件名、文件内容，或项目与仓库路径；",
+        "terminal": "终端命令或终端输出，或 shell 历史；",
+        "ai": "AI 提示词或回复，或对话内容；",
+        "credentials": "API 密钥、访问令牌、密码、MCP 凭据或认证 Cookie；",
+        "env": "环境变量或剪贴板内容；",
+        "ip": "作为分析属性的 IP 地址、精确位置或私有 URL；",
+        "machine": "机器主机名、MAC 地址、序列号或磁盘标识符。",
+        "note": "你发送的提示词和工具输出由你所配置的模型供应商处理，适用其政策，而非本政策。"
+      },
+      "localData": {
+        "body": "Orbit 将设置和状态保存在 <code>~/.orbit-pi/</code>，并读取 <code>pi</code> 写入的会话数据。两者都留在你的机器上。设置 → 隐私 中有会话保留设置，可按你选择的计划归档或删除旧会话；它从不上传这些会话。"
+      },
+      "website": {
+        "analytics": "{site} 会加载一小段自托管的分析脚本，<strong>仅在生产构建中</strong> —— 开发环境从不加载。它用于以汇总方式了解人们阅读了哪些页面和发布。",
+        "records": "脚本记录：",
+        "recordPath": "页面路径、查询字符串和来源页；",
+        "recordBrowser": "浏览器语言和屏幕尺寸；",
+        "recordId": "存储在 <code>localStorage</code> 中的随机访客标识符 —— 不是 Cookie。",
+        "note": "它不使用广告 Cookie，不生成设备指纹，也不跨站跟踪你。如果你在浏览器中屏蔽脚本或清除本地存储，网站依然可以正常使用。"
+      },
+      "thirdParty": {
+        "downloads": "<strong>下载与 issue 跟踪</strong>运行在 GitHub 上。访问 GitHub 链接适用 GitHub 自己的隐私政策。",
+        "providers": "你在 Orbit 中配置的 <strong>模型供应商</strong>是你自己的账户。你发送给它们的提示词适用这些供应商的条款和隐私政策，而非本政策。"
+      },
+      "retention": {
+        "body": "网站分析自托管在由项目运营的基础设施上，不会向广告商或数据中间商出售、出租或共享。数据仅在对汇总的产品决策有用时才保留。由于桌面应用不收集任何内容，因此没有可保留或共享的应用数据。"
+      },
+      "changes": {
+        "body": "如果本政策发生实质性变化，本页顶部的日期会更新。更新后继续使用 Orbit 即表示你接受修订后的政策。"
+      },
+      "contact": {
+        "body": "对隐私有疑问？请发送邮件至 <mail>{email}</mail>。"
+      },
+      "updated": "2026-10-14"
+    },
+    "terms": {
+      "title": "使用条款",
+      "metaTitle": "条款",
+      "description": "使用 Orbit 桌面应用与本站的条款 —— 以 Apache-2.0 开源的软件，按原样提供。",
+      "intro": "用平实语言写成的条款，适用于 Orbit 桌面应用与本站。软件本身是以 Apache License 2.0 发布的开源项目，你对代码的使用由该许可证约束。",
+      "headings": {
+        "overview": "概述",
+        "software": "软件",
+        "responsible": "负责任地使用应用",
+        "providers": "模型供应商",
+        "website": "本网站",
+        "acceptableUse": "可接受的使用",
+        "intellectualProperty": "知识产权",
+        "disclaimer": "免责声明",
+        "liability": "责任限制",
+        "changes": "条款的变更",
+        "contact": "联系方式"
+      },
+      "overview": {
+        "body": "本条款适用于你对 Orbit 桌面应用（下称“Orbit”“本应用”）以及 {site} 网站（下称“本网站”）的使用。下载、安装或使用 Orbit，或使用本网站，即表示你同意本条款。如不同意，请勿使用 Orbit 或本网站。"
+      },
+      "software": {
+        "body": "Orbit 是以 <license>Apache License 2.0</license> 发布的自由开源软件。该许可证规定了你对代码进行使用、修改和再分发的权利，并包含其自身的免责声明与责任限制。就本软件而言，若本条款与该许可证存在冲突，以许可证为准。"
+      },
+      "responsible": {
+        "body": "Orbit 是一个本地桌面客户端，它所运行的 AI 编程智能体拥有与你在终端中相同的本地访问权限。这意味着：",
+        "action": "<strong>你要对智能体的行为负责。</strong> 它可以以你的用户身份读取、编辑你的工作区文件并执行命令。",
+        "accessModes": "<strong>访问模式是一道确认关卡，而不是沙箱。</strong> 它决定哪些操作会先询问，但它不是隔离边界。",
+        "backUp": "请备份你的工作，并在接受更改前先审阅，尤其是在<strong>完全访问</strong>模式下。"
+      },
+      "providers": {
+        "body": "Orbit 会连接你用自己凭据配置的模型与工具供应商。你对这些服务的使用适用它们自己的条款与计费，而非本条款。你需自行承担产生的费用，并遵守各供应商的可接受使用规则。"
+      },
+      "website": {
+        "body": "本网站介绍 Orbit，并链接到下载与发布说明。它仅供参考。下载由 GitHub 托管；你对 GitHub 的使用适用 GitHub 的条款。关于本网站如何处理分析，请见<privacy>隐私</privacy>页面。"
+      },
+      "acceptableUse": {
+        "body": "你同意不：",
+        "law": "使用 Orbit 或本网站违反任何法律或侵犯他人权利；",
+        "access": "试图未经授权访问本网站、其基础设施或任何关联服务；",
+        "interfere": "干扰本网站或其分析，或以影响他人服务质量的频率抓取本站。"
+      },
+      "intellectualProperty": {
+        "body": "Orbit 的名称、标志和字标用于标识本项目，软件许可证并未授予使用它们的权利。源代码按上文所述以 Apache-2.0 授权。"
+      },
+      "disclaimer": {
+        "body": "Orbit 与本网站均<strong>“按原样”</strong>提供，不作任何明示或默示的保证或条件，包括但不限于对适销性、特定用途适用性或非侵权的任何保证。你使用 Orbit 需自行承担风险。"
+      },
+      "liability": {
+        "body": "在法律允许的最大范围内，Orbit 的维护者与贡献者不对任何间接、偶然、特殊、后果性或惩罚性损害，或任何数据、利润或商誉损失负责，无论其源于或与你对 Orbit 或本网站的使用有关 —— 包括智能体对你的文件或系统所做的任何更改。"
+      },
+      "changes": {
+        "body": "本条款可能不时更新；更新时页面顶部的日期会随之变化。更新后继续使用即表示你接受修订后的条款。"
+      },
+      "contact": {
+        "body": "对本条款有疑问？请发送邮件至 <mail>{email}</mail>。"
+      },
+      "updated": "2026-10-10"
+    },
+    "security": {
+      "label": "信任",
+      "title": "安全",
+      "description": "如何报告 Orbit 的漏洞、哪些属于受理范围，以及应用本地智能体访问背后的安全模型。",
+      "intro": "Orbit 会在你的机器上运行拥有本地工具访问权限的 AI 智能体，因此有必要把它的安全模型讲清楚。这里说明如何报告问题，以及什么才算问题。",
+      "headings": {
+        "supported": "受支持的版本",
+        "reporting": "报告漏洞",
+        "include": "需要包含的内容",
+        "expect": "接下来的流程",
+        "scope": "范围与安全模型"
+      },
+      "supported": {
+        "body": "Orbit 尚未到 1.0。安全修复针对最新发布和 <code>main</code> 分支。",
+        "main": "<strong>main</strong>（最新）— 受支持",
+        "tagged": "<strong>最新的标签发布</strong> — 受支持",
+        "older": "<strong>更早的发布</strong> — 不受支持"
+      },
+      "reporting": {
+        "body": "请<strong>私下</strong>报告漏洞 —— 不要开公开 issue。使用 GitHub 的<reporting>私密漏洞报告</reporting>，或发送邮件至 <mail>{email}</mail>。"
+      },
+      "include": {
+        "issue": "问题描述及其影响；",
+        "steps": "复现步骤，或概念验证；",
+        "version": "Orbit 版本、你的操作系统版本，以及 Orbit 的安装方式（<code>cargo run</code>、<code>.app</code> 包或 DMG）；",
+        "pi": "<code>pi</code> CLI 的版本（<code>pi --version</code>）。"
+      },
+      "expect": {
+        "body": "你会在几天内收到确认，并随着报告被分级而收到状态更新。在公开披露之前，请给我们合理的时间来发布修复。"
+      },
+      "scope": {
+        "body": "Orbit 是本地桌面客户端。它以子进程方式启动 <code>pi</code> 编程智能体，并赋予它与你在终端中相同的本地工具访问权限。有些特性是<strong>有意为之</strong>，它们本身不算漏洞：",
+        "access": "<strong>Orbit 以完整的本地工具访问权限运行智能体。</strong> 智能体可以以你的用户身份读取、编辑你的工作区文件并执行命令。这正是这个工具的用途。",
+        "accessModes": "<strong>访问模式是一道确认关卡，而不是沙箱。</strong> 监管、自动接受编辑和完全访问决定哪些会改变状态的工具调用会先询问。<code>pi</code> 不带沙箱，Orbit 也不添加。自动批准调用并不是隔离边界。",
+        "store": "<strong>会话数据存放在 pi 自己的存储中</strong>（<code>~/.pi/agent/</code>、<code>~/.orbit-pi/</code>）。Orbit 读写的文件与 <code>pi</code> CLI 相同。",
+        "wanted": "我们希望收到的报告：",
+        "memory": "内存安全缺陷；",
+        "injection": "绕过 Orbit 声称守护的边界的命令注入或提示词注入；",
+        "credentials": "凭据通过 RPC 接口泄漏；",
+        "updater": "签名更新器接受了无法验证的产物。"
+      },
+      "updated": "2026-10-10"
+    }
+  },
+  "contact": {
+    "label": "联系",
+    "heading": "和我们聊聊。",
+    "body": "有问题、反馈，或者要报告缺陷？选对渠道，就会送到对的地方。",
+    "private": "如需私下报告安全问题，请发邮件至 <link>{email}</link>。",
+    "channels": {
+      "general": {
+        "title": "一般事务与媒体",
+        "body": "问题、反馈、合作，以及任何不属于缺陷报告的事情。"
+      },
+      "bugs": {
+        "title": "缺陷与功能建议",
+        "body": "在 GitHub 上开一个 issue。先搜一下，可能已经有人提过。",
+        "action": "开一个 issue"
+      },
+      "security": {
+        "title": "安全",
+        "body": "请私下报告漏洞 —— 不要开公开 issue。",
+        "action": "如何报告"
+      },
+      "source": {
+        "title": "源码与发布",
+        "body": "浏览代码、给仓库点星，并在 GitHub 上关注发布。"
+      }
+    }
+  },
+  "errors": {
+    "notFound": {
+      "label": "错误 404",
+      "heading": "这个页面偏离了轨道。",
+      "body": "你要找的页面不存在、已被移动，或者从未在这条轨道上。让我们回到正轨。",
+      "home": "回到首页",
+      "releases": "浏览发布",
+      "bug": "觉得这是个缺陷？",
+      "report": "报告问题"
+    },
+    "boundary": {
+      "label": "错误",
+      "heading": "出了点问题。",
+      "body": "一个意外错误中断了这个页面。通常再试一次就能解决。",
+      "retry": "重试",
+      "home": "回到首页",
+      "reference": "参考编号 {digest}"
+    }
+  }
+}

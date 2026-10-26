@@ -2,8 +2,8 @@ use super::helpers::*;
 use super::*;
 use crate::quota::note_should_render;
 use crate::theme::tokens::{
-    context_menu, input, modal, picker, popover, BufferLineHeight, ButtonSize, DynamicSpacing,
-    IconSize, Radius, StyledExt, TextSize, BORDER_WIDTH,
+    button, context_menu, input, modal, panel, picker, popover, BufferLineHeight, ButtonSize,
+    DynamicSpacing, IconSize, Radius, StyledExt, TextSize, BORDER_WIDTH,
 };
 use gpui::{canvas, Bounds, DispatchPhase, Hitbox, HitboxBehavior, MouseMoveEvent};
 
@@ -266,6 +266,11 @@ const SETTINGS_SEARCH_INDEX: &[(SettingsSection, &str, &str)] = &[
     ),
     (
         SettingsSection::Appearance,
+        "settings.design_system",
+        "design system classic operational minimalism visual language",
+    ),
+    (
+        SettingsSection::Appearance,
         "settings.theme",
         "theme palette color light dark editor",
     ),
@@ -484,7 +489,7 @@ impl OrbitApp {
                                         .w_full()
                                         .h(ButtonSize::Medium.height(&theme))
                                         .px(DynamicSpacing::Base08.px(&theme))
-                                        .rounded(Radius::Large.px(&theme))
+                                        .rounded(button::RADIUS.px(&theme))
                                         .flex()
                                         .items_center()
                                         .gap(DynamicSpacing::Base08.px(&theme))
@@ -571,7 +576,8 @@ impl OrbitApp {
                                         .gap(DynamicSpacing::Base08.px(&theme))
                                         .cursor_pointer()
                                         .when(selected, |row| {
-                                            row.bg(theme.selection).hover(|s| s.bg(theme.selection))
+                                            row.bg(theme.surface_selected)
+                                                .hover(|s| s.bg(theme.surface_selected))
                                         })
                                         .when(!selected, |row| {
                                             row.hover(|s| s.bg(theme.surface_hover))
@@ -1248,7 +1254,7 @@ impl OrbitApp {
         let control = self.active_model_select(theme, this, cx);
         div()
             .w_full()
-            .rounded(Radius::Large.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.border)
             .bg(theme.surface_elevated)
@@ -1693,7 +1699,7 @@ impl OrbitApp {
             } else {
                 theme.border
             })
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .p(DynamicSpacing::Base12.px(&theme))
             .flex()
             .flex_col()
@@ -2254,7 +2260,7 @@ impl OrbitApp {
             .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .px(DynamicSpacing::Base12.px(&theme))
             .py(DynamicSpacing::Base40.px(&theme))
             .flex()
@@ -2436,7 +2442,7 @@ impl OrbitApp {
                     .bg(theme.accent.opacity(0.1))
                     .border_1()
                     .border_color(theme.accent.opacity(0.35))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .px(DynamicSpacing::Base12.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
                     .flex()
@@ -2503,7 +2509,7 @@ impl OrbitApp {
                     .bg(theme.surface_secondary)
                     .border_1()
                     .border_color(theme.border)
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .px(DynamicSpacing::Base12.px(&theme))
                     .py(DynamicSpacing::Base40.px(&theme))
                     .flex()
@@ -2556,7 +2562,7 @@ impl OrbitApp {
             .bg(theme.error.opacity(0.08))
             .border_1()
             .border_color(theme.error.opacity(0.35))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .px(DynamicSpacing::Base12.px(&theme))
             .py(DynamicSpacing::Base12.px(&theme))
             .flex()
@@ -2837,7 +2843,7 @@ impl OrbitApp {
                     .w_full()
                     .px(DynamicSpacing::Base12.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
-                    .rounded(Radius::Large.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.background)
@@ -3012,7 +3018,7 @@ impl OrbitApp {
             .gap(DynamicSpacing::Base08.px(&theme))
             .px(DynamicSpacing::Base12.px(&theme))
             .py(DynamicSpacing::Base08.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.border)
             .bg(theme.background)
@@ -3185,7 +3191,7 @@ impl OrbitApp {
         let tile = div()
             .size(px(52.))
             .flex_none()
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .bg(theme.surface_elevated)
             .border_1()
             .border_color(theme.border)
@@ -3602,7 +3608,7 @@ impl OrbitApp {
             .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .p(DynamicSpacing::Base12.px(&theme))
             .flex()
             .flex_col()
@@ -4008,7 +4014,7 @@ impl OrbitApp {
                 div()
                     .px(DynamicSpacing::Base08.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
-                    .rounded(Radius::Large.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .bg(theme.error.opacity(0.1))
                     .text_size(TextSize::Small.px(&theme))
                     .text_color(theme.error)
@@ -4378,7 +4384,7 @@ impl OrbitApp {
                     .mb(DynamicSpacing::Base04.px(&theme))
                     .px(DynamicSpacing::Base06.px(&theme))
                     .py(DynamicSpacing::Base04.px(&theme))
-                    .rounded(Radius::Large.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .bg(theme.error.opacity(0.1))
                     .text_size(TextSize::Small.px(&theme))
                     .text_color(theme.error)
@@ -4538,7 +4544,7 @@ impl OrbitApp {
             .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .flex()
             .flex_col();
         for (i, row) in rows.into_iter().enumerate() {
@@ -5134,6 +5140,12 @@ impl OrbitApp {
             .as_ref()
             .map(|client| client.recent_stderr(8))
             .unwrap_or_default();
+        // The panel is a window onto the child's raw stderr; a known MCP
+        // secret value in a failure line must not become readable here.
+        let stderr: Vec<String> = stderr
+            .iter()
+            .map(|line| self.mcp.redact_text(line))
+            .collect();
         let body: AnyElement = if stderr.is_empty() {
             div()
                 .px(DynamicSpacing::Base16.px(&theme))
@@ -5161,7 +5173,7 @@ impl OrbitApp {
             }
             div()
                 .bg(theme.code_bg)
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .px(DynamicSpacing::Base12.px(&theme))
                 .py(DynamicSpacing::Base08.px(&theme))
                 .child(block)
@@ -5248,6 +5260,13 @@ impl OrbitApp {
                     this.clone(),
                     Self::toggle_auto_retry,
                 )),
+            ),
+            self.setting_row(
+                theme,
+                &tr!("settings.agent_call_details"),
+                Some(&tr!("settings.agent_call_details_hint")),
+                None,
+                Some(self.agent_calls_select(theme, this.clone(), cx)),
             ),
         ];
 
@@ -5348,6 +5367,32 @@ impl OrbitApp {
             ],
         ));
         sections
+    }
+
+    /// Settings → Agent: how agent call details open in the transcript. An
+    /// explicit per-call toggle still wins; this only moves the default.
+    pub(super) fn agent_calls_select(
+        &self,
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        use crate::agent_call_display::AgentCallDisplay;
+        let options: Vec<String> = AgentCallDisplay::OPTIONS
+            .into_iter()
+            .map(|mode| tr!(mode.label_key()))
+            .collect();
+        let selected = self.agent_calls.index();
+        self.select_control(
+            "agent-calls-select",
+            SettingsSelect::AgentCalls,
+            options[selected].clone(),
+            options,
+            selected,
+            theme,
+            this,
+            cx,
+        )
     }
 
     /// Flip auto session titles on/off and persist it for the extension.
@@ -5558,7 +5603,7 @@ impl OrbitApp {
                         .cursor_pointer()
                         .when(active, |b| {
                             b.border_color(theme.border)
-                                .raised_flat(theme.selection)
+                                .raised_flat(theme.surface_selected)
                                 .text_color(theme.text_primary)
                         })
                         .when(!active, |b| {
@@ -5826,6 +5871,13 @@ impl OrbitApp {
     }
 
     pub(super) fn abort_retry(&mut self, cx: &mut Context<Self>) {
+        // pi funnels `abort_retry` into `auto_retry_end { success: false,
+        // finalError: "Retry cancelled" }` (pi-core `_finishCancelledRetry`).
+        // Record the request — as Esc does — or that report reads as retries
+        // that failed, and the banner says so for a cancel the user asked for.
+        if self.retrying {
+            self.abort_requested = true;
+        }
         self.send(CommandBody::AbortRetry, "abort_retry");
         self.retrying = false;
         self.retry_detail = None;
@@ -5937,6 +5989,16 @@ impl OrbitApp {
         if background.is_some() {
             theme_rows.push(self.backdrop_preview(theme));
         }
+        // The design-system switch comes first: it selects the visual language
+        // (Classic or Operational) without touching the remembered palette in
+        // either system.
+        theme_rows.push(self.setting_row(
+            theme,
+            &tr!("settings.design_system"),
+            Some(&tr!("settings.design_system_description")),
+            None,
+            Some(self.design_system_control(theme, this.clone(), cx)),
+        ));
         theme_rows.push(self.setting_row(
             theme,
             &tr!("settings.appearance"),
@@ -5948,6 +6010,7 @@ impl OrbitApp {
         // the palette currently in effect, so the pair of rows that made the
         // user pick a mode before picking a colour is gone: flip Appearance to
         // edit the other mode's palette, and each is remembered separately.
+        // The list is filtered to the active design system.
         theme_rows.push(self.setting_row(
             theme,
             &tr!("settings.theme"),
@@ -6140,6 +6203,97 @@ impl OrbitApp {
         }
         sections
     }
+    /// One keyboard-focusable radio group for the visual language. The two
+    /// choices are stable identities; the Theme row below lists only the
+    /// palettes belonging to the chosen system.
+    fn design_system_control(
+        &self,
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        use theme::DesignSystem;
+        let current = theme::appearance_prefs(cx).design_system;
+        let keyboard_this = this.clone();
+        let count = DesignSystem::ALL.len();
+        div()
+            .id("design-system")
+            .focusable()
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .rounded(button::RADIUS.px(&theme))
+            .p(DynamicSpacing::Base04.px(&theme))
+            .focus(|style| style.border_color(theme.focus_ring))
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+            .flex()
+            .items_center()
+            .on_key_down(move |event, _, cx| {
+                let index = DesignSystem::ALL
+                    .iter()
+                    .position(|system| *system == current)
+                    .unwrap_or(0);
+                let next = match event.keystroke.key.as_str() {
+                    "left" | "up" => (index + count - 1) % count,
+                    "right" | "down" => (index + 1) % count,
+                    "home" => 0,
+                    "end" => count - 1,
+                    _ => return,
+                };
+                cx.stop_propagation();
+                keyboard_this.update(cx, |app, cx| {
+                    app.set_design_system(DesignSystem::ALL[next], cx);
+                });
+            })
+            .children(
+                DesignSystem::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, system)| {
+                        let this = this.clone();
+                        let active = current == system;
+                        let label = match system {
+                            DesignSystem::Classic => tr!("settings.design_system_classic"),
+                            DesignSystem::Operational => {
+                                tr!("settings.design_system_operational")
+                            }
+                        };
+                        segmented_segment(
+                            div().id(system.as_str()),
+                            &theme,
+                            ButtonSize::Medium,
+                            SegmentPosition::at(index, count),
+                        )
+                        .font_weight(FontWeight::MEDIUM)
+                        .cursor_pointer()
+                        .when(active, |b| {
+                            b.border_color(theme.border)
+                                .raised_flat(theme.surface_selected)
+                                .text_color(theme.text_primary)
+                        })
+                        .when(!active, |b| {
+                            b.border_color(theme.border)
+                                .raised_flat(theme.surface_elevated)
+                                .text_color(theme.text_secondary)
+                                .hover(|s| s.raised_flat(theme.surface_hover))
+                        })
+                        .on_click(move |_, _, cx| {
+                            this.update(cx, |app, cx| app.set_design_system(system, cx));
+                        })
+                        .child(label)
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn set_design_system(&mut self, design_system: theme::DesignSystem, cx: &mut Context<Self>) {
+        let mut prefs = theme::appearance_prefs(cx);
+        prefs.set_design_system(design_system);
+        if let Err(error) = theme::set_appearance_prefs(cx, prefs) {
+            self.toast_error(tr!("settings.appearance_save_failed", error = error));
+        }
+        cx.notify();
+    }
+
     /// One keyboard-focusable radio group drawn as a segmented control (the
     /// same control as the follow-up delivery mode); arrows choose the
     /// adjacent mode.
@@ -6158,7 +6312,7 @@ impl OrbitApp {
             .focusable()
             .border_1()
             .border_color(gpui::transparent_black())
-            .rounded(Radius::Large.px(&theme))
+            .rounded(button::RADIUS.px(&theme))
             .p(DynamicSpacing::Base04.px(&theme))
             .focus(|style| style.border_color(theme.focus_ring))
             // gpui 0.2 has no `:focus-visible`: an automatic focus transfer
@@ -6207,7 +6361,7 @@ impl OrbitApp {
                         .cursor_pointer()
                         .when(active, |b| {
                             b.border_color(theme.border)
-                                .raised_flat(theme.selection)
+                                .raised_flat(theme.surface_selected)
                                 .text_color(theme.text_primary)
                         })
                         .when(!active, |b| {
@@ -6263,7 +6417,7 @@ impl OrbitApp {
             .flex_1()
             .px(DynamicSpacing::Base12.px(&theme))
             .py(DynamicSpacing::Base12.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .bg(theme.background)
             .flex()
             .flex_col()
@@ -6309,7 +6463,7 @@ impl OrbitApp {
         let terminal = div()
             .w_full()
             .flex_1()
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.border)
             .bg(theme.code_bg)
@@ -6429,7 +6583,7 @@ impl OrbitApp {
                     .relative()
                     .w_full()
                     .h(px(84.))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .overflow_hidden()
@@ -6629,16 +6783,14 @@ impl OrbitApp {
     }
 
     /// The palettes the Theme dropdown lists, in the order it paints them:
-    /// every palette of `mode`, in [`theme::ThemeId::ALL`] order.
+    /// every palette of `mode` in the active design system, in
+    /// [`theme::ThemeId::ALL`] order.
     ///
     /// Both the label builder and the click handler read this, so a row index
     /// always resolves to the palette it painted.
-    pub(super) fn theme_catalog(
-        &self,
-        mode: ThemeMode,
-        _cx: &Context<Self>,
-    ) -> Vec<theme::ThemeId> {
-        theme::themes_for(mode).collect()
+    pub(super) fn theme_catalog(&self, mode: ThemeMode, cx: &Context<Self>) -> Vec<theme::ThemeId> {
+        let design_system = theme::appearance_prefs(cx).design_system;
+        theme::themes_for_system(mode, design_system).collect()
     }
 
     /// Appearance → Theme. `mode` is the resolved appearance, so the row shows
@@ -6724,6 +6876,7 @@ impl OrbitApp {
             | SettingsSelect::BackdropCell
             | SettingsSelect::BackdropFade
             | SettingsSelect::TitleModel
+            | SettingsSelect::AgentCalls
             | SettingsSelect::DefaultModel
             | SettingsSelect::DefaultThinking
             | SettingsSelect::ActiveModel
@@ -7208,6 +7361,12 @@ impl OrbitApp {
                 cx.notify();
                 return true;
             }
+            SettingsSelect::AgentCalls => {
+                self.agent_calls = crate::agent_call_display::AgentCallDisplay::from_index(ix);
+                self.agent_calls.persist();
+                cx.notify();
+                return true;
+            }
             SettingsSelect::DefaultModel => {
                 let model = if ix == 0 {
                     None
@@ -7332,6 +7491,7 @@ impl OrbitApp {
             | SettingsSelect::BackdropCell
             | SettingsSelect::BackdropFade
             | SettingsSelect::TitleModel
+            | SettingsSelect::AgentCalls
             | SettingsSelect::DefaultModel
             | SettingsSelect::DefaultThinking
             | SettingsSelect::ActiveModel
@@ -8351,6 +8511,29 @@ mod theme_catalog_tests {
                         theme::ThemeId::OrbitAzure,
                         theme::ThemeId::Flexoki,
                     ]
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn catalog_follows_the_design_system(cx: &mut gpui::TestAppContext) {
+        let app = test_app(cx);
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| {
+            let mut prefs = theme::appearance_prefs(cx);
+            prefs.set_design_system(theme::DesignSystem::Operational);
+            cx.set_global(prefs);
+        });
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                assert_eq!(
+                    app.theme_catalog(ThemeMode::Dark, cx),
+                    vec![theme::ThemeId::Operational]
+                );
+                assert_eq!(
+                    app.theme_catalog(ThemeMode::Light, cx),
+                    vec![theme::ThemeId::OperationalLight]
                 );
             });
         });

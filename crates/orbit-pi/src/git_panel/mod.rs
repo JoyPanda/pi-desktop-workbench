@@ -39,8 +39,8 @@ use crate::issue_message::{self, DraftKind};
 use crate::sidepane::{FileActions, SectionActions, SidePane};
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    button, context_menu, input, picker, popover, ButtonSize, DynamicSpacing, IconSize, Radius,
-    StyledExt, TextSize,
+    button, context_menu, input, panel, picker, popover, ButtonSize, DynamicSpacing, IconSize,
+    Radius, StyledExt, TextSize,
 };
 use crate::theme::{self, Theme, ThemeMode};
 use crate::usage::tooltip::Tooltip;
@@ -166,10 +166,18 @@ pub struct GitPanel {
     /// Provider/model used for one-shot commit-message generation.
     provider: String,
     model: String,
+    /// The selected model's context window, when the catalog reports one. Sizes
+    /// the commit-message prompt so a big change set still fits.
+    context_window: Option<u64>,
 
     // ── commit bar ──
     message: Entity<crate::composer::ComposerInput>,
     include_unstaged: bool,
+    /// How many messages were generated for the current change set, and the
+    /// last one shown. A regeneration is told about both so it cannot quietly
+    /// repeat the message the user rejected.
+    generate_attempt: usize,
+    last_generated: Option<String>,
     pending: Option<GitAction>,
     generating: bool,
     /// A pending "stage unstaged changes first?" confirmation.
@@ -463,8 +471,11 @@ impl GitPanel {
             workspace: None,
             provider: String::new(),
             model: String::new(),
+            context_window: None,
             message,
             include_unstaged: false,
+            generate_attempt: 0,
+            last_generated: None,
             pending: None,
             generating: false,
             stage_prompt: None,
@@ -626,6 +637,7 @@ impl GitPanel {
         workspace: Option<PathBuf>,
         provider: String,
         model: String,
+        context_window: Option<u64>,
         cx: &mut Context<Self>,
     ) {
         if workspace != self.workspace {
@@ -671,6 +683,7 @@ impl GitPanel {
         }
         self.provider = provider;
         self.model = model;
+        self.context_window = context_window;
     }
 
     /// Install the callback that opens a changed file's diff in Review.
@@ -963,9 +976,19 @@ impl GitPanel {
                 panel.changes_loading = false;
                 match result {
                     Ok((rows, operation, conflicts)) => {
-                        panel.staged = rows.iter().filter(|row| row.staged()).cloned().collect();
-                        panel.unstaged =
+                        let staged: Vec<StatusRow> =
+                            rows.iter().filter(|row| row.staged()).cloned().collect();
+                        let unstaged: Vec<StatusRow> =
                             rows.iter().filter(|row| row.unstaged()).cloned().collect();
+                        // Only a changed change set retires the generated message:
+                        // the watcher refreshes on every save, and a regeneration
+                        // for the same diff must still see the rejected attempt.
+                        if staged != panel.staged || unstaged != panel.unstaged {
+                            panel.generate_attempt = 0;
+                            panel.last_generated = None;
+                        }
+                        panel.staged = staged;
+                        panel.unstaged = unstaged;
                         panel.git_operation = operation;
                         panel.conflicts = conflicts;
                         panel.install_review_actions(cx);
@@ -1705,7 +1728,8 @@ impl GitPanel {
                     picker_entry(div().id(id), &theme)
                         .cursor_pointer()
                         .when(selected, |row| {
-                            row.bg(theme.selection).text_color(theme.selection_fg)
+                            row.bg(theme.surface_selected)
+                                .text_color(theme.selection_fg)
                         })
                         .when(!selected, |row| {
                             row.text_color(theme.text_secondary)
@@ -2535,45 +2559,71 @@ impl GitPanel {
         cx.notify();
         let provider = self.provider.clone();
         let model = self.model.clone();
-        let staged_rows = self.staged.clone();
         let include_unstaged = self.include_unstaged;
+        let attempt = self.generate_attempt;
+        let previous = self.last_generated.clone();
+        let context_window = self.context_window;
         cx.spawn(async move |this, cx| {
-            let result: Result<String, String> = cx
+            let result: Result<(String, Option<String>), String> = cx
                 .background_executor()
                 .spawn(async move {
-                    let staged = git::staged_patch(&cwd)?;
-                    let unstaged = if include_unstaged {
-                        git::unstaged_patch(&cwd).unwrap_or_default()
+                    // Read the status here rather than trusting the cached rows:
+                    // a commit flow stages its changes just before calling this,
+                    // and the cached rows would still be the pre-stage set.
+                    let rows = git::status_rows(&cwd)?;
+                    // The scope decides which patch the prompt describes, so the
+                    // message always matches what the commit records.
+                    let scope = if include_unstaged {
+                        commit_message::Scope::Worktree
                     } else {
-                        String::new()
+                        commit_message::Scope::Staged
                     };
+                    let rows: Vec<_> = rows
+                        .into_iter()
+                        .filter(|row| scope.matches(row))
+                        .collect();
+                    if rows.is_empty() {
+                        return Err(tr!("git.no_staged_changes"));
+                    }
                     let provider = (!provider.is_empty()).then_some(provider.as_str());
                     let model = (!model.is_empty()).then_some(model.as_str());
-                    match commit_message::generate(
-                        &cwd,
+                    let options = commit_message::Options {
                         provider,
                         model,
-                        &staged,
-                        &unstaged,
-                        &staged_rows,
-                    ) {
-                        Ok(message) => Ok(message),
-                        Err(_) => Ok(commit_message::heuristic(&staged_rows)),
+                        scope,
+                        attempt,
+                        previous: previous.as_deref(),
+                        context_window,
+                    };
+                    match commit_message::generate(&cwd, &options, &rows) {
+                        Ok(message) => Ok((message, None)),
+                        // Keep the button useful without a model, but say why:
+                        // a filename-derived fallback passed off as a generated
+                        // message is what makes a wrong message look like a bug.
+                        Err(err) => Ok((commit_message::heuristic(&rows), Some(err))),
                     }
                 })
                 .await;
             let _ = this.update(cx, |panel, cx| {
                 panel.generating = false;
                 match result {
-                    Ok(message) => {
+                    Ok((message, warning)) => {
                         let len = panel.message.read(cx).text().len();
                         panel
                             .message
                             .update(cx, |input, cx| input.replace_range(0..len, &message, cx));
-                        panel.set_status(tr!("git_panel.commit_message_ready"));
+                        panel.last_generated = Some(message.clone());
+                        panel.generate_attempt += 1;
                         if let Some(action) = action {
                             panel.run_git_action(action, Some(message), cx);
                             return;
+                        }
+                        match warning {
+                            Some(err) => panel.set_failure(tr!(
+                                "git_panel.commit_message_fallback",
+                                error = err
+                            )),
+                            None => panel.set_status(tr!("git_panel.commit_message_ready")),
                         }
                     }
                     Err(err) => panel.set_failure(err),
@@ -3644,7 +3694,7 @@ impl GitPanel {
                 .bg(theme.error.opacity(0.1))
                 .border_1()
                 .border_color(theme.error.opacity(0.45))
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .px(DynamicSpacing::Base12.px(&theme))
                 .py(DynamicSpacing::Base08.px(&theme))
                 .flex()
@@ -3824,7 +3874,7 @@ impl GitPanel {
                 .bg(theme.warning.opacity(0.1))
                 .border_1()
                 .border_color(theme.warning.opacity(0.45))
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .px(DynamicSpacing::Base12.px(&theme))
                 .py(DynamicSpacing::Base08.px(&theme))
                 .flex()
@@ -3949,7 +3999,7 @@ impl GitPanel {
                     .px(DynamicSpacing::Base16.px(&theme))
                     .pt(DynamicSpacing::Base12.px(&theme))
                     .pb(DynamicSpacing::Base12.px(&theme))
-                    .rounded(Radius::XXLarge.px(&theme))
+                    .rounded(input::composer_radius(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.surface_secondary)
@@ -3991,7 +4041,7 @@ impl GitPanel {
                                     .h(ButtonSize::Medium.height(&theme))
                                     .px(DynamicSpacing::Base06.px(&theme))
                                     .ml(px(-6.))
-                                    .rounded(Radius::Large.px(&theme))
+                                    .rounded(button::RADIUS.px(&theme))
                                     .flex()
                                     .items_center()
                                     .gap(DynamicSpacing::Base08.px(&theme))
@@ -4505,7 +4555,7 @@ impl GitPanel {
             .mb(DynamicSpacing::Base06.px(&theme))
             .px(DynamicSpacing::Base12.px(&theme))
             .py(DynamicSpacing::Base08.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.border)
             .bg(theme.surface_elevated)
@@ -5230,7 +5280,7 @@ impl GitPanel {
             main = main.child(
                 div()
                     .p(DynamicSpacing::Base12.px(&theme))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.surface_elevated)
@@ -5825,7 +5875,7 @@ impl GitPanel {
             content = content.child(
                 div()
                     .p(DynamicSpacing::Base12.px(&theme))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.surface_elevated)
@@ -5838,7 +5888,7 @@ impl GitPanel {
         // Checks.
         if !pull.checks.is_empty() {
             let mut checks = div()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -5901,7 +5951,7 @@ impl GitPanel {
         // Commits.
         if !pull.commits.is_empty() {
             let mut commits = div()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -5941,7 +5991,7 @@ impl GitPanel {
         // Changed files.
         if !pull.files.is_empty() {
             let mut files = div()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -6032,7 +6082,7 @@ impl GitPanel {
         // page sits in a card above the comment field, GitHub-style.
         if pull.is_open() {
             let merge_row = div()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -6606,7 +6656,8 @@ impl GitPanel {
         let mut row = picker_entry(div().id(id).group("git-branch-row"), &theme)
             .cursor_pointer()
             .when(selected, |row| {
-                row.bg(theme.selection).text_color(theme.selection_fg)
+                row.bg(theme.surface_selected)
+                    .text_color(theme.selection_fg)
             })
             .when(!selected, |row| {
                 row.text_color(theme.text_secondary)
@@ -6721,7 +6772,7 @@ impl GitPanel {
                             button_frame(div().id(id), &theme, ButtonSize::Medium)
                                 .cursor_pointer()
                                 .when(selected, |s| {
-                                    s.bg(theme.selection).text_color(theme.selection_fg)
+                                    s.bg(theme.surface_selected).text_color(theme.selection_fg)
                                 })
                                 .when(!selected, |s| {
                                     s.text_color(theme.text_muted).hover(|s| {
@@ -7460,7 +7511,7 @@ fn detail_note(theme: Theme, label: &str) -> AnyElement {
         .mb(DynamicSpacing::Base06.px(&theme))
         .px(DynamicSpacing::Base12.px(&theme))
         .py(DynamicSpacing::Base08.px(&theme))
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.surface_elevated)
@@ -7774,7 +7825,7 @@ fn issue_comment_card(comment: &gh::GhComment, theme: Theme) -> AnyElement {
     // Same rule as the review card: no body, no header separator.
     let has_body = !comment.body.trim().is_empty();
     div()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.surface_elevated)
@@ -8032,7 +8083,7 @@ fn review_card(review: &gh::GhReview, theme: Theme) -> AnyElement {
     // separate a body from the header, so it is dropped when there is none.
     let has_body = !review.body.trim().is_empty();
     div()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.surface_elevated)
@@ -8150,7 +8201,7 @@ fn graph_row(
         .gap(DynamicSpacing::Base08.px(&theme))
         .cursor_pointer()
         .hover(|s| s.bg(theme.surface_hover))
-        .when(selected, |s| s.bg(theme.selection))
+        .when(selected, |s| s.bg(theme.surface_selected))
         .on_click(listener)
         .child(graph_gutter(row, theme))
         .child(
@@ -8365,7 +8416,7 @@ fn commit_row(
         .gap(DynamicSpacing::Base08.px(&theme))
         .cursor_pointer()
         .hover(|s| s.bg(theme.surface_hover))
-        .when(selected, |row| row.bg(theme.selection))
+        .when(selected, |row| row.bg(theme.surface_selected))
         .on_click(listener)
         .child(history_marker(theme))
         .child(

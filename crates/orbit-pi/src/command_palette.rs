@@ -934,7 +934,7 @@ fn render_row(
                 });
             }
         })
-        .when(highlighted, |row| row.bg(theme.selection))
+        .when(highlighted, |row| row.bg(theme.surface_selected))
         .child(icon(
             item.icon,
             context_menu::ICON.px(&theme),

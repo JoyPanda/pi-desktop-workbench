@@ -42,7 +42,7 @@ use gpui::{
     DefiniteLength, Hsla, Pixels, Styled,
 };
 
-use super::{Theme, ThemeMode};
+use super::{DesignSystem, Theme, ThemeMode};
 
 // ── Units (`ui/src/styles/units.rs`) ────────────────────────────────────
 
@@ -84,6 +84,22 @@ pub enum Radius {
 
 impl Radius {
     pub fn px(self, theme: &Theme) -> Pixels {
+        // Restrained Operational Minimalism uses a tighter, fixed radius ramp:
+        // 6px buttons/inputs, 8px panels, 10px dialogs. Classic keeps the
+        // existing rem-based Zed scale.
+        if theme.design_system == DesignSystem::Operational {
+            return match self {
+                Self::None => px(0.),
+                Self::XSmall => px(2.),
+                Self::Small => px(4.),
+                Self::Medium => px(5.),
+                Self::Large => px(6.),
+                Self::XLarge => px(8.),
+                Self::XXLarge => px(10.),
+                Self::XXXLarge => px(12.),
+                Self::Full => px(9999.),
+            };
+        }
         match self {
             Self::None => px(0.),
             Self::XSmall => theme.rems(0.125),
@@ -256,7 +272,13 @@ impl TextSize {
             Self::Large => theme.ui_px(16.),
             Self::Default => theme.ui_px(14.),
             Self::Small => theme.ui_px(12.),
-            Self::XSmall => theme.ui_px(10.),
+            Self::XSmall => {
+                if theme.design_system == DesignSystem::Operational {
+                    theme.ui_px(11.)
+                } else {
+                    theme.ui_px(10.)
+                }
+            }
             Self::Ui => px(theme.ui.ui_font_size),
             Self::Editor => px(theme.ui.editor_font_size),
         }
@@ -543,6 +565,17 @@ pub mod list_item {
     /// `.rounded()` / `.outlined()` / inset items — the same corner as a
     /// sidebar destination.
     pub const RADIUS: Radius = Radius::Medium;
+}
+
+/// Cards, panels, and other meaningful rounded content groups. One radius for
+/// every card-like surface keeps nested boards from stepping through unrelated
+/// corner values; list rows and badges have their own roles below.
+pub mod panel {
+    use super::*;
+
+    /// Standard panel/card corner. Operational resolves this to 8px;
+    /// Classic keeps the existing 12px card corner.
+    pub const RADIUS: Radius = Radius::XLarge;
 }
 
 /// `List` and `ListSeparator` metrics.
@@ -969,6 +1002,16 @@ pub mod input {
     pub const RADIUS: Radius = Radius::Large;
     pub const LABEL: TextSize = TextSize::Small;
     pub const ICON: IconSize = IconSize::Small;
+
+    /// A large, multi-line composer is still an input. Classic keeps its
+    /// existing 16px composer silhouette; Operational uses the standard input
+    /// radius so every field shares one corner value.
+    pub fn composer_radius(theme: &Theme) -> Pixels {
+        match theme.design_system {
+            DesignSystem::Classic => Radius::XXLarge.px(theme),
+            DesignSystem::Operational => RADIUS.px(theme),
+        }
+    }
 }
 
 // ── Elevation (`ui/src/styles/elevation.rs`, `ui/src/traits/styled_ext.rs`)
@@ -992,6 +1035,16 @@ impl ElevationIndex {
     /// Zed's shadow stack for this layer. Only the two elevated layers cast
     /// one; the last layer of each is a 1px contact line with no blur.
     pub fn shadow(self, theme: &Theme) -> Vec<BoxShadow> {
+        // Operational keeps floating surfaces defined by their hairline: one
+        // tight contact layer for popovers, one restrained modal layer. No
+        // broad ambient shadows.
+        if theme.design_system == DesignSystem::Operational {
+            return match self {
+                Self::ElevatedSurface => vec![drop_shadow(1., 2., 0.10)],
+                Self::ModalSurface => vec![drop_shadow(2., 6., 0.16)],
+                Self::Background | Self::Surface | Self::EditorSurface => Vec::new(),
+            };
+        }
         let light = theme.mode == ThemeMode::Light;
         match self {
             Self::ElevatedSurface => vec![
@@ -1029,8 +1082,8 @@ fn drop_shadow(offset_y: f32, blur: f32, alpha: f32) -> BoxShadow {
     }
 }
 
-/// Zed's `StyledExt::elevation_*`: the elevated fill, a 12px [`Radius::XLarge`]
-/// corner, a 1px hairline, and the layer's shadow. The hairline is Orbit's
+/// Zed's `StyledExt::elevation_*`: the elevated fill, the shared
+/// [`panel::RADIUS`] corner, a 1px hairline, and the layer's shadow. The hairline is Orbit's
 /// floating-surface stroke (`border_strong`), the role Zed's `border_variant`
 /// plays.
 pub trait StyledExt: Styled + Sized {
@@ -1095,6 +1148,10 @@ pub fn raised_fill(color: Hsla) -> Background {
 /// short, soft ambient layer. Tight on purpose — a button sits just above the
 /// page, not over it (menus and modals use [`ElevationIndex`]).
 pub fn button_shadow(theme: &Theme) -> Vec<BoxShadow> {
+    // Operational buttons are flat: the fill and border carry the affordance.
+    if theme.design_system == DesignSystem::Operational {
+        return Vec::new();
+    }
     let mut contact = theme.shadow_contact;
     contact.a *= 0.45;
     let mut ambient = theme.shadow_contact;
@@ -1135,7 +1192,7 @@ impl<E: Styled> RaisedExt for E {}
 fn elevated<E: Styled>(el: E, theme: &Theme, index: ElevationIndex, bordered: bool) -> E {
     let el = el
         .bg(ElevationIndex::ElevatedSurface.bg(theme))
-        .rounded(Radius::XLarge.px(theme))
+        .rounded(panel::RADIUS.px(theme))
         .shadow(index.shadow(theme));
     if bordered {
         el.border_1().border_color(theme.border_strong)
@@ -1319,6 +1376,51 @@ mod tests {
         assert!(close(ButtonSize::Large.padding_x(&theme), 8.));
         assert!(close(ButtonSize::Default.padding_x(&theme), 4.));
         assert_eq!(ButtonSize::None.padding_x(&theme), px(1.));
+    }
+
+    #[test]
+    fn panel_and_composer_radii_are_semantic() {
+        let classic = default_theme();
+        assert!(close(panel::RADIUS.px(&classic), 12.));
+        assert!(close(input::composer_radius(&classic), 16.));
+
+        let operational = Theme::for_id(crate::theme::ThemeId::Operational);
+        assert!(close(panel::RADIUS.px(&operational), 8.));
+        assert!(close(input::composer_radius(&operational), 6.));
+        assert_eq!(
+            input::composer_radius(&operational),
+            input::RADIUS.px(&operational),
+            "Operational composers share the field radius"
+        );
+    }
+
+    #[test]
+    fn operational_geometry_is_tighter_and_flatter() {
+        let theme = Theme::for_id(crate::theme::ThemeId::Operational);
+        assert!(close(Radius::Small.px(&theme), 4.));
+        assert!(close(Radius::Medium.px(&theme), 5.));
+        assert!(close(Radius::Large.px(&theme), 6.));
+        assert!(close(Radius::XLarge.px(&theme), 8.));
+        assert!(close(TextSize::XSmall.px(&theme), 11.));
+        assert!(button_shadow(&theme).is_empty(), "flat buttons");
+        assert_eq!(
+            ElevationIndex::ElevatedSurface.shadow(&theme).len(),
+            1,
+            "one restrained popover layer"
+        );
+        assert_eq!(
+            ElevationIndex::ModalSurface.shadow(&theme).len(),
+            1,
+            "one restrained modal layer"
+        );
+    }
+
+    #[test]
+    fn classic_geometry_keeps_the_existing_scale() {
+        let theme = default_theme();
+        assert!(close(Radius::Large.px(&theme), 8.));
+        assert!(close(TextSize::XSmall.px(&theme), 10.));
+        assert_eq!(button_shadow(&theme).len(), 2);
     }
 
     #[test]
