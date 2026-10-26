@@ -3240,7 +3240,7 @@ impl OrbitApp {
                             .max_w(px(320.))
                             .truncate()
                             .text_color(theme.text_muted)
-                            .child(self.status.clone())
+                            .child(ext_widgets::strip_ansi(&self.status, &theme))
                     }),
             )
             // While a run is in flight the hints carry the one thing that is

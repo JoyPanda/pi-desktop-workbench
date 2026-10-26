@@ -89,6 +89,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The status bar no longer prints extension color codes as literal text. An
+  entry set with `ctx.ui.setStatus()` that styled itself via `ctx.ui.theme.fg()`
+  used to render the raw SGR escape (e.g. `[38;5;71m●[39m`), because the status
+  line drew its string verbatim. It now passes through the same ANSI parser the
+  extension-widget path already uses, so the codes are stripped and the entry
+  reads `● ADHD ON` as intended.
 - The Git page's **Generate** button now writes a commit message that describes
   what the commit actually records, including long files. Four things were
   wrong: the prompt always read the index (`git diff --cached`) even when
