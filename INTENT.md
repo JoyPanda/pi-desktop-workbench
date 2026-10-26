@@ -374,6 +374,17 @@ the PR list drops its duplicated state pill — and the PR detail now shares the
 detail's reading-column + metadata-rail layout (review, checks, changes, branches,
 timeline).
 
+The commit bar's **Generate** button has its own model picker (`commit_model.rs` +
+the chip beside Generate). Commit messages are a short, cheap task, so they do not
+have to run on the session model; the chip opens a searchable catalog with each
+provider's mark, and its first row always restores **Active session model**. The pick
+persists to `~/.orbit-pi/commit-model.json` (Orbit-owned, like the auto-title slot) and
+the commit prompt is then sized from the picked model's own context window, so a small
+local model gets a smaller diff budget instead of an overflowing prompt. The provider
+and model id are passed straight to the one-shot `pi -p` call, so a custom provider
+that pi resolves through an extension still works even when its catalog entry has not
+arrived; issue/PR drafts keep using the session model.
+
 The in-app bug report (Settings → Report a bug) picks an issue type (bug /
 feature / other, which sets the GitHub label and the generated section
 headings), takes free-form context at the top, and drafts the issue title and

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Git page → commit bar → **model chip**: the **Generate** button now chooses its
+  own model instead of always borrowing the chat session's. Commit messages are a
+  short, cheap task, so a small local model is often enough, and a model with a
+  different context window changes how much of a large change set fits the prompt.
+  The chip opens a searchable catalog with each provider's mark, an
+  **Active session model** row that restores the default, and ↑/↓/Enter/Escape
+  navigation; the pick persists to `~/.orbit-pi/commit-model.json`, and the prompt
+  budget is sized from the picked model's own window. Issue and PR draft generation
+  keeps using the session model.
 - **Attachments in the composer** — images, non-image files, and collapsed long
   pastes now share one tray above the input. Each item is a chip leading with the
   same 20px slot — the image thumbnail, or the file type's devicons mark — then its

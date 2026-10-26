@@ -2291,8 +2291,18 @@ impl OrbitApp {
             .iter()
             .find(|entry| entry.id == model && entry.provider == provider)
             .and_then(|entry| entry.context_window);
+        // The Git page's commit bar picks its own model from this catalog; the
+        // panel resolves the override's window itself.
+        let models = self.available_models.clone();
         self.git_panel.update(cx, |panel, cx| {
-            panel.set_context(workspace.clone(), provider, model, context_window, cx);
+            panel.set_context(
+                workspace.clone(),
+                provider,
+                model,
+                context_window,
+                models,
+                cx,
+            );
         });
         self.project_panel
             .update(cx, |panel, cx| panel.set_workspace(workspace.clone(), cx));

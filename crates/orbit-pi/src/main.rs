@@ -54,6 +54,7 @@ mod checkpoint;
 mod command_palette;
 mod commands;
 mod commit_message;
+mod commit_model;
 mod composer;
 mod composer_send;
 mod context_meter;

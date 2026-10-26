@@ -342,7 +342,7 @@ merge its key TSV into `en.yml`, then translate. They skip test code and
 
 ## Current state
 
-The product is the GPUI app (`cargo run -p orbit-pi`). The former React/Vite/Tauri
+The product is the GPUI app (`bacon run`). The former React/Vite/Tauri
 stack is gone; do not resurrect it.
 
 ### Shipped architecture
@@ -533,7 +533,7 @@ current implementation; do not use this section as a changelog.
 
 ## Definition of done (whole migration)
 
-Every feature in `PRODUCT.md` → `Capabilities` runs natively in the GPUI app against the pi CLI with the same behavior as the legacy UI; legacy `src-tauri` deleted; `cargo run -p orbit-pi` is the only way to launch.
+Every feature in `PRODUCT.md` → `Capabilities` runs natively in the GPUI app against the pi CLI with the same behavior as the legacy UI; legacy `src-tauri` deleted; `bacon run` is the only way to launch.
 
 **For an individual feature:** it runs natively in GPUI against the pi CLI, `cargo build --workspace` stays clean, tests cover the happy path, and the docs describe it — `INTENT.md` → *Implementation status* (plus a `D#` decision when the architecture changed), the `README.md` features/roadmap, and a `CHANGELOG.md` `[Unreleased]` entry. Update these in the same change that ships the feature, never as a follow-up.
 
@@ -541,7 +541,7 @@ Every feature in `PRODUCT.md` → `Capabilities` runs natively in the GPUI app a
 
 - `cargo build --workspace` must stay clean (zero warnings) after every change.
 - `cargo test --workspace` — unit tests + live pi integration tests. `live_pi.rs`, `live_catalog.rs`, and the other live tests skip when `pi` is missing; `orbit-pi` session-store tests skip when `~/.pi/agent/sessions` is empty. CI builds every change on macOS, Linux (ubuntu-22.04), and Windows, plus clippy on macOS (`.github/workflows/ci.yml`); tests run locally.
-- Run the app: `cargo run -p orbit-pi`. Check: sessions list from disk, new session (`cmd-n`), prompt streams into the transcript, model/thinking pickers, abort (`escape`), settings (`cmd-,`), sidebar toggle. Notifications need an app bundle — `scripts/run-bundled.sh` builds the debug binary into the ad-hoc-signed `Orbit Pi Alpha` (bundle id `dev.orbit.pi.alpha`, Alpha icon) and opens it.
-- Windows: the same `cargo run -p orbit-pi` builds and runs (GPUI renders through DXGI here). `gpui`'s default `windows-manifest` feature is off in `crates/orbit-pi/Cargo.toml` — it links a second `RT_MANIFEST` resource beside the one `build.rs` embeds, and CVTRES fails the link with `CVT1100: duplicate resource`. `scripts/bundle-windows.ps1` builds the Inno Setup installer (`scripts/installer/orbit-pi.iss`); it needs Inno Setup 6 (`ISCC.exe`) and, per-user under `%LocalAppData%\Programs`, no elevation. Desktop notifications and the alert sound are still macOS-only stubs. Window chrome is the app's own: the header row carries minimize / maximize / close, drawing a restore glyph when `window.is_maximized()`, and the header strips drag the window through `platform::start_window_drag`. Check them by clicking — `IsIconic`/`IsZoomed` flip, closing exits the process — and check dragging by pressing a header strip and moving the pointer; both were broken while the presses were routed through GPUI's `WindowControlArea` path, which this app's focusable root makes unusable (see the Shell row).
+- Run the app: `bacon run` (`cargo install bacon` once). `bacon.toml` defines the live-reload loop: `default_job = "run"` compiles `orbit-pi` and relaunches the window on every save, and `c` / `r` rebind to `check` / `run` inside the bacon TUI. Do not launch with `cargo run -p orbit-pi` when testing. Check: sessions list from disk, new session (`cmd-n`), prompt streams into the transcript, model/thinking pickers, abort (`escape`), settings (`cmd-,`), sidebar toggle. Notifications need an app bundle — `scripts/run-bundled.sh` builds the debug binary into the ad-hoc-signed `Orbit Pi Alpha` (bundle id `dev.orbit.pi.alpha`, Alpha icon) and opens it.
+- Windows: the same `bacon run` builds and runs (GPUI renders through DXGI here). `gpui`'s default `windows-manifest` feature is off in `crates/orbit-pi/Cargo.toml` — it links a second `RT_MANIFEST` resource beside the one `build.rs` embeds, and CVTRES fails the link with `CVT1100: duplicate resource`. `scripts/bundle-windows.ps1` builds the Inno Setup installer (`scripts/installer/orbit-pi.iss`); it needs Inno Setup 6 (`ISCC.exe`) and, per-user under `%LocalAppData%\Programs`, no elevation. Desktop notifications and the alert sound are still macOS-only stubs. Window chrome is the app's own: the header row carries minimize / maximize / close, drawing a restore glyph when `window.is_maximized()`, and the header strips drag the window through `platform::start_window_drag`. Check them by clicking — `IsIconic`/`IsZoomed` flip, closing exits the process — and check dragging by pressing a header strip and moving the pointer; both were broken while the presses were routed through GPUI's `WindowControlArea` path, which this app's focusable root makes unusable (see the Shell row).
 - No `unsafe` without a comment; no new dependencies without a stated reason.
 

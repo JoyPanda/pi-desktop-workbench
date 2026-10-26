@@ -17,11 +17,19 @@ export function GET(request: NextRequest) {
   const requested = request.nextUrl.searchParams.get("next") ?? "/";
   const locale = isLocale(to) ? to : DEFAULT_LOCALE;
 
+  /**
+   * The `Location` is path-relative on purpose. `request.url` carries the
+   * internal origin the server is reached on (this site is proxied from
+   * `localhost:3000`), so an absolute redirect built from it would drag a
+   * reader on production to localhost. A relative target is resolved by the
+   * browser against the URL that was requested, which is public by definition.
+   * Re-encoding keeps a decoded path (`/de/café`) legal in a header.
+   */
   const safe = requested.startsWith("/") && !requested.startsWith("//");
-  const response = NextResponse.redirect(
-    new URL(safe ? requested : "/", request.url),
-    307,
-  );
+  const response = new NextResponse(null, {
+    status: 307,
+    headers: { location: encodeURI(safe ? requested : "/") },
+  });
 
   response.cookies.set(LOCALE_COOKIE, locale, {
     path: "/",
