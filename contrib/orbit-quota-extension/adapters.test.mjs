@@ -20,6 +20,7 @@ import {
   OllamaCloudParser,
   configureQuotaAuth,
   ollamaCloudKey,
+  ollamaBalances,
   quotaAdapters,
   quotaReport,
   quotaReports,
@@ -226,6 +227,114 @@ test("ollama with a real cloud key maps the monthly credit fraction", async () =
     // The anniversary reset is not in the payload: never fabricated.
     assert.equal(window.resetsAt, undefined);
   });
+});
+
+test("ollama balance parser reads included and purchased buckets", () => {
+  assert.deepEqual(ollamaBalances({ included: 12.5, purchased: 40 }), [
+    { label: "Included", amount: 12.5, currency: "USD" },
+    { label: "Purchased", amount: 40, currency: "USD" },
+  ]);
+  // Object buckets carry their own currency; the nested container also works.
+  assert.deepEqual(
+    ollamaBalances({ included: { amount: 3, currency: "EUR" }, purchased: { remaining: 7 } }),
+    [
+      { label: "Included", amount: 3, currency: "EUR" },
+      { label: "Purchased", amount: 7, currency: "USD" },
+    ],
+  );
+  assert.deepEqual(ollamaBalances({ balance: { included: 1, purchased: 2, currency: "GBP" } }), [
+    { label: "Included", amount: 1, currency: "GBP" },
+    { label: "Purchased", amount: 2, currency: "GBP" },
+  ]);
+  // A real zero is meaningful (nothing purchased); an absent or unreadable
+  // bucket is not, and must never become a fabricated $0.
+  assert.deepEqual(ollamaBalances({ included: 5, purchased: 0 }), [
+    { label: "Included", amount: 5, currency: "USD" },
+    { label: "Purchased", amount: 0, currency: "USD" },
+  ]);
+  assert.deepEqual(ollamaBalances({}), []);
+  assert.deepEqual(ollamaBalances(null), []);
+  assert.deepEqual(ollamaBalances({ included: "n/a", purchased: null }), []);
+});
+
+test("ollama cloud key reports both balances from /api/balance", async () => {
+  await withAuth({ ollama: { type: "api_key", key: "real-cloud-key" } }, async () => {
+    const seen = [];
+    globalThis.fetch = async (url, init) => {
+      seen.push({
+        url: String(url),
+        auth: (init && init.headers && init.headers.Authorization) || "",
+      });
+      const body = String(url).includes("/api/balance")
+        ? { included: 12.5, purchased: 40 }
+        : { limits: { monthly: { usage: 0.28 } } };
+      return { ok: true, status: 200, url, text: async () => JSON.stringify(body) };
+    };
+    const report = await quotaReport("ollama");
+    assert.deepEqual(report.balances, [
+      { label: "Included", amount: 12.5, currency: "USD" },
+      { label: "Purchased", amount: 40, currency: "USD" },
+    ]);
+    // The meters still come from /api/usage.
+    assert.equal(report.windows.find((w) => w.id === "monthly").usedPercent, 28);
+    // The same key reaches both endpoints, and only ollama.com.
+    assert.deepEqual(
+      seen.map((r) => r.url).sort(),
+      ["https://ollama.com/api/balance", "https://ollama.com/api/usage"],
+    );
+    assert.deepEqual([...new Set(seen.map((r) => r.auth))], ["Bearer real-cloud-key"]);
+  });
+});
+
+test("ollama balance failure keeps the usage meters", async () => {
+  await withAuth({ ollama: { type: "api_key", key: "real-cloud-key" } }, async () => {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("/api/balance")) {
+        return { ok: false, status: 500, url, text: async () => "" };
+      }
+      return {
+        ok: true,
+        status: 200,
+        url,
+        text: async () => JSON.stringify({ limits: { monthly: { usage: 0.1 } } }),
+      };
+    };
+    const report = await quotaReport("ollama");
+    // A balance outage is additive-only: no error, no blanked meters.
+    assert.equal(report.error, undefined);
+    assert.deepEqual(report.balances, []);
+    assert.equal(report.windows.find((w) => w.id === "monthly").usedPercent, 10);
+  });
+});
+
+test("ollama balances survive the settings-page merge", async () => {
+  await withAuth(
+    {
+      "ollama-cloud": { type: "api_key", key: "real-cloud-key" },
+      "ollama-cloud-session": {
+        type: "ollama_cloud_session",
+        session: "__Secure-session=abc123",
+      },
+    },
+    async () => {
+      globalThis.fetch = async (url) => {
+        const target = String(url);
+        const body = target.includes("/api/balance")
+          ? JSON.stringify({ included: 5, purchased: 0 })
+          : target.includes("/api/usage")
+            ? JSON.stringify({ limits: { session: { usage: 0.1 } } })
+            : REAL_SETTINGS_HTML;
+        return { ok: true, status: 200, url, text: async () => body };
+      };
+      const report = await quotaReport("ollama-cloud");
+      assert.equal(report.windows.find((w) => w.id === "session").usedPercent, 10);
+      // The merge spreads the API report, so balances must come through whole.
+      assert.deepEqual(report.balances, [
+        { label: "Included", amount: 5, currency: "USD" },
+        { label: "Purchased", amount: 0, currency: "USD" },
+      ]);
+    },
+  );
 });
 
 test("ollama with a session parses the legacy settings page", async () => {

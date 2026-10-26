@@ -40,7 +40,11 @@ Usage — requests, tokens, cost, and cache, read from your own sessions:
 - Compact hints immediately left of the context-window indicator show both sending modes while the agent is working. Steering takes effect after the current response and tools finish; idle Enter sends normally, and Shift+Enter inserts a new line
 - **Workflow modes** — scope a session to **Plan**, **Build**, or **Ask**: Plan and Ask are read-only (write tools disabled, bash gated), so you can explore and plan before switching to Build
 - GPU-rendered transcript — virtualized so cost is independent of message count, with stick-to-latest streaming and coalesced commits
-- GFM markdown and syntax-highlighted code; highlighting is paint-only so streaming code blocks never reflow, and Mermaid fences stay copyable code blocks
+- GFM markdown and syntax-highlighted code; highlighting is paint-only so streaming code blocks never reflow
+- **Mermaid flowcharts drawn natively** — a `flowchart`/`graph` fence paints as a real diagram
+  (GPUI paths and text, no webview), `subgraph` groups included, with the copyable source one
+  click away; every other Mermaid diagram type keeps the honest source block instead of a fake
+  preview
 - In-transcript find (⌘F) and a full-window image lightbox
 - **Compressed image attachments** — images you attach or paste are downscaled and re-encoded at ingest (1400 px longest edge, 512 KiB base64, JPEG; transparency keeps lossless WebP), so a large screenshot no longer bloats the prompt or the session history; the status line reports the before/after size
 - **An attachment tray for images, files, and long pastes** — every queued item is one chip above the input showing what it is (image thumbnail or file-type badge), its name, its size or line count, and its own remove button; two or more chips add a count header with **Clear**. Dropping or picking a non-image file queues it as a file chip instead of splicing a path into the sentence, and on send it folds into the prompt as an `@path` mention the agent opens with its tools. The sent message shows those files as the same chips under the bubble (the path stays selectable), so a reloaded session looks like the live send. All three kinds share one eight-item budget

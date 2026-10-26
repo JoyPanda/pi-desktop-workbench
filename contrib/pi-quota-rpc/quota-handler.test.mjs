@@ -55,7 +55,7 @@ function loadHandler(opts = {}) {
     "success",
     "error",
     "fetch",
-    `${source}; return { orbitQuotaReport, orbitQuotaHandle, orbitQuotaAdapters, orbitQuotaSanitize, OllamaCloudParser, orbitOllamaCloudKey };`,
+    `${source}; return { orbitQuotaReport, orbitQuotaHandle, orbitQuotaAdapters, orbitQuotaSanitize, OllamaCloudParser, orbitOllamaCloudKey, orbitOllamaBalances };`,
   );
   return factory(session, success, error, fetch);
 }
@@ -284,6 +284,90 @@ test("ollama-cloud (third-party provider id) uses the stored cloud key", async (
       const report = await orbitQuotaReport("ollama-cloud");
       assert.equal(report.kind, "subscription");
       assert.equal(report.windows.find((w) => w.id === "monthly").usedPercent, 40);
+    },
+  );
+});
+
+test("ollama balance parser reads included and purchased buckets", () => {
+  const { orbitOllamaBalances } = loadHandler();
+  assert.deepEqual(orbitOllamaBalances({ included: 12.5, purchased: 40 }), [
+    { label: "Included", amount: 12.5, currency: "USD" },
+    { label: "Purchased", amount: 40, currency: "USD" },
+  ]);
+  assert.deepEqual(
+    orbitOllamaBalances({ included: { amount: 3, currency: "EUR" }, purchased: { remaining: 7 } }),
+    [
+      { label: "Included", amount: 3, currency: "EUR" },
+      { label: "Purchased", amount: 7, currency: "USD" },
+    ],
+  );
+  assert.deepEqual(orbitOllamaBalances({ balance: { included: 1, purchased: 2, currency: "GBP" } }), [
+    { label: "Included", amount: 1, currency: "GBP" },
+    { label: "Purchased", amount: 2, currency: "GBP" },
+  ]);
+  // A real zero is meaningful; an absent or unreadable bucket is not.
+  assert.deepEqual(orbitOllamaBalances({ included: 5, purchased: 0 }), [
+    { label: "Included", amount: 5, currency: "USD" },
+    { label: "Purchased", amount: 0, currency: "USD" },
+  ]);
+  assert.deepEqual(orbitOllamaBalances({}), []);
+  assert.deepEqual(orbitOllamaBalances(null), []);
+  assert.deepEqual(orbitOllamaBalances({ included: "n/a", purchased: null }), []);
+});
+
+test("ollama cloud key reports both balances from /api/balance", async () => {
+  await withAuth(
+    { ollama: { type: "api_key", key: "real-cloud-key" } },
+    async () => {
+      const seen = [];
+      const { orbitQuotaReport } = loadHandler({
+        fetch: async (url, init) => {
+          seen.push({
+            url: String(url),
+            auth: (init && init.headers && init.headers.Authorization) || "",
+          });
+          const body = String(url).includes("/api/balance")
+            ? { included: 12.5, purchased: 40 }
+            : { limits: { monthly: { usage: 0.28 } } };
+          return { ok: true, status: 200, url, text: async () => JSON.stringify(body) };
+        },
+      });
+      const report = await orbitQuotaReport("ollama");
+      assert.deepEqual(report.balances, [
+        { label: "Included", amount: 12.5, currency: "USD" },
+        { label: "Purchased", amount: 40, currency: "USD" },
+      ]);
+      assert.equal(report.windows.find((w) => w.id === "monthly").usedPercent, 28);
+      assert.deepEqual(
+        seen.map((r) => r.url).sort(),
+        ["https://ollama.com/api/balance", "https://ollama.com/api/usage"],
+      );
+      assert.deepEqual([...new Set(seen.map((r) => r.auth))], ["Bearer real-cloud-key"]);
+    },
+  );
+});
+
+test("ollama balance failure keeps the usage meters", async () => {
+  await withAuth(
+    { ollama: { type: "api_key", key: "real-cloud-key" } },
+    async () => {
+      const { orbitQuotaReport } = loadHandler({
+        fetch: async (url) => {
+          if (String(url).includes("/api/balance")) {
+            return { ok: false, status: 500, url, text: async () => "" };
+          }
+          return {
+            ok: true,
+            status: 200,
+            url,
+            text: async () => JSON.stringify({ limits: { monthly: { usage: 0.1 } } }),
+          };
+        },
+      });
+      const report = await orbitQuotaReport("ollama");
+      assert.equal(report.error, undefined);
+      assert.deepEqual(report.balances, []);
+      assert.equal(report.windows.find((w) => w.id === "monthly").usedPercent, 10);
     },
   );
 });

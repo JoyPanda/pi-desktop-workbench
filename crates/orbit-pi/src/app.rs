@@ -3030,16 +3030,6 @@ struct ProviderEditor {
     error: Option<String>,
 }
 
-/// What a [`ProviderKeyEditor`] is collecting. Ollama Cloud needs both a
-/// monthly-credit API key and an optional legacy session; everything else uses
-/// the plain API-key form.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ProviderKeyKind {
-    ApiKey,
-    /// A pasted `Cookie:` header for Ollama Cloud's settings-page usage.
-    OllamaCloudSession,
-}
-
 /// The API-key editor's open state (one field, provider-scoped).
 struct ProviderKeyEditor {
     provider_id: String,
@@ -3047,7 +3037,6 @@ struct ProviderKeyEditor {
     /// Supports OAuth too, so the modal can offer the sign-in path as well.
     oauth: bool,
     note: &'static str,
-    kind: ProviderKeyKind,
     key: Entity<ComposerInput>,
     error: Option<String>,
 }
@@ -3123,7 +3112,6 @@ impl ProviderView {
         self.auth.map(|auth| match auth.kind {
             providers::AuthKind::OAuth => "oauth",
             providers::AuthKind::ApiKey => "api_key",
-            providers::AuthKind::OllamaSession => "session",
         })
     }
 }
@@ -3190,13 +3178,6 @@ enum ProviderAction {
         name: String,
         oauth: bool,
         note: &'static str,
-    },
-    /// Open the Ollama Cloud session editor (a pasted cookie header) — the
-    /// legacy session/weekly path, distinct from the monthly-credit API key.
-    /// Carries the provider id that opened it (`ollama` or `ollama-cloud`).
-    EditOllamaSession {
-        id: String,
-        name: String,
     },
     SignOut {
         id: String,

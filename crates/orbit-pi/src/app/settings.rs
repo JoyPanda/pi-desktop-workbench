@@ -3326,7 +3326,6 @@ impl OrbitApp {
                 .child(match kind {
                     "oauth" => tr!("settings.cred_oauth"),
                     "api_key" => tr!("settings.cred_api_key"),
-                    "session" => tr!("settings.cred_session"),
                     other => other.to_string(),
                 });
             if let Some(status) = &view.live_status {
@@ -3510,24 +3509,6 @@ impl OrbitApp {
                         },
                     ));
                 }
-            }
-            // Ollama Cloud usage is separate from the local endpoint's API key:
-            // current accounts use a real cloud key (monthly credits); legacy
-            // accounts expose session/weekly usage only behind a signed-in
-            // settings page, which needs the user's own session cookie. Offer
-            // the session editor explicitly so neither is auto-scraped.
-            if providers::is_ollama_cloud_provider(&view.id) {
-                primary = primary.child(self.provider_button(
-                    format!("provider-ollama-session-{}", view.id),
-                    &tr!("settings.usage_session"),
-                    ProviderButtonStyle::Ghost,
-                    theme,
-                    this.clone(),
-                    ProviderAction::EditOllamaSession {
-                        id: view.id.clone(),
-                        name: view.name.clone(),
-                    },
-                ));
             }
             let connected = view.auth.is_some()
                 || view
@@ -3720,7 +3701,6 @@ impl OrbitApp {
             ProviderAction::AuthCancel => Some("icons/x.svg"),
             ProviderAction::AuthDismiss => Some("icons/check.svg"),
             ProviderAction::EditKey { .. } => Some("icons/at-sign.svg"),
-            ProviderAction::EditOllamaSession { .. } => Some("icons/clock.svg"),
             ProviderAction::ShowUsage { .. } => Some("icons/usage-total.svg"),
             ProviderAction::SignOut { .. } => Some("icons/stop.svg"),
             ProviderAction::Configure { .. } => Some("icons/settings.svg"),
@@ -3769,15 +3749,6 @@ impl OrbitApp {
                 oauth,
                 note,
             } => self.provider_key_open(id, name, oauth, note, window, cx),
-            ProviderAction::EditOllamaSession { id, name } => self.provider_credential_open(
-                id,
-                name,
-                false,
-                "",
-                ProviderKeyKind::OllamaCloudSession,
-                window,
-                cx,
-            ),
             ProviderAction::SignOut { id } => self.provider_sign_out(id, cx),
             ProviderAction::ShowUsage { id } => {
                 self.provider_usage_open = Some(id);
@@ -3937,13 +3908,8 @@ impl OrbitApp {
     ) -> Option<AnyElement> {
         let editor = self.provider_key_editor.as_ref()?;
 
-        let (field_label, hint) = match editor.kind {
-            ProviderKeyKind::ApiKey => (tr!("settings.api_key"), tr!("settings.api_key_hint")),
-            ProviderKeyKind::OllamaCloudSession => (
-                tr!("settings.session_cookie"),
-                tr!("settings.session_cookie_hint"),
-            ),
-        };
+        let field_label = tr!("settings.api_key");
+        let hint = tr!("settings.api_key_hint");
 
         let mut body = div()
             .w_full()
@@ -3981,7 +3947,7 @@ impl OrbitApp {
                     .child(providers::localize_note(editor.note)),
             );
         }
-        if editor.oauth && editor.kind == ProviderKeyKind::ApiKey {
+        if editor.oauth {
             let id = editor.provider_id.clone();
             let name = editor.provider_name.clone();
             let this_signin = this.clone();
@@ -7878,41 +7844,13 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.provider_credential_open(
-            provider_id,
-            provider_name,
-            oauth,
-            note,
-            ProviderKeyKind::ApiKey,
-            window,
-            cx,
-        );
-    }
-
-    /// Open the credential editor for `kind` (API key or an Ollama Cloud
-    /// session). One modal handles both; the field, hint, and save path differ.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn provider_credential_open(
-        &mut self,
-        provider_id: String,
-        provider_name: String,
-        oauth: bool,
-        note: &'static str,
-        kind: ProviderKeyKind,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let placeholder = match kind {
-            ProviderKeyKind::ApiKey => "sk-…",
-            ProviderKeyKind::OllamaCloudSession => "__Secure-session=…",
-        };
         let key = cx.new(|cx| {
             ComposerInput::new(cx)
                 .with_element_id("provider-key-input")
                 .with_key_context("Composer Picker")
                 .with_max_lines(1)
                 .with_wrap(false)
-                .with_placeholder(placeholder)
+                .with_placeholder("sk-…")
         });
         let focus = key.read(cx).focus_handle(cx);
         window.focus(&focus);
@@ -7921,7 +7859,6 @@ impl OrbitApp {
             provider_name,
             oauth,
             note,
-            kind,
             key,
             error: None,
         });
@@ -7935,21 +7872,14 @@ impl OrbitApp {
         };
         let id = editor.provider_id.clone();
         let name = editor.provider_name.clone();
-        let kind = editor.kind;
         let key = editor.key.read(cx).text();
-        let result = match kind {
-            ProviderKeyKind::ApiKey => providers::write_api_key(&id, &key),
-            ProviderKeyKind::OllamaCloudSession => providers::write_ollama_cloud_session(&key),
-        };
+        let result = providers::write_api_key(&id, &key);
         match result {
             Ok(()) => {
                 self.provider_key_editor = None;
                 self.provider_auth_dirty = true;
                 self.reload_custom_providers(cx);
-                let what = match kind {
-                    ProviderKeyKind::ApiKey => tr!("settings.api_key"),
-                    ProviderKeyKind::OllamaCloudSession => tr!("settings.ollama_cloud_session"),
-                };
+                let what = tr!("settings.api_key");
                 self.toast_success(tr!("settings.key_saved_for", what = what, name = name));
             }
             Err(err) => {
@@ -7999,14 +7929,6 @@ impl OrbitApp {
     /// removes it live; otherwise fall back to dropping the auth.json entry
     /// (env credentials are outside Orbit's reach and left alone).
     pub(super) fn provider_sign_out(&mut self, id: String, cx: &mut Context<Self>) {
-        // The Ollama Cloud session lives under its own auth.json key, which
-        // pi's provider logout does not know about; clear it so Disconnect
-        // drops the whole credential. Both Ollama ids share the session.
-        if providers::is_ollama_cloud_provider(&id) {
-            if let Err(err) = providers::remove_ollama_session() {
-                self.provider_auth_error = Some(err);
-            }
-        }
         if self.auth.support() == AuthSupport::Supported {
             self.auth.on_logout_response(true, &id);
             self.send(

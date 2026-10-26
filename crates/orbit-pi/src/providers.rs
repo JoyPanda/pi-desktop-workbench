@@ -303,21 +303,6 @@ pub(crate) fn auth_path() -> PathBuf {
         .join("auth.json")
 }
 
-/// `auth.json` key holding the Ollama Cloud session cookie. Deliberately not a
-/// provider id: pi treats any stored credential under a provider id as
-/// authoritative, so an unrecognized `ollama_cloud_session` type under `ollama`
-/// would shadow that provider's own (placeholder) key and make pi report
-/// `Provider is not configured: ollama`.
-const OLLAMA_SESSION_KEY: &str = "ollama-cloud-session";
-
-/// The provider ids Ollama Cloud usage attaches to: the local Ollama
-/// endpoint's id, and the `ollama-cloud` id used by the third-party
-/// `pi-ollama-cloud-provider` package. Orbit treats both as the same account
-/// for the session editor, sign-out, and quota display.
-pub(crate) fn is_ollama_cloud_provider(id: &str) -> bool {
-    id == "ollama" || id == "ollama-cloud"
-}
-
 /// A provider pi ships with, independent of whether it is authenticated.
 /// Mirrors `builtinProviders()` in `@earendil-works/pi-ai` plus the docs'
 /// env-var / OAuth table, so Orbit can list every provider individually.
@@ -621,9 +606,6 @@ fn read_catalog_counts(dir: &Path) -> Option<HashMap<String, usize>> {
 pub(crate) enum AuthKind {
     ApiKey,
     OAuth,
-    /// The Ollama Cloud settings-page cookie. Stored under a non-provider key
-    /// ([`OLLAMA_SESSION_KEY`]) and surfaced as provider `ollama` for the UI.
-    OllamaSession,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -658,16 +640,11 @@ fn read_auth_at(path: &Path) -> Result<HashMap<String, ProviderAuth>, String> {
         return Ok(HashMap::new());
     };
     let mut out = HashMap::new();
-    let mut has_ollama_session = false;
     for (id, entry) in entries {
         let Some(entry) = entry.as_object() else {
             continue;
         };
         let kind = match entry.get("type").and_then(Value::as_str) {
-            Some("ollama_cloud_session") => {
-                has_ollama_session = true;
-                continue;
-            }
             Some("oauth") => AuthKind::OAuth,
             Some("api_key") => AuthKind::ApiKey,
             // Older/partial entries: infer from the fields present.
@@ -676,17 +653,6 @@ fn read_auth_at(path: &Path) -> Result<HashMap<String, ProviderAuth>, String> {
             _ => continue,
         };
         out.insert(id.clone(), ProviderAuth { kind });
-    }
-    // The session cookie lives outside the provider credential; surface it
-    // under both Ollama ids so whichever card exists (the local `ollama`
-    // endpoint or the third-party `ollama-cloud` provider) shows it and
-    // offers Disconnect. A real credential under either id wins.
-    if has_ollama_session {
-        for id in ["ollama", "ollama-cloud"] {
-            out.entry(id.to_string()).or_insert(ProviderAuth {
-                kind: AuthKind::OllamaSession,
-            });
-        }
     }
     Ok(out)
 }
@@ -720,69 +686,6 @@ fn write_api_key_at(path: &Path, id: &str, key: &str) -> Result<(), String> {
 /// Remove a provider's stored credential (sign out).
 pub(crate) fn remove_auth(id: &str) -> Result<(), String> {
     remove_auth_at(&auth_path(), id)
-}
-
-/// Store an Ollama Cloud usage session (a `Cookie:` header the user pasted
-/// from their own signed-in browser) for provider id `ollama`. Written to
-/// `auth.json` under [`OLLAMA_SESSION_KEY`] with `0600`; the value is only ever
-/// sent to `ollama.com` by the pi-side quota handler and never logged or shown
-/// again.
-///
-/// The entry deliberately lives *outside* the `ollama` provider credential so
-/// it can never shadow the local endpoint's placeholder key in pi's auth
-/// resolver. It remains a distinct type from an API key, so the handler can
-/// tell the current monthly-credit API path (real key) from the legacy
-/// session/weekly settings-page path (session).
-pub(crate) fn write_ollama_cloud_session(session: &str) -> Result<(), String> {
-    write_ollama_cloud_session_at(&auth_path(), session)
-}
-
-fn write_ollama_cloud_session_at(path: &Path, session: &str) -> Result<(), String> {
-    let session = session.trim();
-    if session.is_empty() {
-        return Err(tr!("providers.session_cookie_required"));
-    }
-    // A pasted value must look like a cookie header, not an API key. Reject
-    // anything without a `name=value` pair so a stray key can't be stored as
-    // a session (and leak into a Cookie header).
-    if !session.contains('=') {
-        return Err("Paste the Cookie header (e.g. `__Secure-session=…`).".into());
-    }
-    let mut root = read_auth_root_at(path)?;
-    let entries = root
-        .as_object_mut()
-        .ok_or_else(|| tr!("providers.auth_json_not_object"))?;
-    // Repair a cookie written by an older build under the provider id; leaving
-    // it there keeps the local endpoint broken.
-    let legacy_session = entries
-        .get("ollama")
-        .and_then(Value::as_object)
-        .is_some_and(|entry| {
-            entry.get("type").and_then(Value::as_str) == Some("ollama_cloud_session")
-        });
-    if legacy_session {
-        entries.remove("ollama");
-    }
-    let mut entry = Map::new();
-    entry.insert("type".into(), Value::String("ollama_cloud_session".into()));
-    entry.insert("session".into(), Value::String(session.to_string()));
-    entries.insert(OLLAMA_SESSION_KEY.to_string(), Value::Object(entry));
-    write_json_secure(path, &root)
-}
-
-/// Remove only the Ollama Cloud session cookie entry, leaving any provider
-/// credential under `ollama` in place. Sign-out calls this because pi's own
-/// logout only knows the provider key.
-pub(crate) fn remove_ollama_session() -> Result<(), String> {
-    remove_ollama_session_at(&auth_path())
-}
-
-fn remove_ollama_session_at(path: &Path) -> Result<(), String> {
-    let mut root = read_auth_root_at(path)?;
-    if let Some(entries) = root.as_object_mut() {
-        entries.remove(OLLAMA_SESSION_KEY);
-    }
-    write_json_secure(path, &root)
 }
 
 fn remove_auth_at(path: &Path, id: &str) -> Result<(), String> {
@@ -1132,98 +1035,6 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("auth.json");
         assert!(write_api_key_at(&path, "anthropic", "   ").is_err());
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn stores_ollama_cloud_session_outside_the_provider_credential() {
-        let dir = std::env::temp_dir().join(format!("orbit-ollama-session-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("auth.json");
-        // Keep an unrelated provider's credential intact.
-        write_api_key_at(&path, "anthropic", "sk-ant-test").unwrap();
-
-        write_ollama_cloud_session_at(&path, "__Secure-session=abc123; cf_clearance=xyz").unwrap();
-
-        let raw = std::fs::read_to_string(&path).unwrap();
-        let root: Value = serde_json::from_str(&raw).unwrap();
-        // Never under the provider id: an unknown credential type there makes
-        // pi report the local endpoint as unconfigured.
-        assert!(
-            root.get("ollama").is_none(),
-            "session must not shadow the provider credential"
-        );
-        let session = root.get(OLLAMA_SESSION_KEY).expect("session entry");
-        assert_eq!(session.get("type").unwrap(), "ollama_cloud_session");
-        assert_eq!(
-            session.get("session").unwrap(),
-            "__Secure-session=abc123; cf_clearance=xyz"
-        );
-        // The UI surfaces it under both Ollama ids, distinct from a key.
-        let auth = read_auth_at(&path).unwrap();
-        assert_eq!(auth["ollama"].kind, AuthKind::OllamaSession);
-        assert_eq!(auth["ollama-cloud"].kind, AuthKind::OllamaSession);
-        // The unrelated key survives the write.
-        assert!(root.get("anthropic").is_some());
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600, "auth.json must stay owner-only");
-        }
-
-        // Signing out of `ollama` clears the session without touching the key.
-        write_api_key_at(&path, "ollama", "real-cloud-key").unwrap();
-        remove_ollama_session_at(&path).unwrap();
-        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(root.get(OLLAMA_SESSION_KEY).is_none());
-        assert!(root.get("ollama").is_some());
-    }
-
-    #[test]
-    fn a_real_ollama_key_wins_over_the_session_in_the_ui() {
-        let dir = std::env::temp_dir().join(format!("orbit-ollama-key-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("auth.json");
-        write_api_key_at(&path, "ollama", "real-cloud-key").unwrap();
-        write_ollama_cloud_session_at(&path, "__Secure-session=abc123").unwrap();
-        // Both coexist; the provider credential stays the API key.
-        let auth = read_auth_at(&path).unwrap();
-        assert_eq!(auth["ollama"].kind, AuthKind::ApiKey);
-    }
-
-    #[test]
-    fn rewrites_a_legacy_session_stored_under_the_provider_id() {
-        let dir = std::env::temp_dir().join(format!("orbit-ollama-legacy-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("auth.json");
-        std::fs::write(
-            &path,
-            r#"{"ollama":{"type":"ollama_cloud_session","session":"__Secure-session=old"}}"#,
-        )
-        .unwrap();
-
-        write_ollama_cloud_session_at(&path, "__Secure-session=new").unwrap();
-
-        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(root.get("ollama").is_none(), "legacy entry removed");
-        assert_eq!(root[OLLAMA_SESSION_KEY]["session"], "__Secure-session=new");
-    }
-
-    #[test]
-    fn rejects_a_session_value_without_a_cookie_pair() {
-        let dir = std::env::temp_dir().join(format!("orbit-ollama-bad-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("auth.json");
-        // A bare API key has no `name=value` pair and must not be stored as a
-        // session (it would otherwise leak into a Cookie header).
-        assert!(write_ollama_cloud_session_at(&path, "abc123realkey").is_err());
-        assert!(write_ollama_cloud_session_at(&path, "   ").is_err());
         assert!(!path.exists());
     }
 

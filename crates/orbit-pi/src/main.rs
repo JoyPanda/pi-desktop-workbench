@@ -77,6 +77,7 @@ mod layout;
 mod main_window;
 mod mcp;
 mod mentions;
+mod mermaid;
 mod message_scroller;
 mod model_selector;
 mod model_selector_match;

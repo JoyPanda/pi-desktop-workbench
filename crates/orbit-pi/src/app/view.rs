@@ -182,6 +182,10 @@ impl Render for OrbitApp {
             self.close_model_selector(window, cx);
         }
         let theme = *theme::get(cx);
+        // Diagram layout sizes node boxes from shaped text, and the markdown
+        // renderer it runs inside has no `window`; hand it the text system for
+        // the duration of this frame.
+        crate::mermaid::install(window);
         // Sessions the sidebar lists, plus a placeholder for the open one
         // when its file is not on disk yet. The archived filter is applied
         // here so row indices match the list the render path receives; the

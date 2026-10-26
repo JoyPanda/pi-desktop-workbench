@@ -43,13 +43,25 @@ than faking a pi-native mode. `--approve` is project trust (a separate concern).
 removed and is not a fallback.
 
 ### D2 — Mermaid diagrams
-**Choice:** code-block fallback first; no diagram rendering in the P0–P3 core. Later, evaluate
-(a) graphviz DOT for flowchart/sequence, or (b) a hidden native WKWebView used solely as a
-**rasterizer** (render → snapshot image → GPU image; the Waku `browser.rs` pattern), or
-(c) a custom GPUI renderer (only if we own enough of the diagram types).
-**Reason:** no good native Rust Mermaid exists; a full custom renderer is 2–3 weeks and still
-won't cover gantt/pie. This is the one accepted feature regression in the migration. Never
-present a diagram that isn't rendered — render a copyable code block instead.
+**Choice (revised):** a **native GPUI renderer for a Mermaid subset** — option (c) below — shipped
+for `flowchart`/`graph` (TD/TB, BT, LR, RL; common node shapes; chained and labelled edges;
+`subgraph` groups drawn as titled frames).
+Everything outside the subset keeps the code-block fallback. Fences are still parsed as ordinary
+code blocks, so the transcript's block model, copy path, and fold state are unchanged; the
+renderer upgrades a fence to a diagram at paint time and offers the source behind a disclosure.
+The original "code-block fallback only" choice and the two alternatives it weighed:
+(a) graphviz DOT for flowchart/sequence and (b) a hidden native WKWebView used solely as a
+**rasterizer** are both **rejected**: (b) reopens the no-webview rule for one feature, and (a)
+trades a large dependency plus a translation step for diagrams whose source the agent already
+wrote in Mermaid.
+**Reason:** no good native Rust Mermaid exists, so the renderer is ours; a full custom renderer is
+2–3 weeks and still won't cover gantt/pie — which is why the subset is explicit and the fallback is
+the default for anything outside it. **Never present a diagram that isn't rendered:** a fence the
+parser does not fully understand (another diagram type, an unparsable statement) falls back to the
+copyable source rather than drawing a partial graph. Layout is
+cached by source + interface font and needs no JS, no webview, and no network.
+**Cost of the subset:** sequence, class, state, gantt, pie, ER, and journey are not drawn yet; each
+is its own parser + layout in `src/mermaid/`.
 
 ### D3 — Rollout: full commit to GPUI (supersedes the original staged plan)
 **Choice (revised):** the web stack (React/Vite/Tauri/Node daemon) was **removed from the repo** and the GPUI app is the only app. The original plan kept both apps alive until chat parity; that was superseded when the web stack was deleted at the user's direction.
@@ -500,7 +512,7 @@ the product; the per-item detail lives in AGENT.md.
 | P2 | Data layer: serde models, sessions/catalog/workbench clients | ✅ Shipped |
 | P3 | Core chat: transcript, streaming, markdown, composer, tools, diff | ✅ Shipped (stream veil + explicit ≤8.3 Hz pipeline open) |
 | P4 | Workbench pages + settings persistence | ✅ Shipped (plus Explorer/Files, terminal, Git/GitHub, localization, updater) |
-| P5 | Mermaid fallback + a11y | ◐ Mermaid code-block fallback + reduce-motion shipped; app-wide focus rings + screen-reader labeling open |
+| P5 | Mermaid + a11y | ◐ Native flowchart rendering + code-block fallback for the rest + reduce-motion shipped; other diagram types, app-wide focus rings, screen-reader labeling open |
 | P6 | Tests, perf harness, packaging/notarization, CI | ◐ Unit/live tests, 10k perf test, signed `.app`/DMG, CI shipped; on-device scroll benchmark + streaming edge coverage open |
 
 Open backlog (detail in AGENT.md): conversation fork/rewind, on-device scroll-perf measurement,
@@ -516,7 +528,8 @@ per-tool renderers, Windows/Linux native polish.
 3. **Composer editor** — *resolved:* the multi-line `ComposerInput` (`EntityInputHandler`) has
    shipped, wrapping, auto-growing, and scrolling. Reuse it for new text controls rather than
    introducing another editor abstraction.
-4. **Mermaid regression** — accepted; D2 path chosen, fallback never fakes.
+4. **Mermaid coverage** — a native renderer covers flowcharts only; every other diagram type
+   keeps the honest code-block fallback (D2), so no fence ever draws a partial graph.
 5. **GPUI churn** — pinned 0.2.2 (D4); upgrade = its own task with the registry source as docs.
 6. **Velocity** — Rust UI iteration is 3–5× slower than React hot-reload; the estimates assume
    this, not hope.

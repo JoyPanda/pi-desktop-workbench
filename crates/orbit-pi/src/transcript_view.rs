@@ -1923,6 +1923,7 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
                     paint.copied_sections.clone(),
                     paint.expanded_blocks.clone(),
                     true,
+                    true,
                     paint.scroller.clone(),
                     Some(paint.table_breakout),
                 )),
@@ -2013,6 +2014,7 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint, cx: &gpui::App) -
                         theme,
                         paint.copied_sections.clone(),
                         paint.expanded_blocks.clone(),
+                        true,
                         true,
                         paint.scroller.clone(),
                         None,
@@ -2227,6 +2229,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                         theme,
                         paint.copied_sections.clone(),
                         paint.expanded_blocks.clone(),
+                        !paint.live,
                         !paint.live,
                         paint.scroller.clone(),
                         Some(paint.table_breakout),
@@ -6185,6 +6188,7 @@ fn render_prose(
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
+    settled: bool,
     scroller: MessageScrollerState,
     table_breakout: Option<TableBreakout>,
 ) -> impl IntoElement + use<> {
@@ -6235,6 +6239,7 @@ fn render_prose(
                         copied_sections.clone(),
                         expanded_blocks.clone(),
                         collapsible,
+                        settled,
                         scroller.clone(),
                     ))
             })
@@ -6259,6 +6264,7 @@ pub(crate) fn render_markdown_document(text: &str, theme: Theme) -> impl IntoEle
         copied,
         expanded,
         false,
+        true,
         MessageScrollerState::new(1),
         None,
     )
@@ -6296,6 +6302,7 @@ fn render_block(
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
+    settled: bool,
     scroller: MessageScrollerState,
 ) -> AnyElement {
     match block {
@@ -6338,6 +6345,7 @@ fn render_block(
             copied_sections,
             expanded_blocks,
             collapsible,
+            settled,
             scroller,
         )
         .into_any_element(),
@@ -6657,9 +6665,33 @@ fn render_code_block(
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
+    settled: bool,
     scroller: MessageScrollerState,
-) -> impl IntoElement {
+) -> AnyElement {
     let code = lines.join("\n");
+    // A mermaid fence Orbit can lay out becomes a diagram (D2); one it cannot
+    // — another diagram type, or a statement outside the supported subset —
+    // keeps the source block below, so a fence never reads as a broken preview.
+    // Only once the text settles: a half-streamed fence is not a graph yet, and
+    // laying one out per heartbeat would trade a frame for a flicker.
+    let diagram = if settled {
+        mermaid_diagram(language, &code)
+    } else {
+        None
+    };
+    if let Some(diagram) = diagram {
+        return render_mermaid_block(
+            diagram,
+            lines,
+            ix,
+            salt,
+            block_ix,
+            theme,
+            copied_sections,
+            expanded_blocks,
+            scroller,
+        );
+    }
     let tokens = language
         .and_then(highlight::lang_for_tag)
         .map(|lang| highlight::tokenize_cached(lang, &code));
@@ -6668,41 +6700,7 @@ fn render_code_block(
     // the step/user run it was parsed from, so two steps' third blocks
     // never share copy feedback, element state, or fold state.
     let block_key = salt as usize + block_ix;
-    let copied = copied_sections
-        .borrow()
-        .get(&(ix, block_key, CODE_COPY_SECTION))
-        .is_some_and(|at| at.elapsed() < COPY_FEEDBACK);
-    let copy_button = icon_button_frame(
-        div().id(ElementId::NamedInteger(
-            "copy-code".into(),
-            (ix as u64) << 32 | block_key as u64,
-        )),
-        &theme,
-        CODE_COPY_BUTTON,
-    )
-    .tip(tr!("transcript.copy_code"))
-    .cursor_pointer()
-    .hover(|style| style.bg(theme.overlay_strong))
-    .child(glyph(
-        if copied {
-            "icons/check.svg"
-        } else {
-            "icons/copy.svg"
-        },
-        CODE_COPY_BUTTON.icon_size().px(&theme),
-        if copied {
-            theme.success
-        } else {
-            theme.text_muted
-        },
-    ))
-    .on_click(move |_, _, cx| {
-        cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
-        copied_sections
-            .borrow_mut()
-            .insert((ix, block_key, CODE_COPY_SECTION), Instant::now());
-        cx.refresh_windows();
-    });
+    let copy_button = code_copy_button(ix, block_key, &code, &copied_sections, theme);
     // Title strip: the language name and the copy affordance in one row, so
     // context and action sit in the same place on every code block.
     let header = div()
@@ -6751,46 +6749,14 @@ fn render_code_block(
         .bg(theme.code_bg)
         .overflow_hidden()
         .child(header)
-        .child(
-            div()
-                .id(ElementId::NamedInteger(
-                    "code-scroll".into(),
-                    (ix as u64) << 32 | block_key as u64,
-                ))
-                .w_full()
-                .min_w_0()
-                .flex()
-                .items_start()
-                .overflow_x_scroll()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_none()
-                        .px(DynamicSpacing::Base16.px(&theme))
-                        .pt(DynamicSpacing::Base08.px(&theme))
-                        .pb(DynamicSpacing::Base12.px(&theme))
-                        .font_family(theme::code_font_family())
-                        .text_size(theme.code_px(13.))
-                        .line_height(theme.code_px(21.))
-                        .text_color(theme.code_text)
-                        .children(visible.iter().enumerate().map(|(line_ix, line)| {
-                            let line_id = ElementId::NamedInteger(
-                                "code-line".into(),
-                                code_line_id(ix, salt, block_ix, line_ix),
-                            );
-                            code_line(
-                                line,
-                                tokens
-                                    .as_deref()
-                                    .and_then(|lines| lines.get(line_ix))
-                                    .map(Vec::as_slice),
-                                line_id,
-                                theme,
-                            )
-                        })),
-                ),
-        );
+        .child(code_lines_body(
+            visible,
+            tokens.as_deref(),
+            ix,
+            salt,
+            block_ix,
+            theme,
+        ));
 
     if folded {
         let hidden = lines.len() - CODE_PREVIEW_LINES;
@@ -6842,7 +6808,250 @@ fn render_code_block(
         );
     }
 
-    card
+    card.into_any_element()
+}
+
+/// The copy affordance shared by code blocks and diagrams: copies `code` and
+/// flashes a check for [`COPY_FEEDBACK`], keyed by block so two blocks never
+/// share the flash.
+fn code_copy_button(
+    ix: usize,
+    block_key: usize,
+    code: &str,
+    copied_sections: &CopiedSections,
+    theme: Theme,
+) -> AnyElement {
+    let code = code.to_string();
+    let copied_sections = copied_sections.clone();
+    let copied = copied_sections
+        .borrow()
+        .get(&(ix, block_key, CODE_COPY_SECTION))
+        .is_some_and(|at| at.elapsed() < COPY_FEEDBACK);
+    icon_button_frame(
+        div().id(ElementId::NamedInteger(
+            "copy-code".into(),
+            (ix as u64) << 32 | block_key as u64,
+        )),
+        &theme,
+        CODE_COPY_BUTTON,
+    )
+    .tip(tr!("transcript.copy_code"))
+    .cursor_pointer()
+    .hover(|style| style.bg(theme.overlay_strong))
+    .child(glyph(
+        if copied {
+            "icons/check.svg"
+        } else {
+            "icons/copy.svg"
+        },
+        CODE_COPY_BUTTON.icon_size().px(&theme),
+        if copied {
+            theme.success
+        } else {
+            theme.text_muted
+        },
+    ))
+    .on_click(move |_, _, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
+        copied_sections
+            .borrow_mut()
+            .insert((ix, block_key, CODE_COPY_SECTION), Instant::now());
+        cx.refresh_windows();
+    })
+    .into_any_element()
+}
+
+/// One code block's body: syntax-highlighted monospace lines that scroll
+/// horizontally rather than wrapping or clipping. Shared by the code block
+/// and a diagram's source disclosure.
+fn code_lines_body(
+    lines: &[String],
+    tokens: Option<&Vec<Vec<Token>>>,
+    ix: usize,
+    salt: u64,
+    block_ix: usize,
+    theme: Theme,
+) -> impl IntoElement {
+    let block_key = salt as usize + block_ix;
+    div()
+        .id(ElementId::NamedInteger(
+            "code-scroll".into(),
+            (ix as u64) << 32 | block_key as u64,
+        ))
+        .w_full()
+        .min_w_0()
+        .flex()
+        .items_start()
+        .overflow_x_scroll()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .px(DynamicSpacing::Base16.px(&theme))
+                .pt(DynamicSpacing::Base08.px(&theme))
+                .pb(DynamicSpacing::Base12.px(&theme))
+                .font_family(theme::code_font_family())
+                .text_size(theme.code_px(13.))
+                .line_height(theme.code_px(21.))
+                .text_color(theme.code_text)
+                .children(lines.iter().enumerate().map(|(line_ix, line)| {
+                    let line_id = ElementId::NamedInteger(
+                        "code-line".into(),
+                        code_line_id(ix, salt, block_ix, line_ix),
+                    );
+                    code_line(
+                        line,
+                        tokens
+                            .and_then(|lines| lines.get(line_ix))
+                            .map(Vec::as_slice),
+                        line_id,
+                        theme,
+                    )
+                })),
+        )
+}
+
+/// The laid-out diagram for a fence, or `None` when it is not a mermaid fence
+/// this build can draw.
+fn mermaid_diagram(language: Option<&str>, code: &str) -> Option<Rc<crate::mermaid::Flowchart>> {
+    match language {
+        Some(tag) if tag.eq_ignore_ascii_case("mermaid") => crate::mermaid::diagram(code),
+        _ => None,
+    }
+}
+
+/// A rendered mermaid fence: the diagram on the code block's card, with the
+/// source one click away.
+///
+/// The diagram is the fast path — reading a flow at a glance — but the source
+/// stays a real code block, selectable and copyable, because that is what a
+/// reader takes to their editor. The disclosure reuses the code fold's state:
+/// the two never coexist for one block, so one key covers both.
+#[allow(clippy::too_many_arguments)]
+fn render_mermaid_block(
+    diagram: Rc<crate::mermaid::Flowchart>,
+    lines: &[String],
+    ix: usize,
+    salt: u64,
+    block_ix: usize,
+    theme: Theme,
+    copied_sections: CopiedSections,
+    expanded_blocks: ExpandedBlocks,
+    scroller: MessageScrollerState,
+) -> AnyElement {
+    let code = lines.join("\n");
+    let block_key = salt as usize + block_ix;
+    let showing_source = expanded_blocks.borrow().contains(&(ix, salt, block_ix));
+    let copy_button = code_copy_button(ix, block_key, &code, &copied_sections, theme);
+
+    let header = div()
+        .w_full()
+        .min_w_0()
+        .h(px(34.))
+        .px(DynamicSpacing::Base12.px(&theme))
+        .flex()
+        .items_center()
+        .gap(DynamicSpacing::Base08.px(&theme))
+        .bg(theme.overlay)
+        .rounded_t(panel::RADIUS.px(&theme))
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_size(TextSize::Small.px(&theme))
+                .line_height(theme.ui_px(15.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text_muted)
+                .child(tr!("transcript_view.mermaid_diagram")),
+        )
+        .child(copy_button);
+
+    let body: AnyElement = if showing_source {
+        let tokens =
+            highlight::lang_for_tag("mermaid").map(|lang| highlight::tokenize_cached(lang, &code));
+        code_lines_body(lines, tokens.as_deref(), ix, salt, block_ix, theme).into_any_element()
+    } else {
+        div()
+            .id(ElementId::NamedInteger(
+                "diagram-scroll".into(),
+                (ix as u64) << 32 | block_key as u64,
+            ))
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_start()
+            .overflow_x_scroll()
+            .child(
+                div()
+                    .flex_none()
+                    .p(DynamicSpacing::Base16.px(&theme))
+                    .child(crate::mermaid::render_diagram(&diagram, theme)),
+            )
+            .into_any_element()
+    };
+
+    let toggle_label = if showing_source {
+        tr!("transcript.show_less")
+    } else {
+        tr!("transcript_view.show_source")
+    };
+    let toggle = div()
+        .id(ElementId::NamedInteger(
+            "diagram-source".into(),
+            (ix as u64) << 32 | block_key as u64,
+        ))
+        .w_full()
+        .min_w_0()
+        .h(px(30.))
+        .px(DynamicSpacing::Base12.px(&theme))
+        .border_t_1()
+        .border_color(theme.border)
+        .flex()
+        .items_center()
+        .gap(DynamicSpacing::Base06.px(&theme))
+        .cursor_pointer()
+        .text_size(TextSize::Small.px(&theme))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_secondary)
+        .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
+        .child(toggle_label)
+        .child(div().flex_1())
+        .child(glyph(
+            if showing_source {
+                "icons/chevron-down.svg"
+            } else {
+                "icons/chevron-right.svg"
+            },
+            IconSize::XSmall.px(&theme),
+            theme.text_muted,
+        ))
+        .on_click(move |_, _, cx| {
+            let key = (ix, salt, block_ix);
+            let mut open = expanded_blocks.borrow_mut();
+            if !open.remove(&key) {
+                open.insert(key);
+            }
+            drop(open);
+            scroller.remeasure_toggle(ix);
+            cx.refresh_windows();
+        });
+
+    div()
+        .w_full()
+        .min_w_0()
+        .rounded(panel::RADIUS.px(&theme))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.code_bg)
+        .overflow_hidden()
+        .child(header)
+        .child(body)
+        .child(toggle)
+        .into_any_element()
 }
 
 /// Display label for a code block's title strip: a friendly language name
@@ -6850,8 +7059,10 @@ fn render_code_block(
 /// `Plain text` for a bare fence.
 fn code_block_label(language: Option<&str>) -> String {
     match language {
-        // D2: no native diagram renderer. A mermaid fence stays a copyable
-        // code block — the label says so instead of pretending to preview.
+        // D2: this is the *fallback* label. A mermaid fence that lays out is
+        // drawn by `render_mermaid_block` and never reaches here; one that does
+        // not keeps its source, and the label says so instead of pretending to
+        // preview.
         Some(tag) if tag.eq_ignore_ascii_case("mermaid") => {
             tr!("transcript_view.mermaid_source")
         }
@@ -8511,9 +8722,10 @@ mod tests {
 
     #[test]
     fn mermaid_fences_stay_copyable_code_blocks() {
-        // D2: diagrams are never faked. A mermaid fence parses as an ordinary
-        // code block (so it is copyable) and its label is honest about the
-        // missing preview.
+        // D2 revised: a mermaid fence is still parsed as a code block — the
+        // renderer upgrades it to a diagram only when it can lay one out, and
+        // the source stays one click away. The fallback label is honest about
+        // the case where it cannot.
         let blocks = parse_blocks("```mermaid\ngraph TD; A-->B;\n```");
         assert!(matches!(&blocks[0], Block::Code(Some(lang), lines)
                 if lang == "mermaid" && lines == &["graph TD; A-->B;".to_string()]));
@@ -8521,6 +8733,112 @@ mod tests {
             code_block_label(Some("Mermaid")),
             "Mermaid · source (preview unavailable)"
         );
+    }
+
+    #[gpui::test]
+    fn a_mermaid_fence_paints_a_diagram(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+
+        struct DiagramDocView;
+        impl gpui::Render for DiagramDocView {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div().w(px(360.)).child(render_markdown_document(
+                    "```mermaid\ngraph TD\n  A[Ask] --> B{Ready?}\n  B -->|yes| C[Ship]\n  B -->|no| A\n```",
+                    theme::Theme::for_id(theme::ThemeId::Orbit),
+                ))
+            }
+        }
+
+        let view = cx.update(|_, cx| cx.new(|_| DiagramDocView));
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(420.), px(420.)),
+            move |_, _| view.clone(),
+        );
+        cx.run_until_parked();
+
+        // The drawing gets real bounds: a fallback source block would paint
+        // no diagram at all, and a zero-height element would mean layout
+        // never reached the canvas.
+        let bounds = cx
+            .debug_bounds("mermaid-diagram")
+            .expect("the diagram is painted");
+        assert!(
+            bounds.size.width > px(100.),
+            "width {:?}",
+            bounds.size.width
+        );
+        assert!(
+            bounds.size.height > px(100.),
+            "height {:?}",
+            bounds.size.height
+        );
+    }
+
+    #[gpui::test]
+    fn a_streaming_fence_keeps_its_source_block(cx: &mut gpui::TestAppContext) {
+        // "Once generation is complete": a half-streamed fence is not a graph
+        // yet, and laying one out per heartbeat would trade a frame for a
+        // flicker. The same fence upgrades as soon as the row settles.
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        let settled = Rc::new(Cell::new(false));
+
+        struct StreamingView(Rc<Cell<bool>>);
+        impl gpui::Render for StreamingView {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                let theme = theme::Theme::for_id(theme::ThemeId::Orbit);
+                div().w(px(360.)).child(render_code_block(
+                    Some("mermaid"),
+                    &["graph TD".to_string(), "  A --> B".to_string()],
+                    0,
+                    0,
+                    0,
+                    theme,
+                    Rc::new(RefCell::new(HashMap::new())),
+                    Rc::new(RefCell::new(HashSet::new())),
+                    false,
+                    self.0.get(),
+                    MessageScrollerState::new(1),
+                ))
+            }
+        }
+
+        let view = cx.update(|_, cx| cx.new(|_| StreamingView(settled.clone())));
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            let view = view.clone();
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(420.), px(420.)),
+                move |_, _| view.clone(),
+            );
+            cx.run_until_parked();
+        };
+        paint(cx);
+        assert!(
+            cx.debug_bounds("mermaid-diagram").is_none(),
+            "a live row keeps the source block until it settles"
+        );
+
+        settled.set(true);
+        paint(cx);
+        assert!(
+            cx.debug_bounds("mermaid-diagram").is_some(),
+            "the settled row draws the diagram"
+        );
+    }
+
+    #[test]
+    fn mermaid_fences_upgrade_only_when_a_diagram_lays_out() {
+        // The fence tag picks the renderer, not the body: a mermaid fence
+        // Orbit cannot draw keeps its source block, and no other fence ever
+        // becomes a diagram.
+        assert!(mermaid_diagram(Some("mermaid"), "graph TD\n A --> B").is_some());
+        assert!(mermaid_diagram(Some("Mermaid"), "flowchart LR\n A --> B").is_some());
+        assert!(mermaid_diagram(Some("mermaid"), "pie title Pets").is_none());
+        assert!(mermaid_diagram(Some("rust"), "graph TD\n A --> B").is_none());
+        assert!(mermaid_diagram(None, "graph TD\n A --> B").is_none());
     }
 
     #[test]
