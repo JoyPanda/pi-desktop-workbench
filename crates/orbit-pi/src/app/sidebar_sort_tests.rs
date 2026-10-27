@@ -118,10 +118,8 @@ fn last_updated_sorts_an_empty_group_last() {
 }
 
 #[test]
-fn last_updated_does_not_float_the_open_sessions_group() {
-    // beta has the newest activity. Alpha holds the open session, but
-    // selecting it must not pull alpha above beta — only a newer message
-    // moves a project.
+fn last_updated_does_not_override_activity_when_opening_a_session() {
+    // Opening alpha must not override the explicitly selected activity sort.
     let sessions = vec![
         store_session("a1", "/work/alpha", 10),
         store_session("b1", "/work/beta", 30),

@@ -308,6 +308,42 @@ fn pinned_sessions_lead_their_group_and_beat_truncation() {
 }
 
 #[test]
+fn expanded_group_keeps_all_pins_and_runs_visible_above_the_cap() {
+    let count = SIDEBAR_GROUP_SESSIONS_VISIBLE + 3;
+    let sessions: Vec<SessionInfo> = (0..count)
+        .map(|i| store_session(&format!("a{i}"), "/work/alpha"))
+        .collect();
+    let pinned: HashSet<PathBuf> = sessions
+        .iter()
+        .take(count - 1)
+        .map(|s| s.path.clone())
+        .collect();
+    let running = HashSet::from([sessions[count - 1].path.clone()]);
+    let active = Some(sessions[count - 1].path.clone());
+    let rows = build_sidebar_rows(
+        &sessions,
+        &workspace_paths(&["/work/alpha"]),
+        WorkspaceSort::Manual,
+        &HashMap::new(),
+        "alpha",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashMap::new(),
+        &pinned,
+        &active,
+        &running,
+        &HashSet::new(),
+    );
+    assert_eq!(
+        session_row_paths(&rows, &sessions),
+        sessions.iter().map(|s| s.path.clone()).collect::<Vec<_>>()
+    );
+    assert!(!rows
+        .iter()
+        .any(|row| matches!(row, SideRow::ShowMore { .. })));
+}
+
+#[test]
 fn pinned_sessions_stay_visible_in_a_collapsed_workspace() {
     // Foreign projects are collapsed by default; a pin is a deliberate mark
     // and must survive that — under its header, alongside the open row.

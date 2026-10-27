@@ -5974,6 +5974,13 @@ impl OrbitApp {
         ));
         theme_rows.push(self.setting_row(
             theme,
+            &tr!("settings.accent_color"),
+            None,
+            None,
+            Some(self.accent_color_control(theme, this.clone(), cx)),
+        ));
+        theme_rows.push(self.setting_row(
+            theme,
             &tr!("settings.background_image"),
             Some(&tr!("settings.a_dithered_image_behind_the_new_task_page")),
             background.as_deref(),
@@ -6157,6 +6164,47 @@ impl OrbitApp {
         }
         sections
     }
+    fn accent_color_control(
+        &self,
+        theme: Theme,
+        this: Entity<OrbitApp>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        use theme::AccentColor;
+        let current = theme::appearance_prefs(cx).accent_color;
+        let label = |color: AccentColor| match color {
+            AccentColor::Default => tr!("settings.accent_default").to_string(),
+            AccentColor::Blue => tr!("settings.accent_blue").to_string(),
+            AccentColor::Coral => tr!("settings.accent_coral").to_string(),
+            AccentColor::Orange => tr!("settings.accent_orange").to_string(),
+            AccentColor::Lime => tr!("settings.accent_lime").to_string(),
+            _ => color.label().to_string(),
+        };
+        let selected = AccentColor::ALL
+            .iter()
+            .position(|color| *color == current)
+            .unwrap_or(0);
+        self.select_control(
+            "accent-color-select",
+            SettingsSelect::AccentColor,
+            label(current),
+            AccentColor::ALL.into_iter().map(label).collect(),
+            selected,
+            theme,
+            this,
+            cx,
+        )
+    }
+
+    fn set_accent_color(&mut self, color: theme::AccentColor, cx: &mut Context<Self>) {
+        let mut prefs = theme::appearance_prefs(cx);
+        prefs.accent_color = color;
+        if let Err(error) = theme::set_appearance_prefs(cx, prefs) {
+            self.toast_error(tr!("settings.appearance_save_failed", error = error));
+        }
+        cx.notify();
+    }
+
     /// One keyboard-focusable radio group drawn as a segmented control (the
     /// same control as the follow-up delivery mode); arrows choose the
     /// adjacent mode.
@@ -6736,6 +6784,7 @@ impl OrbitApp {
                 "%",
             ),
             SettingsSelect::Language
+            | SettingsSelect::AccentColor
             | SettingsSelect::Theme(_)
             | SettingsSelect::UiFontFamily
             | SettingsSelect::CodeFontFamily
@@ -7064,6 +7113,12 @@ impl OrbitApp {
                                     } else {
                                         theme.text_secondary
                                     })
+                                    .when(kind == SettingsSelect::AccentColor, |row| {
+                                        let base = Theme::for_id(theme.theme_id);
+                                        let color =
+                                            theme::AccentColor::ALL[orig_ix].apply(base).accent;
+                                        row.child(div().size(px(14.)).rounded_full().bg(color))
+                                    })
                                     .when_some(provider, |row, provider| {
                                         row.child(icon_dyn(
                                             provider_icon(provider),
@@ -7268,6 +7323,12 @@ impl OrbitApp {
         cx: &mut Context<Self>,
     ) -> bool {
         match kind {
+            SettingsSelect::AccentColor => {
+                if let Some(color) = theme::AccentColor::ALL.get(ix).copied() {
+                    self.set_accent_color(color, cx);
+                }
+                return true;
+            }
             SettingsSelect::Theme(mode) => {
                 let catalog = self.theme_catalog(mode, cx);
                 let Some(id) = catalog.get(ix).copied() else {
@@ -7435,6 +7496,7 @@ impl OrbitApp {
                 ui.spacing_density = SPACING_DENSITIES.get(ix).copied().unwrap_or(100);
             }
             SettingsSelect::Theme(_)
+            | SettingsSelect::AccentColor
             | SettingsSelect::UiFontFamily
             | SettingsSelect::CodeFontFamily
             | SettingsSelect::BackdropCell

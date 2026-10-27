@@ -28,7 +28,7 @@ fn flat_rows_hold_every_session_without_headers() {
         store_session("b1", "/work/beta", 20),
         store_session("a2", "/work/alpha", 10),
     ];
-    let rows = build_flat_sidebar_rows(&sessions, &HashSet::new());
+    let rows = build_flat_sidebar_rows(&sessions, &HashSet::new(), &None, &HashSet::new());
 
     // Every session lands as a row, in the store's order, and no group
     // headers, show-more, or collapse rows appear.
@@ -44,27 +44,50 @@ fn flat_rows_lead_with_pinned_sessions() {
         store_session("a2", "/work/alpha", 10),
     ];
     let pinned: HashSet<PathBuf> = [PathBuf::from("/store/a2.jsonl")].into_iter().collect();
-    let rows = build_flat_sidebar_rows(&sessions, &pinned);
+    let rows = build_flat_sidebar_rows(&sessions, &pinned, &None, &HashSet::new());
 
     // The pinned session rises to the top; the rest keep newest-first order.
     assert_eq!(session_indices(&rows), vec![2, 0, 1]);
 }
 
 #[test]
-fn flat_rows_keep_newest_first_when_a_session_is_open() {
+fn flat_rows_place_the_open_session_ahead_of_newer_idle_ones() {
     // The store hands sessions over newest-first. The open session is the
-    // older one; selecting it must not lift it over the newer sibling.
+    // older one, and it rises above idle siblings. Pins still lead it.
     let sessions = vec![
         store_session("background", "/work/alpha", 30),
         store_session("active", "/work/alpha", 10),
     ];
-    let rows = build_flat_sidebar_rows(&sessions, &HashSet::new());
-    assert_eq!(session_indices(&rows), vec![0, 1]);
+    let active = Some(sessions[1].path.clone());
+    let rows = build_flat_sidebar_rows(&sessions, &HashSet::new(), &active, &HashSet::new());
+    assert_eq!(session_indices(&rows), vec![1, 0]);
+}
+
+#[test]
+fn flat_rows_keep_pins_ahead_of_open_and_running_sessions() {
+    let sessions = vec![
+        store_session("running", "/work/alpha", 40),
+        store_session("idle", "/work/alpha", 30),
+        store_session("open", "/work/alpha", 20),
+        store_session("pinned", "/work/alpha", 10),
+    ];
+    let pinned = HashSet::from([sessions[3].path.clone()]);
+    let running = HashSet::from([sessions[0].path.clone()]);
+    let active = Some(sessions[2].path.clone());
+    let rows = build_flat_sidebar_rows(&sessions, &pinned, &active, &running);
+    assert_eq!(session_indices(&rows), vec![3, 2, 0, 1]);
+    let rows = build_flat_sidebar_rows(
+        &sessions,
+        &pinned,
+        &Some(sessions[3].path.clone()),
+        &running,
+    );
+    assert_eq!(session_indices(&rows), vec![3, 0, 1, 2]);
 }
 
 #[test]
 fn flat_rows_are_empty_without_sessions() {
-    let rows = build_flat_sidebar_rows(&[], &HashSet::new());
+    let rows = build_flat_sidebar_rows(&[], &HashSet::new(), &None, &HashSet::new());
     assert!(rows.is_empty());
 }
 
