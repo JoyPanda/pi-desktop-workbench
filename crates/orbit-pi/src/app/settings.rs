@@ -6875,7 +6875,8 @@ impl OrbitApp {
         )
     }
 
-    /// The Interface / Code font-family dropdowns — Orbit's curated catalog.
+    /// The Interface / Code font-family dropdowns. Both list every family
+    /// installed on this machine, including the bundled faces.
     pub(super) fn font_family_select(
         &self,
         kind: SettingsSelect,
@@ -6883,30 +6884,26 @@ impl OrbitApp {
         this: Entity<OrbitApp>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        use crate::theme::{FontChoice, CODE_FONTS, UI_FONTS};
         let prefs = theme::font_prefs();
-        let (id, current, choices): (&'static str, SharedString, &[FontChoice]) = match kind {
-            SettingsSelect::UiFontFamily => (
-                "ui-font-family-select",
-                prefs.ui_font_family.clone(),
-                &UI_FONTS,
-            ),
-            SettingsSelect::CodeFontFamily => (
-                "code-font-family-select",
-                prefs.code_font_family.clone(),
-                &CODE_FONTS,
-            ),
+        let (id, current) = match kind {
+            SettingsSelect::UiFontFamily => ("ui-font-family-select", prefs.ui_font_family.clone()),
+            SettingsSelect::CodeFontFamily => {
+                ("code-font-family-select", prefs.code_font_family.clone())
+            }
             _ => unreachable!(),
         };
-        let selected = choices
+        let families = theme::system_font_families(cx);
+        // `usize::MAX` leaves every row unchecked when the stored family is
+        // not installed, instead of marking the first row as chosen.
+        let selected = families
             .iter()
-            .position(|f| f.family == current.as_ref())
-            .unwrap_or(0);
+            .position(|family| theme::font_family_matches(current.as_ref(), family))
+            .unwrap_or(usize::MAX);
         self.select_control(
             id,
             kind,
             theme::font_choice_label(current.as_ref()),
-            choices.iter().map(|f| f.label.to_string()).collect(),
+            families.iter().map(|family| family.to_string()).collect(),
             selected,
             theme,
             this,
@@ -6999,10 +6996,16 @@ impl OrbitApp {
                             } else {
                                 app.settings_select = Some(kind);
                                 // Open with the cursor on the chosen option,
-                                // scrolled into view in the list below.
-                                app.settings_select_highlight = Some(selected);
-                                app.settings_select_scroll
-                                    .scroll_to_item(selected, ScrollStrategy::Center);
+                                // scrolled into view in the list below. A
+                                // missing font family (`usize::MAX`) opens
+                                // with no row checked.
+                                if selected == usize::MAX {
+                                    app.settings_select_highlight = None;
+                                } else {
+                                    app.settings_select_highlight = Some(selected);
+                                    app.settings_select_scroll
+                                        .scroll_to_item(selected, ScrollStrategy::Center);
+                                }
                                 app.settings_filter
                                     .update(cx, |filter, cx| filter.clear(cx));
                                 let handle = app.settings_filter.read(cx).focus_handle(cx);
@@ -7046,6 +7049,13 @@ impl OrbitApp {
             .collect();
         let empty = rows.is_empty();
         let highlight = self.settings_select_highlight;
+        // Font rows paint their own family. Only the visible slice resolves
+        // a face; the row stays one picker entry tall so a tall face cannot
+        // push the check icon out of the menu.
+        let font_preview = matches!(
+            kind,
+            SettingsSelect::UiFontFamily | SettingsSelect::CodeFontFamily
+        );
         // Virtualized list — only the visible rows are laid out and painted.
         // The font-family dropdowns can have a thousand+ entries, and the
         // whole app re-renders on every scroll tick, so rendering every row
@@ -7090,7 +7100,7 @@ impl OrbitApp {
                         let row_id =
                             ElementId::NamedInteger("settings-select-row".into(), orig_ix as u64);
                         children.push(
-                            div().h(row_h).w_full().child(
+                            div().h(row_h).w_full().overflow_hidden().child(
                                 picker_entry(div().id(row_id), &theme)
                                     .h(row_h)
                                     .justify_between()
@@ -7108,7 +7118,17 @@ impl OrbitApp {
                                     } else {
                                         theme.text_secondary
                                     })
-                                    .child(option.clone())
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .when(font_preview, |label| {
+                                                label.font_family(option.clone())
+                                            })
+                                            .child(option.clone()),
+                                    )
                                     .when(selected_row, |row| {
                                         row.child(icon(
                                             "icons/check.svg",
@@ -7293,19 +7313,14 @@ impl OrbitApp {
                 return true;
             }
             SettingsSelect::UiFontFamily | SettingsSelect::CodeFontFamily => {
-                use crate::theme::{CODE_FONTS, UI_FONTS};
-                let choices = match kind {
-                    SettingsSelect::UiFontFamily => &UI_FONTS[..],
-                    SettingsSelect::CodeFontFamily => &CODE_FONTS[..],
-                    _ => unreachable!(),
-                };
-                let Some(choice) = choices.get(ix) else {
+                let families = theme::system_font_families(cx);
+                let Some(family) = families.get(ix).cloned() else {
                     return true;
                 };
                 let mut prefs = theme::font_prefs();
                 match kind {
-                    SettingsSelect::UiFontFamily => prefs.ui_font_family = choice.family.into(),
-                    SettingsSelect::CodeFontFamily => prefs.code_font_family = choice.family.into(),
+                    SettingsSelect::UiFontFamily => prefs.ui_font_family = family,
+                    SettingsSelect::CodeFontFamily => prefs.code_font_family = family,
                     _ => unreachable!(),
                 }
                 theme::set_font_prefs(prefs);

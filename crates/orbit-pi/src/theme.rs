@@ -10,7 +10,7 @@
 //! (`.ZedSans`); code surfaces use Zed's Lilex (`.ZedMono`).
 
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
 use gpui::{hsla, point, px, rgb, App, BoxShadow, Global, Hsla, Pixels, SharedString};
 use serde_json::Value;
@@ -635,8 +635,9 @@ pub fn code_font_family() -> SharedString {
         .clone()
 }
 
-/// A named entry in the curated Interface / Code font pickers. `family` is
-/// the real family gpui resolves; `label` is what the settings chip shows.
+/// A bundled face whose closed settings chip uses a friendlier label than
+/// the family gpui resolves. The Appearance pickers list installed families;
+/// this catalog only renames a stored family on that chip.
 #[derive(Debug, Clone, Copy)]
 pub struct FontChoice {
     pub label: &'static str,
@@ -770,6 +771,52 @@ pub fn font_choice_label(family: &str) -> String {
         }
     }
     family.to_string()
+}
+
+/// Installed families for the Appearance font pickers, cached for the
+/// process. Fonts do not change mid-run, and the settings page rebuilds on
+/// every scroll tick, so the operating-system enumeration runs once.
+static SYSTEM_FONT_FAMILIES: OnceLock<Vec<SharedString>> = OnceLock::new();
+
+/// Families gpui can resolve on this machine: operating-system faces plus
+/// the bundled faces registered at startup. Dot-prefixed internal names
+/// (`.SystemUIFont`, `.ZedSans`, `.ZedMono`) are omitted; the real bundled
+/// families (`IBM Plex Sans`, `Lilex`) remain.
+pub fn system_font_families(cx: &App) -> &[SharedString] {
+    SYSTEM_FONT_FAMILIES.get_or_init(|| {
+        normalize_installed_fonts(cx.text_system().all_font_names())
+            .into_iter()
+            .map(SharedString::from)
+            .collect()
+    })
+}
+
+/// Drop empty and dot-prefixed names, then sort and dedupe without regard
+/// to ASCII case. A case-insensitive tie keeps the spelling that sorts
+/// first (`Arial` before `arial`), so a bundled face and the same system
+/// face collapse to one row.
+fn normalize_installed_fonts(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut keyed: Vec<(String, String)> = names
+        .into_iter()
+        .filter_map(|name| {
+            let name = name.trim();
+            if name.is_empty() || name.starts_with('.') {
+                None
+            } else {
+                Some((name.to_lowercase(), name.to_string()))
+            }
+        })
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    keyed.dedup_by(|next, kept| next.0 == kept.0);
+    keyed.into_iter().map(|(_, name)| name).collect()
+}
+
+/// Whether a picker row is the stored family. A row matches the raw name,
+/// a Zed alias (`IBM Plex Sans` for `.ZedSans`, `Lilex` for `.ZedMono`), or
+/// a curated chip label (`Geist Sans` for `Geist`).
+pub fn font_family_matches(stored: &str, listed: &str) -> bool {
+    stored.eq_ignore_ascii_case(listed) || font_choice_label(stored).eq_ignore_ascii_case(listed)
 }
 
 /// Current font families as a struct (for the settings UI).
@@ -1678,6 +1725,42 @@ pub fn set_ui_prefs(cx: &mut App, ui: UiPrefs) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn installed_font_names_drop_hidden_families_and_case_duplicates() {
+        let names = normalize_installed_fonts([
+            ".SystemUIFont".into(),
+            ".ZedSans".into(),
+            ".ZedMono".into(),
+            "IBM Plex Sans".into(),
+            "arial".into(),
+            "Arial".into(),
+            "  ".into(),
+            String::new(),
+            "Lilex".into(),
+            "  Cascadia Mono  ".into(),
+        ]);
+        assert_eq!(
+            names,
+            vec![
+                "Arial".to_string(),
+                "Cascadia Mono".to_string(),
+                "IBM Plex Sans".to_string(),
+                "Lilex".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn font_family_match_accepts_zed_aliases_and_curated_labels() {
+        assert!(font_family_matches(".ZedSans", "IBM Plex Sans"));
+        assert!(font_family_matches(".ZedMono", "Lilex"));
+        assert!(font_family_matches("Geist", "Geist"));
+        assert!(font_family_matches("Geist", "Geist Sans"));
+        assert!(font_family_matches("CommitMono", "Commit Mono"));
+        assert!(!font_family_matches(".ZedSans", "Inter"));
+        assert!(!font_family_matches("Arial", "Lilex"));
+    }
 
     #[test]
     fn design_system_keys_round_trip() {
