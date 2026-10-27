@@ -598,9 +598,15 @@ pub struct OrbitApp {
     last_ac_trigger: Option<(TriggerKind, String)>,
     /// Slash commands reported by pi (`get_commands` — extensions + skills).
     slash_commands: Vec<SlashCommand>,
-    /// Workspace files for `@`-mentions (cached per workspace).
+    /// Workspace files for `@`-mentions when `fd` is not available.
     mention_files: Vec<String>,
     mention_files_workspace: Option<PathBuf>,
+    /// Last `@` query searched with `fd`. Redraws reuse this instead of
+    /// spawning `fd` on every frame.
+    mention_fd_key: Option<(PathBuf, String)>,
+    mention_fd_hits: Vec<String>,
+    /// `fd` could not be started; `@` stays on the bounded directory walk.
+    mention_fd_missing: bool,
     /// Images queued to ride along with the next prompt (pasted or picked).
     attachments: Vec<Attachment>,
     /// Files are being dragged over the composer (external OS drag).
@@ -1709,6 +1715,9 @@ impl OrbitApp {
             slash_commands: Vec::new(),
             mention_files: Vec::new(),
             mention_files_workspace: None,
+            mention_fd_key: None,
+            mention_fd_hits: Vec::new(),
+            mention_fd_missing: false,
             attachments: Vec::new(),
             file_drag_hovered: false,
             open_in_apps: Rc::new(Vec::new()),
