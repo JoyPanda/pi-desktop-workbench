@@ -1330,19 +1330,30 @@ impl OrbitApp {
             cx.notify();
         });
 
-        // `cmd-c` with a live transcript selection copies that selection even
-        // while the composer holds focus — an interceptor is the only hook
-        // that runs before focus-path action dispatch, so the composer keeps
-        // its own copy whenever the transcript has nothing selected.
+        // Ctrl+C / Cmd+C with a live transcript selection copies that
+        // selection even while the composer holds focus. An interceptor is
+        // the only hook that runs before focus-path action dispatch, so the
+        // composer keeps its own copy whenever the transcript has nothing
+        // selected. `secondary` is Ctrl on Windows and Linux, Cmd on macOS;
+        // `platform` is the Win/Super key off macOS, so requiring it drops
+        // Ctrl+C.
         let copy_selection_sub = {
             let app = cx.entity().downgrade();
             cx.intercept_keystrokes(move |event, _window, cx| {
                 let keystroke = &event.keystroke;
+                let modifiers = keystroke.modifiers;
+                // The other modifier that is not this platform's copy key:
+                // Ctrl on macOS, the Win/Super key elsewhere.
+                let extra_modifier = if cfg!(target_os = "macos") {
+                    modifiers.control
+                } else {
+                    modifiers.platform
+                };
                 if keystroke.key != "c"
-                    || !keystroke.modifiers.platform
-                    || keystroke.modifiers.shift
-                    || keystroke.modifiers.alt
-                    || keystroke.modifiers.control
+                    || !modifiers.secondary()
+                    || modifiers.shift
+                    || modifiers.alt
+                    || extra_modifier
                 {
                     return;
                 }
