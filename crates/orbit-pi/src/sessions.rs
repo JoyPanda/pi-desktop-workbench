@@ -351,9 +351,22 @@ fn read_session(path: &Path) -> Option<SessionInfo> {
         first_message,
         modified,
     };
-    info_cache_put(path, file_modified, len, info.clone());
+    let providers = assistant_providers(path, len);
+    info_cache_put(path, file_modified, len, info.clone(), providers);
     Some(info)
 }
+
+/// A provider and model observed on an assistant message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SessionProvider {
+    pub provider: String,
+    pub model: Option<String>,
+}
+
+/// First-pass filter for [`assistant_provider_in_line`]. Deliberately as loose as
+/// the role value itself: a false positive only costs the parse we would have
+/// done anyway, while a false negative would drop a provider from the row.
+const ASSISTANT_MARKER: &[u8] = b"assistant";
 
 /// One session's cached metadata, valid while the file's `(mtime, length)`
 /// are unchanged. A stale entry is dropped and recomputed on the next scan.
@@ -362,6 +375,7 @@ struct InfoCacheEntry {
     file_modified: SystemTime,
     len: u64,
     info: SessionInfo,
+    providers: Vec<SessionProvider>,
 }
 
 /// Per-file [`SessionInfo`] cache shared by the startup scan and the watcher
@@ -376,7 +390,98 @@ fn info_cache_get(path: &Path, file_modified: SystemTime, len: u64) -> Option<Se
     (entry.file_modified == file_modified && entry.len == len).then(|| entry.info.clone())
 }
 
-fn info_cache_put(path: &Path, file_modified: SystemTime, len: u64, info: SessionInfo) {
+/// Providers used by assistant messages, most recently used first.
+/// Never performs file I/O during rendering.
+pub(crate) fn cached_session_providers(path: &Path) -> Vec<SessionProvider> {
+    INFO_CACHE
+        .read()
+        .ok()
+        .and_then(|guard| {
+            guard
+                .as_ref()?
+                .get(path)
+                .map(|entry| entry.providers.clone())
+        })
+        .unwrap_or_default()
+}
+
+/// Scan the full history on a cache miss, then only appended complete lines
+/// when the previous snapshot ended at a line boundary. An append that lands
+/// mid-line (the previous read ended inside a partially written record) falls
+/// back to a full scan, so a torn line can never be skipped. A file replaced by
+/// a *longer* one still passes the offset check and keeps the providers it had —
+/// an acceptable blind spot, because pi only ever appends to a session file.
+fn assistant_providers(path: &Path, len: u64) -> Vec<SessionProvider> {
+    let Ok(mut file) = fs::File::open(path) else {
+        return Vec::new();
+    };
+    let previous = INFO_CACHE.read().ok().and_then(|guard| {
+        let entry = guard.as_ref()?.get(path)?;
+        (entry.len > 0 && entry.len < len).then(|| (entry.len, entry.providers.clone()))
+    });
+    let mut providers = Vec::new();
+    if let Some((offset, previous_providers)) = previous {
+        let mut byte = [0u8; 1];
+        if file.seek(SeekFrom::Start(offset - 1)).is_ok()
+            && file.read_exact(&mut byte).is_ok()
+            && byte[0] == b'\n'
+        {
+            providers = previous_providers;
+            providers.reverse();
+        } else if file.seek(SeekFrom::Start(0)).is_err() {
+            return Vec::new();
+        }
+    }
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) if line.last() != Some(&b'\n') => break,
+            Ok(_) => {}
+        }
+        if let Some(provider) = assistant_provider_in_line(&line) {
+            providers.retain(|item| item != &provider);
+            providers.push(provider);
+        }
+    }
+    providers.reverse();
+    providers
+}
+
+fn assistant_provider_in_line(line: &[u8]) -> Option<SessionProvider> {
+    // Cheap first: a session store holds multi-megabyte tool-result lines, and
+    // deserializing every one of them just to learn it is not an assistant
+    // message is the difference between a fast startup scan and a slow one.
+    if !line
+        .windows(ASSISTANT_MARKER.len())
+        .any(|window| window == ASSISTANT_MARKER)
+    {
+        return None;
+    }
+    let value: Value = serde_json::from_slice(line).ok()?;
+    if value.get("type")?.as_str()? != "message"
+        || value["message"]["role"].as_str()? != "assistant"
+    {
+        return None;
+    }
+    let message = &value["message"];
+    let provider = message["provider"].as_str().filter(|s| !s.is_empty())?;
+    let model = message["model"].as_str().filter(|s| !s.is_empty());
+    Some(SessionProvider {
+        provider: provider.to_owned(),
+        model: model.map(str::to_owned),
+    })
+}
+
+fn info_cache_put(
+    path: &Path,
+    file_modified: SystemTime,
+    len: u64,
+    info: SessionInfo,
+    providers: Vec<SessionProvider>,
+) {
     if let Ok(mut guard) = INFO_CACHE.write() {
         guard.get_or_insert_with(HashMap::new).insert(
             path.to_path_buf(),
@@ -384,6 +489,7 @@ fn info_cache_put(path: &Path, file_modified: SystemTime, len: u64, info: Sessio
                 file_modified,
                 len,
                 info,
+                providers,
             },
         );
     }
@@ -743,6 +849,50 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn sidebar_provider_uses_latest_assistant_and_refreshes_on_append() {
+        let path = named_session_file(
+            "orbit-session-provider-test",
+            "{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"provider\":\"anthropic\"}}\n",
+        );
+        read_session(&path).unwrap();
+        let names = || {
+            cached_session_providers(&path)
+                .into_iter()
+                .map(|p| p.provider)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(), vec!["anthropic"]);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file, "{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"provider\":\"openai\"}}}}") .unwrap();
+        writeln!(
+            file,
+            "{{\"type\":\"message\",\"message\":{{\"role\":\"user\",\"provider\":\"ignored\"}}}}"
+        )
+        .unwrap();
+        read_session(&path).unwrap();
+        assert_eq!(names(), vec!["openai", "anthropic"]);
+        writeln!(file, "{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"provider\":\"anthropic\"}}}}").unwrap();
+        read_session(&path).unwrap();
+        assert_eq!(names(), vec!["anthropic", "openai"]);
+        write!(
+            file,
+            "{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"provider\":\"third\""
+        )
+        .unwrap();
+        read_session(&path).unwrap();
+        assert_eq!(names(), vec!["anthropic", "openai"]);
+        writeln!(file, "}}}}").unwrap();
+        read_session(&path).unwrap();
+        assert_eq!(names(), vec!["third", "anthropic", "openai"]);
+        writeln!(file, "{{\"type\":\"message\",\"message\":{{\"role\":\"assistant\",\"provider\":\"openai\",\"model\":\"gpt-4\"}}}}").unwrap();
+        read_session(&path).unwrap();
+        let latest = cached_session_providers(&path).remove(0);
+        assert_eq!(latest.provider, "openai");
+        assert_eq!(latest.model.as_deref(), Some("gpt-4"));
+        let _ = fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[test]

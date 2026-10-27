@@ -419,7 +419,7 @@ pub struct FontChoice {
 }
 
 /// Orbit's curated interface faces (plus a System escape hatch).
-pub const UI_FONTS: [FontChoice; 10] = [
+pub const UI_FONTS: [FontChoice; 11] = [
     FontChoice {
         label: "Inter",
         family: "Inter",
@@ -455,6 +455,10 @@ pub const UI_FONTS: [FontChoice; 10] = [
     FontChoice {
         label: "Manrope",
         family: "Manrope",
+    },
+    FontChoice {
+        label: "Onest",
+        family: "Onest",
     },
     FontChoice {
         label: "IBM Plex Sans",

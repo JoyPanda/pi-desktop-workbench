@@ -186,17 +186,23 @@ pub struct RefEntry {
     /// Short name (`feature`, `origin/main`, `v1.2.0`).
     pub name: String,
     pub kind: RefKind,
+    /// RFC 3339 committer date of the ref's tip; `None` when git prints no
+    /// date for it.
+    pub commit_date: Option<String>,
 }
 
 /// Every ref a merge/rebase can target: local branches, remote-tracking
-/// branches (minus the `origin/HEAD` symref), and tags, newest first.
+/// branches (minus the `origin/HEAD` symref), and tags, newest first. The tip
+/// date travels with each entry so list rows can date themselves.
 pub fn list_refs(cwd: &Path) -> Vec<RefEntry> {
     let out = run_git(
         cwd,
         &[
             "for-each-ref",
             "--sort=-committerdate",
-            "--format=%(refname)",
+            // Tab-separated: git forbids whitespace in ref names, and
+            // `run_git` trims the trailing separator off an undated ref.
+            "--format=%(refname)%09%(committerdate:iso-strict)",
             "refs/heads/",
             "refs/remotes/",
             "refs/tags/",
@@ -206,22 +212,30 @@ pub fn list_refs(cwd: &Path) -> Vec<RefEntry> {
     out.lines().filter_map(parse_ref).collect()
 }
 
-fn parse_ref(full: &str) -> Option<RefEntry> {
+fn parse_ref(line: &str) -> Option<RefEntry> {
+    let (full, date) = match line.split_once('\t') {
+        Some((full, date)) => (full, Some(date.trim())),
+        None => (line, None),
+    };
+    let commit_date = date.filter(|date| !date.is_empty()).map(str::to_string);
     if let Some(name) = full.strip_prefix("refs/heads/") {
         Some(RefEntry {
             name: name.to_string(),
             kind: RefKind::Branch,
+            commit_date,
         })
     } else if let Some(name) = full.strip_prefix("refs/remotes/") {
         // `origin/HEAD` is a symbolic pointer, not a target.
         (!name.ends_with("/HEAD")).then(|| RefEntry {
             name: name.to_string(),
             kind: RefKind::Remote,
+            commit_date,
         })
     } else {
         full.strip_prefix("refs/tags/").map(|name| RefEntry {
             name: name.to_string(),
             kind: RefKind::Tag,
+            commit_date,
         })
     }
 }
@@ -464,6 +478,11 @@ mod tests {
         assert_eq!(kind("origin/main"), Some(RefKind::Remote));
         assert_eq!(kind("v1.0.0"), Some(RefKind::Tag));
         assert_eq!(kind("origin/HEAD"), None, "origin/HEAD is not a target");
+        // Every ref points at a commit here, so each row can date itself.
+        assert!(
+            refs.iter().all(|entry| entry.commit_date.is_some()),
+            "refs must carry their tip commit date: {refs:?}"
+        );
         fs::remove_dir_all(root).ok();
     }
 

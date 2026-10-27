@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use orbit_rpc::{parse_quota_reports, QuotaBalance, QuotaReport, QuotaWindow};
+use orbit_rpc::{parse_quota_reports, QuotaBalance, QuotaKind, QuotaReport, QuotaWindow};
 use serde_json::Value;
 
 /// Custom session-entry type the Orbit quota bridge appends. The payload is
@@ -89,6 +89,15 @@ impl QuotaManager {
             .filter(|report| has_something(report))
             .collect();
         reports.sort_by(|a, b| a.provider.cmp(&b.provider));
+        reports
+    }
+
+    /// Reports shown in the usage popover, with the active provider first.
+    /// Unsupported providers remain available through `report` for settings.
+    pub fn usage_reports(&self, active_provider: &str) -> Vec<&QuotaReport> {
+        let mut reports = self.reports();
+        reports.retain(|report| report.kind != QuotaKind::Unsupported);
+        reports.sort_by_key(|report| report.provider != active_provider);
         reports
     }
 
@@ -419,6 +428,47 @@ mod tests {
             .collect();
         // Sorted by id; the empty groq report is omitted.
         assert_eq!(providers, vec!["anthropic", "zai"]);
+    }
+
+    #[test]
+    fn usage_reports_put_active_provider_first_and_hide_unsupported() {
+        let mut quota = QuotaManager::new();
+        quota.on_response(
+            true,
+            Some(&json!({"providers":[
+                {"provider":"anthropic","kind":"subscription","note":"Usage unavailable"},
+                {"provider":"groq","kind":"unsupported","note":"No usage API"},
+                {"provider":"zai","kind":"subscription","error":"Rate limited"}
+            ]})),
+            None,
+        );
+        let providers: Vec<_> = quota
+            .usage_reports("zai")
+            .into_iter()
+            .map(|r| r.provider.as_str())
+            .collect();
+        assert_eq!(providers, ["zai", "anthropic"]);
+        assert!(quota.report("groq").is_some());
+    }
+
+    #[test]
+    fn usage_reports_keep_alphabetical_order_when_active_provider_is_unsupported() {
+        let mut quota = QuotaManager::new();
+        quota.on_response(
+            true,
+            Some(&json!({"providers":[
+                {"provider":"zai","kind":"subscription","note":"Unavailable"},
+                {"provider":"groq","kind":"unsupported","note":"No usage API"},
+                {"provider":"anthropic","kind":"subscription","error":"Unavailable"}
+            ]})),
+            None,
+        );
+        let providers: Vec<_> = quota
+            .usage_reports("groq")
+            .into_iter()
+            .map(|r| r.provider.as_str())
+            .collect();
+        assert_eq!(providers, ["anthropic", "zai"]);
     }
 
     #[test]

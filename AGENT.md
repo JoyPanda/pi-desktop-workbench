@@ -24,8 +24,28 @@ pi as a child process, no web, no webview, no Node daemon.
 3. **GPUI is pre-1.0 and pinned.** `crates/orbit-pi` uses `gpui = { version = "0.2.2", features = ["runtime_shaders"] }`. Upgrade deliberately on a schedule, never track `main`.
 4. **Performance is a product requirement.** The transcript and sidebar are virtualized (`list()`). The UI drains RPC events on a ~90 ms heartbeat — never block a frame with I/O. Syntax highlighting, when it lands, must be paint-only so streaming never reflows.
 5. **Trust pi's truth.** Render real RPC events and on-disk state; nothing decorative pretending to be functional. Access modes the protocol can't deliver are shown as unavailable (or as a static fact), not faked. The sidebar **Search** row opens the command palette (sessions/commands/settings) — it is not a transcript-content search; do not wire a fake one.
-6. **A library call is looked up, not remembered.** Every dependency is pinned to the version in `Cargo.toml` / `marketing/package.json`. Read that version's docs (or its source) and follow the call site already in the repo before writing a new one — see *Library reference* below. If the docs and the repo disagree, the repo wins; if both leave you guessing, ask instead of inventing.
+6. **A new library API is looked up, not remembered.** Resolve the version from `Cargo.lock` (or `marketing/package-lock.json`), then read that version's docs or source before introducing an unfamiliar API — see *Library reference* below. Reuse established repo patterns without re-researching the same API on every edit. If both the source and repo leave you guessing, ask instead of inventing.
 7. **Shipping changes the docs, not just the code.** When a feature ships, update `INTENT.md` → *Implementation status* (and add or revise a `D#` decision when the architecture changed), refresh the `README.md` features/roadmap, and add a `CHANGELOG.md` `[Unreleased]` entry. A feature is not done until `INTENT.md` describes it.
+
+## Working process — keep the feedback loop short
+
+1. **Scope first.** Read `git status --short`, preserve existing work, and identify
+   the affected surface: docs, Rust app, RPC, extensions, or marketing. Use `rg`
+   and the file map below to read the owning module and relevant tests; load
+   other reference sections only when the task needs them.
+2. **Choose verification before editing.** Use the *Verification* table below.
+   A docs edit needs no Rust compilation. A local Rust change normally needs a
+   package check and relevant tests, not a workspace build on every iteration.
+3. **Make one coherent change.** Reuse existing helpers and patterns. Batch
+   related edits before compiling; do not run a build after each file save.
+   Add regression coverage for changed logic; visual-only tweaks can use a
+   focused manual check instead of tests that merely restate the layout.
+4. **Verify once, then stop when the evidence is sufficient.** Run the selected
+   checks against the final edits. A failing check, later code edit, or uncovered
+   behavior justifies another pass; an unchanged successful check does not.
+5. **Report the result.** State what changed, which checks actually ran, and any
+   remaining limitation. Distinguish type-checking, test execution, linking,
+   and manual UI verification; do not claim one proves the others.
 
 ## Repo layout
 
@@ -148,9 +168,14 @@ contrib/orbit-guard-extension/  Orbit's bundled pi extension (loaded with
                         the `~/.orbit-pi/access-allow.json` allowlist;
                         policy.test.mjs / index.test.mjs are `node --test`
 contrib/orbit-title-extension/  Orbit's bundled pi extension (loaded with
-                        `pi --extension`): after a session's first turn
-                        settles, asks a model for a short title from the
-                        first exchange and sets it with `pi.setSessionName`.
+                        `pi --extension`): when a turn settles, asks a model
+                        for a short title from the session's first exchange
+                        and sets it with `pi.setSessionName`. Any session
+                        without a name is titled (a resumed untitled one
+                        included); an existing name is only replaced by the
+                        details popover's explicit `/generate-title`, and a
+                        transient failure is retried on a later settle, up to
+                        three times.
                         Reads `~/.orbit-pi/auto-title.json` (the model is the
                         active session model unless Settings → Agent picks
                         one); title.js is the pure helper set and both
@@ -174,14 +199,17 @@ Override the pi binary with `PI_BIN` (default: `pi` on `PATH`).
 
 ## Library reference — read the docs before writing usage
 
-Every dependency below is pinned. Do not write a call from memory: look up the
-pinned version, then follow the pattern the repo already uses. Look-up order:
+The manifests declare dependency requirements; lockfiles record resolved
+versions. Look up unfamiliar APIs at the resolved version and follow existing
+repo patterns. Keep useful findings for the task instead of repeating lookups.
+Look-up order:
 
 1. **This repo.** `rg "gpui::" crates/orbit-pi/src` finds call sites; the file map
    above says which module owns what.
 2. **The pinned source** (the authoritative API surface):
-   `~/.cargo/registry/src/index.crates.io-*/<crate>-<version>/`, or locally rendered
-   docs with `cargo doc -p <crate> --no-deps --open`.
+   `~/.cargo/registry/src/index.crates.io-*/<crate>-<version>/`. Read the relevant
+   source directly; generating local docs with `cargo doc` is optional, not a
+   prerequisite for an edit.
 3. **docs.rs at the pinned version:** `https://docs.rs/<crate>/<version>`. Thin or
    missing for pre-1.0 crates — then (2) is the doc.
 4. **Upstream precedent:** Zed `crates/gpui` for GPUI, the Waku file map below for
@@ -300,7 +328,7 @@ The other nine locale files are generated, never hand-edited:
 
 ```
 python3 scripts/gen_locales.py        # regenerate locales/*.yml + report gaps
-cargo test -p orbit-pi i18n           # completeness guard
+cargo test -p orbit-pi --bin orbit-pi i18n  # completeness guard
 python3 scripts/check_i18n.py         # key + placeholder guard
 ```
 
@@ -337,7 +365,8 @@ python3 scripts/check_i18n.py         # key + placeholder guard
 2. Add `surface.slug: "English"` to `locales/en.yml` (append; keep key order).
 3. Add `"English": "translation"` under each locale in the matching
    `scripts/i18n_glossary_*.py`.
-4. Run `python3 scripts/gen_locales.py` and `cargo test -p orbit-pi i18n`.
+4. Run `python3 scripts/gen_locales.py`, `python3 scripts/check_i18n.py`, and
+   `cargo test -p orbit-pi --bin orbit-pi i18n` once after the string edits are complete.
 
 The codemods in `scripts/` (`localize_calls.py`, `localize_settings.py`,
 `localize_call_args.py`) wrap common GPUI builder patterns in bulk; run one,
@@ -542,12 +571,81 @@ current implementation; do not use this section as a changelog.
 
 Every feature in `PRODUCT.md` → `Capabilities` runs natively in the GPUI app against the pi CLI with the same behavior as the legacy UI; legacy `src-tauri` deleted; `bacon run` is the only way to launch.
 
-**For an individual feature:** it runs natively in GPUI against the pi CLI, `cargo build --workspace` stays clean, tests cover the happy path, and the docs describe it — `INTENT.md` → *Implementation status* (plus a `D#` decision when the architecture changed), the `README.md` features/roadmap, and a `CHANGELOG.md` `[Unreleased]` entry. Update these in the same change that ships the feature, never as a follow-up.
+**For an individual feature:** it runs natively in GPUI against the pi CLI,
+passes the applicable checks below, has meaningful coverage for changed logic,
+and the docs describe it — `INTENT.md` → *Implementation status* (plus a `D#`
+decision when the architecture changed), the `README.md` features/roadmap, and a
+`CHANGELOG.md` `[Unreleased]` entry. Update these in the same change that ships
+the feature, never as a follow-up. Documentation/process-only edits do not need
+feature-status or changelog updates. The workspace must remain buildable with
+zero warnings; a full local build is required only under the escalation rules
+below, not after every edit.
 
 ## Verification
 
-- `cargo build --workspace` must stay clean (zero warnings) after every change.
-- `cargo test --workspace` — unit tests + live pi integration tests. `live_pi.rs`, `live_catalog.rs`, and the other live tests skip when `pi` is missing; `orbit-pi` session-store tests skip when `~/.pi/agent/sessions` is empty. CI builds every change on macOS, Linux (ubuntu-22.04), and Windows, plus clippy on macOS (`.github/workflows/ci.yml`); tests run locally.
+### Select checks by the change
+
+Run commands from the repo root unless stated otherwise. Keep checks warning-free.
+Use a real test module/name in place of `<filter>` and confirm the filter ran
+tests; a successful run with zero selected tests is not coverage.
+
+| Change | Normal local verification |
+|---|---|
+| Docs, guidance, comments only | Review the diff and run `git diff --check -- <changed-files>`. No Cargo, app launch, or release build. |
+| `orbit-pi` Rust code | `cargo check -p orbit-pi`; for changed logic, `cargo test -p orbit-pi --bin orbit-pi <filter>`. For UI behavior, exercise the affected flow through `bacon run`. |
+| `orbit-rpc` Rust code | `cargo check -p orbit-pi` (also checks its RPC dependency); `cargo test -p orbit-rpc --lib` and the relevant fake-server integration target, e.g. `cargo test -p orbit-rpc --test auth_fake_pi`. |
+| UI strings / locale glossaries | After editing English or glossaries, run `python3 scripts/gen_locales.py` once; then `python3 scripts/check_i18n.py` and `cargo test -p orbit-pi --bin orbit-pi i18n`. For call-site-only changes, skip regeneration and use the app-code checks plus the Python guard. |
+| `contrib/` extension or RPC patch | `node --test contrib/<changed-extension>/*.test.mjs`. Add Rust checks when Rust integration changes; build/run the app when validating the embedded extension behavior. |
+| `marketing/` only | Read `marketing/AGENTS.md`; run the applicable npm checks from that directory. No Cargo. |
+| Build, packaging, CI, dependency, or feature configuration | Validate the affected command/configuration; use the escalation rules below for Rust changes. |
+
+### When to widen verification
+
+- Use `cargo check -p orbit-pi --all-targets` when test-target compilation is
+  needed without running tests. A relevant test run already compiles its target.
+- Run `cargo clippy -p <affected-package> --all-targets -- -D warnings` for
+  substantial Rust changes or when requested. If this is the chosen final pass,
+  it also covers type-checking for those targets; do not immediately repeat
+  `cargo check` for the same unchanged code.
+- Run `cargo build -p orbit-pi` when validating linking, build scripts, native
+  resources, or embedded assets. A successful `bacon run` compilation also proves
+  the app links; do not follow it with an identical standalone build.
+- Run `cargo build --workspace` for workspace/dependency/feature changes, broad
+  cross-crate refactors, release preparation, or an explicit full-build request.
+  Run `cargo test --workspace` for broad behavior changes, release preparation,
+  or an explicit full-suite request. For localized fixes, use focused tests.
+- Full workspace tests include live pi integration tests: when `pi` is installed
+  they can launch real sessions and send model prompts. Prefer unit/fake-server
+  targets in the edit loop. Live tests skip when `pi` is missing; session-store
+  tests can skip when `~/.pi/agent/sessions` is empty. Report skipped coverage.
+- CI (`.github/workflows/ci.yml`) builds on macOS, Linux (ubuntu-22.04), and
+  Windows and runs workspace clippy on macOS. **CI does not run tests**; execute
+  the relevant tests locally. A local check does not prove other platforms pass.
+
+### Avoid duplicate work and cache churn
+
+- Run one Cargo job at a time in this checkout. Reuse an existing bacon job or
+  let it finish before starting a manual Cargo command; competing jobs wait on
+  the build lock. Do not start another build just because the first is quiet.
+- Use `bacon check` for sustained editing/type-checking and `bacon run` when
+  exercising the UI. Starting bare `bacon` defaults to the run job, which rebuilds
+  and relaunches on saves. Switch jobs with `c` / `r` as needed.
+- Keep the existing target directory, toolchain, profile, features, and flags
+  stable. Do not routinely run `cargo clean`, change `RUSTFLAGS`, or create a
+  fresh `CARGO_TARGET_DIR`: these can invalidate cached work.
+- `Cargo.toml` deliberately sets `[profile.dev] incremental = false` after
+  arm64 linker failures. Do not flip it as a speed shortcut. GPUI's
+  `test-support` dev feature also makes test builds differ from normal app
+  builds; a filtered test reduces execution, not compilation of the app crate.
+- If a check is slow, report its command and whether it is waiting on a lock,
+  compiling, linking, or running tests. Poll the existing process instead of
+  restarting it. Stop after the required checks pass; widen only for a reason.
+
+### Manual app checks
+
+Exercise the affected flow for a localized UI change. Use the full smoke checklist
+below for broad app changes or release preparation.
+
 - Run the app: `bacon run` (`cargo install bacon` once). `bacon.toml` defines the live-reload loop: `default_job = "run"` compiles `orbit-pi` and relaunches the window on every save, and `c` / `r` rebind to `check` / `run` inside the bacon TUI. Do not launch with `cargo run -p orbit-pi` when testing. Check: sessions list from disk, new session (`cmd-n`), prompt streams into the transcript, model/thinking pickers, abort (`escape`), settings (`cmd-,`), sidebar toggle. Notifications need an app bundle — `scripts/run-bundled.sh` builds the debug binary into the ad-hoc-signed `Orbit Pi Alpha` (bundle id `dev.orbit.pi.alpha`, Alpha icon) and opens it.
 - Windows: the same `bacon run` builds and runs (GPUI renders through DXGI here). `gpui`'s default `windows-manifest` feature is off in `crates/orbit-pi/Cargo.toml` — it links a second `RT_MANIFEST` resource beside the one `build.rs` embeds, and CVTRES fails the link with `CVT1100: duplicate resource`. `scripts/bundle-windows.ps1` builds the Inno Setup installer (`scripts/installer/orbit-pi.iss`); it needs Inno Setup 6 (`ISCC.exe`) and, per-user under `%LocalAppData%\Programs`, no elevation. Desktop notifications and the alert sound are still macOS-only stubs. Window chrome is the app's own: the header row carries minimize / maximize / close, drawing a restore glyph when `window.is_maximized()`, and the header strips drag the window through `platform::start_window_drag`. Check them by clicking — `IsIconic`/`IsZoomed` flip, closing exits the process — and check dragging by pressing a header strip and moving the pointer; both were broken while the presses were routed through GPUI's `WindowControlArea` path, which this app's focusable root makes unusable (see the Shell row).
 - No `unsafe` without a comment; no new dependencies without a stated reason.

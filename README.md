@@ -53,11 +53,16 @@ Usage — requests, tokens, cost, and cache, read from your own sessions:
 **Sessions**
 
 - Grouped by project, persistent, reopenable, and cross-workspace
+- Session rows keep titles, prompt previews, age/status, branches (with `↑n`/`↓n` against upstream), and provider/model marks. Tinted project marks, semantic status badges, stronger title hierarchy, and distinct selection/focus outlines make the list easier to scan; flat mode adds the workspace above each title
+- **Show first message** in the sidebar view menu toggles prompt previews in grouped and flat lists; enabled by default and remembered across restarts, without hiding other session metadata
 - Orbit-owned project list — remove a workspace from the sidebar without deleting pi's sessions
 - Sort projects by last activity, recently added, name, or session count
-- Rename, pin, clone, or delete sessions, and copy a session id; pinned sessions sort first
+- Rename, pin, clone, or delete sessions, and copy a session id; pinned sessions sort first — right-click a row for its actions
 - Address sessions by position — **⌘1…⌘9** (**Ctrl+1…9**) opens the Nth visible session, **Ctrl+Tab / Ctrl+Shift+Tab** cycle them
 - Sessions written by the CLI or another window refresh the sidebar live
+- Execution status for sessions observed during this app launch — Running, Waiting for approval/input, Retrying, Compacting, Completed, Failed, Stopped, Disconnected, or Idle. Open and background sessions use the same real pi events; outcomes remain after reading and switching. Historical or externally written sessions get no guessed status
+- A turn that ends while you are elsewhere leaves a separate unread mark on its row (a green eye plus "Needs review", or a red cross with a corner dot when it failed) until you open it in the foreground. Reading spends the mark and leaves the Completed/Failed state behind; unread and waiting sessions remain visible under collapsed project groups
+- Native approvals and input dialogs stay pending when you switch sessions, and return with their answers intact when you reopen the session
 - Background turn notifications — a desktop banner and alert sound when the window isn't frontmost, an in-app toast otherwise, and a heads-up when a run is waiting on an extension dialog
 
 **Safeguards**
@@ -99,14 +104,14 @@ Usage — requests, tokens, cost, and cache, read from your own sessions:
 - Providers — pi's live catalog plus custom endpoints (`models.json`), with API-key or OAuth sign-in and usage meters
 - Plugins — install pi packages from npm, git, or a local path, global or per project; update checks and update/remove in place
 - Models — read from pi's own runtime, with a **default session model** and thinking level (Settings → Agent) applied to every new session; the choice lives in Orbit's own store and leaves pi's global settings alone
-- **Auto session titles** — a bundled pi extension names a session after its first turn, with a model picker and an on/off toggle in Settings → Agent
+- **Auto session titles** — a bundled pi extension names any session that has no title yet from its first exchange, with a model picker and an on/off toggle in Settings → Agent
 - **Report a bug** — Settings → Report a bug takes an issue type (bug / feature / other) and the bug context, then **Generate draft** writes the title and description with the app's active model
 - It files the issue against the project with your build details attached (Orbit version, app ID, OS and architecture, install kind, pi CLI, and `gh` account): through the `gh` CLI when it is signed in, or as a prefilled GitHub new-issue page otherwise
 - Screenshots attach too. They upload with `gh issue create --attach` when `gh` is signed in, and otherwise the web form opens with the images saved to a temp folder to drag in
 - **Privacy** — Settings → Privacy archives or deletes idle `pi` sessions on a schedule you choose
 - It also lists Orbit's own scratch files in the `orbit-pi` folder inside the system temp directory (bug-report screenshots, update downloads, helper scripts), with **Open folder** and **Clean up now**. Older top-level `orbit-*` leftovers are included, and entries a live Orbit process still needs are kept
 - A separate **AI scratch files** group lists pi's own `pi-*` temp entries (shell output, codemode images, share/editor working files) and removes only those last used more than an hour ago
-- Appearance — **Light / Dark / System**, a persisted **Design system** choice (**Classic** keeps the existing palette and geometry; **Operational** applies the near-black, lime-accented Restrained Operational Minimalism system), independent light and dark theme palettes, a background image, fonts, sizes, spacing density, and **interface language** (English, 简体中文, 日本語, 한국어, Español, Français, Deutsch, Português do Brasil, Русский, Italiano, or the system language)
+- Appearance — **Light / Dark / System**, a persisted **Design system** choice (**Classic** keeps the existing palette and geometry; **Operational** applies the near-black, lime-accented Restrained Operational Minimalism system), independent light and dark theme palettes, a background image, bundled interface fonts (including Onest), code fonts, sizes, spacing density, and **interface language** (English, 简体中文, 日本語, 한국어, Español, Français, Deutsch, Português do Brasil, Русский, Italiano, or the system language)
 - System follows OS appearance changes live; new installations use System, while existing theme choices are preserved. Switching design systems is opt-in and does not modify the Classic palettes or their geometry
 - With no image set, the new-task page carries a living ordered-dither field with the app monogram screened into it: it follows the palette, drifts slowly enough to breathe instead of strobe, and freezes under Reduce Motion
 - No telemetry: no analytics client, no identifier, and no queue (see [PRIVACY.md](PRIVACY.md))
@@ -247,7 +252,7 @@ Every family in `crates/orbit-pi/assets/fonts/bundled/` ships under the SIL Open
 Font License 1.1: Anonymous Pro, Atkinson Hyperlegible, Cascadia Code, Commit
 Mono, DM Mono, DM Sans, Fira Code, Fixel Text, Geist, Geist Mono, IBM Plex Mono,
 Inconsolata, Inter, Iosevka, JetBrains Mono, Manrope, Martian Mono, Noto Sans,
-Noto Sans Mono, Roboto, Roboto Mono, Source Code Pro, Source Sans 3, and Space
+Noto Sans Mono, Onest, Roboto, Roboto Mono, Source Code Pro, Source Sans 3, and Space
 Mono. IBM Plex Sans and Lilex come from Zed's font set, also OFL 1.1.
 
 **Marketing site**

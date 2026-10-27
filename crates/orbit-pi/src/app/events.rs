@@ -1,4 +1,5 @@
 use super::*;
+use crate::app::sidebar::{clear_review_mark, should_mark_review};
 use crate::toast::ToastKind;
 
 /// pi reports `cancelled: true` when an extension refused the fork or clone.
@@ -91,6 +92,24 @@ impl OrbitApp {
         // refresh Review, the Git page, and the branch chip when the tree
         // changes.
         self.sync_workspace_watcher(cx);
+        // An added or removed project needs its branch for the sidebar row's
+        // metadata line; a compare of the project list, so it is free while
+        // nothing moved.
+        self.sync_sidebar_branches(cx);
+        // A review mark is spent the moment its session is really in front of
+        // the user — by click, by shortcut, by the window coming forward, or by
+        // a full-page surface closing. One rule on the heartbeat instead of a
+        // hook on each of those paths, so they cannot drift apart, and a
+        // selection made while Orbit is behind another app deliberately does
+        // not clear it (issue #83).
+        let in_front = self.transcript_in_front(cx);
+        if clear_review_mark(
+            &mut self.awaiting_review,
+            self.current_session_path.as_deref(),
+            in_front,
+        ) {
+            cx.notify();
+        }
         let workspace_dirty = self
             .workspace_watcher
             .as_ref()
@@ -162,6 +181,13 @@ impl OrbitApp {
 
         let mut refresh_sessions = false;
         for event in &events {
+            self.execution.apply_event(event);
+            if matches!(event, Event::TurnStart | Event::AgentSettled { .. }) {
+                self.dialog = None;
+                self.dialog_focus_pending = false;
+                self.approval = None;
+                self.approval_focus_pending = false;
+            }
             match event {
                 Event::AgentStart => {
                     self.busy = true;
@@ -286,7 +312,7 @@ impl OrbitApp {
                     // `session_info_changed`, so drop the in-flight flag here.
                     self.title_generating = false;
                 }
-                Event::AgentSettled => {
+                Event::AgentSettled { aborted } => {
                     self.abort_requested = false;
                     self.busy = false;
                     self.retrying = false;
@@ -316,7 +342,14 @@ impl OrbitApp {
                         .clone()
                         .or_else(|| self.session_name.clone());
                     let summary = self.transcript.latest_turn_summary();
-                    self.notify_turn_finished(path.as_deref(), title.as_deref(), summary.as_ref());
+                    if !aborted {
+                        self.notify_turn_finished(
+                            path.as_deref(),
+                            title.as_deref(),
+                            summary.as_ref(),
+                            cx,
+                        );
+                    }
                 }
                 Event::CompactionStart { .. } => {
                     // The run-status strip carries the in-progress state;
@@ -346,6 +379,8 @@ impl OrbitApp {
                     // The rename can no longer answer, and a held title would
                     // ignore the next session's name reports.
                     self.cancel_fork_followup();
+                    self.pending_session_rename = None;
+                    self.session_rename_ready = false;
                     self.busy = false;
                     self.retrying = false;
                     self.retry_detail = None;
@@ -426,6 +461,10 @@ impl OrbitApp {
             if self.transcript.apply_event(event) {
                 cx.notify();
             }
+        }
+        self.busy = self.execution.status().is_in_progress();
+        if let Some(path) = &self.current_session_path {
+            self.remember_session_outcome(path.clone(), self.execution.status());
         }
         if refresh_sessions {
             self.sessions = sessions::load_sessions();
@@ -524,6 +563,15 @@ impl OrbitApp {
                 Self::drain_parked_session(parked, Some(path), &self.sessions, &mut finished);
             changed |= drained.changed;
             any_busy |= drained.busy;
+            let status = parked.execution.status();
+            // Record the outcome, but only when it moved: this runs per parked
+            // session on every heartbeat, and re-inserting the same value would
+            // dirty the map for nothing.
+            if !status.is_in_progress()
+                && self.session_outcomes.insert(path.clone(), status) != Some(status)
+            {
+                changed = true;
+            }
             if !parked.client.is_alive() {
                 dead.push(path.clone());
             }
@@ -565,7 +613,7 @@ impl OrbitApp {
         // saying. The settle also flips the sidebar's running loader, so the
         // final repaint is unconditional.
         for (path, title, summary) in finished {
-            self.notify_turn_finished(Some(&path), title.as_deref(), summary.as_ref());
+            self.notify_turn_finished(Some(&path), title.as_deref(), summary.as_ref(), cx);
             changed = true;
         }
         if changed || any_busy {
@@ -591,22 +639,31 @@ impl OrbitApp {
         let mut changed = false;
         let mut rekey = None;
         for event in parked.client.drain_events() {
+            let own_prompt = matches!(&event, Event::Response { id, command, .. }
+                if command == "prompt" && parked.execution.prompt_id.as_deref() == Some(id));
+            parked.execution.apply_event(&event);
+            if own_prompt && !parked.execution.status().is_in_progress() {
+                parked.transcript.abandon_reply();
+            }
+            changed = true;
             match &event {
                 Event::AgentStart => parked.busy = true,
                 // `agent_settled` is the real settle (queued steering /
                 // follow-up / retry can continue past `agent_end`).
-                Event::AgentSettled => {
+                Event::AgentSettled { aborted } => {
                     parked.busy = false;
                     // The clock was parked open with this run. Close it here;
                     // the active view's `finish_turn` does not see this process.
                     parked.turns.finish();
+                    parked.interaction = ParkedInteraction::default();
+                    parked.retry_detail = None;
                     // A settled run has no queued continuation left; clear
                     // the mirror even if the final `queue_update` was missed.
                     parked.queue = PendingQueue::default();
                     // A pending session has no sidebar row yet, so there is
                     // no path to name in a notification; it is re-keyed
                     // moments later and notices from then on.
-                    if let Some(path) = path {
+                    if let Some(path) = path.filter(|_| !aborted) {
                         finished.push((
                             path.to_path_buf(),
                             sessions
@@ -619,6 +676,8 @@ impl OrbitApp {
                 }
                 Event::ProcessExited => {
                     parked.busy = false;
+                    parked.interaction = ParkedInteraction::default();
+                    parked.retry_detail = None;
                     parked.queue = PendingQueue::default();
                 }
                 // pi emits `queue_update` only when the queue changes, so a
@@ -627,12 +686,60 @@ impl OrbitApp {
                 Event::QueueUpdate { value } => {
                     parked.queue = PendingQueue::from_value(value);
                 }
-                // A parked session has no visible dialog surface; cancel
-                // so its blocked run can settle (an active session renders
-                // the dialog in `tick` above).
-                Event::ExtensionUiRequest { id, .. } => {
-                    let _ = parked.client.cancel_dialog(id);
+                // Native requests remain blocked until this session is opened.
+                // The reducer saved the raw request; no answer is fabricated.
+                Event::ExtensionUiRequest { id, method, .. } => {
+                    if matches!(method.as_str(), "select" | "input") {
+                        if let Some(replay) = parked.interaction.ask_replay.as_mut() {
+                            // These answers were already committed by the user;
+                            // replaying them must not wait for a foreground UI.
+                            let reply = replay.reply(id, method);
+                            let finished = replay.is_finished()
+                                || matches!(reply, crate::ask::AskReplayReply::Cancel);
+                            let payload = match reply {
+                                crate::ask::AskReplayReply::Value(value) => serde_json::json!({
+                                    "type": "extension_ui_response", "id": id, "value": value,
+                                }),
+                                crate::ask::AskReplayReply::Cancel => serde_json::json!({
+                                    "type": "extension_ui_response", "id": id, "cancelled": true,
+                                }),
+                            };
+                            if parked.client.send(CommandBody::Raw(payload)).is_ok() {
+                                parked.execution.respond(id);
+                            } else {
+                                parked.execution.apply_event(&Event::ProcessExited);
+                            }
+                            if finished {
+                                parked.interaction.ask_replay = None;
+                            }
+                        }
+                    } else if method == "custom" {
+                        let _ = parked.client.cancel_dialog(id);
+                    }
                     continue;
+                }
+                Event::AutoRetryEnd { .. } => parked.retry_detail = None,
+                Event::TurnStart => parked.interaction = ParkedInteraction::default(),
+                Event::ToolExecutionStart { value } => {
+                    if value
+                        .get("toolName")
+                        .and_then(Value::as_str)
+                        .is_some_and(crate::ask::is_ask_tool)
+                    {
+                        parked.interaction.ask_tool_id = value
+                            .get("toolCallId")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        parked.interaction.ask_questions =
+                            crate::ask::questions_from_args(value.get("args"));
+                    }
+                }
+                Event::ToolExecutionEnd { value } => {
+                    if parked.interaction.ask_tool_id.as_deref()
+                        == value.get("toolCallId").and_then(Value::as_str)
+                    {
+                        parked.interaction = ParkedInteraction::default();
+                    }
                 }
                 Event::MessageEnd { value } => {
                     // Real edit stats from finalized tool calls.
@@ -679,6 +786,7 @@ impl OrbitApp {
             }
             changed |= parked.transcript.apply_event(&event);
         }
+        parked.busy = parked.execution.status().is_in_progress();
         ParkedDrain {
             changed,
             busy: parked.busy,
@@ -767,6 +875,10 @@ impl OrbitApp {
         // state, and stop — success paths below assume `data` is valid.
         if !success {
             self.abandon_fork_command(command, id);
+            if matches!(command, "switch_session" | "get_state") {
+                self.pending_session_rename = None;
+                self.session_rename_ready = false;
+            }
             self.on_command_failure(command, error, cx);
             match command {
                 "compact" => {
@@ -852,6 +964,7 @@ impl OrbitApp {
                 }
                 self.prompt_in_flight = None;
                 if handled {
+                    self.execution = SessionExecution::default();
                     self.busy = false;
                     self.transcript.abandon_reply();
                     // The turn opened at the send never ran: close it so the
@@ -888,6 +1001,7 @@ impl OrbitApp {
                         self.fork_pending = None;
                     }
                 }
+                self.execution = SessionExecution::default();
                 self.adopt_branched_session(data, refresh_sessions, cx);
                 if footer {
                     self.begin_fork_rename(cx);
@@ -906,6 +1020,7 @@ impl OrbitApp {
                     return;
                 }
                 let footer = self.footer_fork_switching(id);
+                self.execution = SessionExecution::default();
                 self.adopt_branched_session(data, refresh_sessions, cx);
                 if footer {
                     self.begin_fork_rename(cx);
@@ -955,7 +1070,10 @@ impl OrbitApp {
                 // Agent control surface: streaming/compaction state, queue
                 // modes, auto-compaction, and the session display name.
                 let state = SessionState::from_value(data);
-                self.busy = state.is_streaming || state.is_compacting;
+                self.execution.reconcile(&state);
+                self.busy = state.is_streaming
+                    || state.is_compacting
+                    || self.execution.status().is_in_progress();
                 self.is_compacting = state.is_compacting;
                 self.follow_up_mode = state.follow_up_mode;
                 self.auto_compaction = state.auto_compaction_enabled;
@@ -976,6 +1094,18 @@ impl OrbitApp {
                             self.seed_session_name_input(cx);
                         }
                         _ => {}
+                    }
+                }
+                if let Some(path) = self.pending_session_rename.as_ref() {
+                    if self.current_session_path.as_ref() == Some(path)
+                        && data
+                            .get("sessionFile")
+                            .and_then(Value::as_str)
+                            .is_some_and(|file| std::path::Path::new(file) == path)
+                    {
+                        self.pending_session_rename = None;
+                        self.session_rename_ready = true;
+                        cx.notify();
                     }
                 }
                 self.sync_model_selector(cx);
@@ -1108,6 +1238,9 @@ impl OrbitApp {
             }
             "new_session" => {
                 self.cancel_fork_followup();
+                if !self.busy {
+                    self.execution = SessionExecution::default();
+                }
                 self.transcript.clear();
                 self.current_title = None;
                 self.reset_session_name(cx);
@@ -1301,19 +1434,40 @@ impl OrbitApp {
             .update(cx, |input, cx| input.set_placeholder_key(key, cx));
     }
 
-    /// Post the "turn finished" notification for a settle. Nothing is posted
+    /// Post the "turn finished" notification for a settle and leave the
+    /// session's row marked until the user actually reads it. Nothing is posted
     /// while the window is frontmost except the in-app toast, and a turn the
     /// user aborted holds no news. `session` is the file path that a banner
     /// click routes back to.
+    ///
+    /// Both settle paths meet here — the open session's and a parked background
+    /// run's — which is what makes the review mark cover every session that
+    /// finishes out of sight, not just the one on screen (issue #83).
     pub(super) fn notify_turn_finished(
         &mut self,
         session: Option<&Path>,
         title: Option<&str>,
         summary: Option<&transcript::TurnSummary>,
+        cx: &mut Context<Self>,
     ) {
         let Some(summary) = summary else { return };
         if summary.aborted {
             return;
+        }
+        // The mark outlives the toast: it is the only cue left once the toast
+        // has gone, and the only one that says *which* session it was.
+        if let Some(path) = session {
+            let in_front = self.transcript_in_front(cx);
+            if should_mark_review(in_front, path, self.current_session_path.as_deref()) {
+                let mark = if summary.failed {
+                    ReviewMark::Failed
+                } else {
+                    ReviewMark::Done
+                };
+                if self.awaiting_review.insert(path.to_path_buf(), mark) != Some(mark) {
+                    cx.notify();
+                }
+            }
         }
         let (subtitle, fallback, kind) = if summary.failed {
             (
@@ -1334,6 +1488,32 @@ impl OrbitApp {
             summary.body.as_str()
         };
         self.post_notification(session, title, &subtitle, body, kind);
+    }
+
+    /// Whether a full-page surface has replaced the chat column: Files, Git,
+    /// Usage, Worktrees, or a full-width Review pane. Mirrors the renderer's own
+    /// rule in `view.rs` (`feature_open` / `pane_full`) — keep the two in step,
+    /// since a page that hides the transcript must also stop the review mark
+    /// from being spent.
+    fn chat_column_covered(&self, cx: &App) -> bool {
+        let pane = self.sidepane.read(cx);
+        // Same gate the renderer puts on a full-width Review pane: it only owns
+        // the page once its dependencies are ready and no page already has it.
+        let review_covers_chat =
+            pane.is_open() && pane.is_full_width() && self.dependencies_ready();
+        self.file_viewer.read(cx).is_open()
+            || self.git_open
+            || self.usage_open
+            || self.worktrees_open
+            || review_covers_chat
+    }
+
+    /// Whether the transcript is the surface genuinely in front of the user:
+    /// the window is frontmost and no full-page surface has replaced the chat
+    /// area. A settle out of sight leaves a review mark even when the window is
+    /// active (issue #83).
+    fn transcript_in_front(&self, cx: &App) -> bool {
+        self.window_active && !self.settings_open && !self.chat_column_covered(cx)
     }
 
     /// A run is blocked on an extension dialog — the one event a user cannot
@@ -1461,5 +1641,49 @@ impl OrbitApp {
         // repository's worktree list, so keep it current on every workspace
         // move (one background `git worktree list`).
         self.refresh_worktrees(cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The review mark is only spent when the chat column is genuinely in front
+    /// of the user. Every surface that replaces the chat area has to count as
+    /// "covered", or a settle behind it would look read (issue #83).
+    #[gpui::test]
+    fn a_full_page_surface_is_not_the_transcript_in_front(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::theme::Theme::for_id(crate::theme::ThemeKey::ORBIT));
+            let app = cx.new(OrbitApp::new);
+            app.update(cx, |app, cx| {
+                app.window_active = true;
+                assert!(
+                    app.transcript_in_front(cx),
+                    "a frontmost window on the chat is the transcript in front"
+                );
+
+                app.git_open = true;
+                assert!(!app.transcript_in_front(cx), "the Git page covers it");
+                app.git_open = false;
+
+                app.usage_open = true;
+                assert!(!app.transcript_in_front(cx), "the Usage page covers it");
+                app.usage_open = false;
+
+                app.worktrees_open = true;
+                assert!(!app.transcript_in_front(cx), "the Worktrees page covers it");
+                app.worktrees_open = false;
+
+                app.settings_open = true;
+                assert!(!app.transcript_in_front(cx), "Settings covers it");
+                app.settings_open = false;
+
+                app.window_active = false;
+                assert!(!app.transcript_in_front(cx), "a background window is not");
+                app.window_active = true;
+                assert!(app.transcript_in_front(cx));
+            });
+        });
     }
 }

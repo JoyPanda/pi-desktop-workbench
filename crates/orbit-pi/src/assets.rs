@@ -155,6 +155,34 @@ mod tests {
         assert_eq!(&bytes[..4], b"\x89PNG");
     }
 
+    #[test]
+    fn onest_is_available_in_the_interface_font_catalog() {
+        assert!(crate::theme::UI_FONTS
+            .iter()
+            .any(|choice| choice.label == "Onest" && choice.family == "Onest"));
+    }
+
+    #[test]
+    fn onest_weights_are_embedded_and_collected_for_registration() {
+        use gpui::AssetSource as _;
+
+        let mut paths = Vec::new();
+        super::collect_fonts(super::ASSETS.get_dir("fonts/bundled").unwrap(), &mut paths);
+        for style in ["Regular", "Medium", "SemiBold", "Bold"] {
+            let path = format!("fonts/bundled/onest/Onest-{style}.ttf");
+            assert!(
+                paths.contains(&path),
+                "font registration must include {path}"
+            );
+            let bytes = super::Assets.load(&path).unwrap().unwrap();
+            assert_eq!(&bytes[..4], &[0x00, 0x01, 0x00, 0x00], "{path}");
+        }
+        assert!(super::Assets
+            .load("fonts/bundled/onest/OFL.txt")
+            .unwrap()
+            .is_some());
+    }
+
     /// The devicons face is the only source of file glyphs on machines
     /// without a system Nerd Font; if the asset moves or is dropped, every
     /// file icon silently falls back to a text badge.

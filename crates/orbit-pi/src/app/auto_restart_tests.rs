@@ -112,6 +112,21 @@ fn an_exit_that_lands_twice_schedules_one_respawn(cx: &mut gpui::TestAppContext)
     });
 }
 
+#[gpui::test]
+fn sidebar_retry_status_clears_when_a_queued_retry_is_superseded(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            started_ago(app, Duration::from_secs(30));
+            app.auto_restart_scheduled = true;
+            assert!(app.sidebar_runtime_retrying());
+
+            app.runtime.exited = false;
+            assert!(!app.sidebar_runtime_retrying());
+        });
+    });
+}
+
 /// Once the budget is spent the app stops respawning and says so, so the
 /// Reconnect button is what the user sees instead of a silent dead app.
 #[gpui::test]

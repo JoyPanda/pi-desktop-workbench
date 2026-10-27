@@ -49,6 +49,7 @@ fn rows_for(
         &HashSet::new(),
         &None,
         &HashSet::new(),
+        &HashSet::new(),
     )
 }
 
@@ -140,6 +141,7 @@ fn last_updated_does_not_float_the_open_sessions_group() {
         &HashSet::new(),
         &active,
         &HashSet::new(),
+        &HashSet::new(),
     );
     assert_eq!(group_labels(&rows), vec!["beta", "alpha"]);
 }
@@ -169,6 +171,7 @@ fn an_open_session_stays_behind_a_newer_sibling() {
         &HashSet::new(),
         &active,
         &running,
+        &HashSet::new(),
     );
     let indices: Vec<usize> = rows
         .iter()

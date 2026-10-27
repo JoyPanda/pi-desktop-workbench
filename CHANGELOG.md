@@ -14,6 +14,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   follows the summary and the messages still on screen. The new session is
   titled `(N) original title`. Command-palette Clone still copies the whole
   session and does not rename. Rewind is unchanged.
+
+- **Branch pickers show when each branch last moved.** Every row carries the
+  age of its tip commit (`3d ago`) in a right-aligned column: in the status-bar
+  branch popover the dates read as a timeline, newest work first, with the
+  current branch marked by an accent glyph and a check in a slot every row
+  reserves so the dates never shift; the header counts what the filter found.
+  The Git panel's branch menu dates its Recent, Local, and Remote sections the
+  same way (the age is the row's last element, so all dates share one right
+  edge next to the `Current` marker or the hover delete), and remote refs now
+  carry their tip date in `list_refs`. Filtering still matches branch names.
+
+- **Session execution status in the sidebar.** Open and background sessions show
+  Running, Waiting for approval/input, Retrying, Compacting, Completed, Failed,
+  Stopped, Disconnected, or Idle from real pi events. Completed/Failed/Stopped
+  remain after opening a result and after warm-process reaping for this launch.
+  Historical and external sessions have no guessed status until observed.
+  Only `agent_settled` finishes a run, and its abort flag distinguishes a stopped
+  run even when no assistant message was produced. Native approvals, dialogs,
+  and questionnaire answers now stay with their session when switching away;
+  requests arriving in the background wait for the user instead of being cancelled.
 - **Mermaid flowcharts render in the transcript.** A `flowchart`/`graph` fence
   (TD/TB, BT, LR, RL) now paints as a diagram — nodes, shapes, orthogonal edges,
   arrowheads, and edge labels — drawn with GPUI paths and text, so there is no
@@ -25,6 +45,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and an edge that skips a rank routes around the boxes instead of through them.
   Layout is cached per fence and interface font, so a streaming run re-renders
   the same diagram for free.
+- **A session that finishes while you are not looking stays marked.** Its sidebar
+  row carries an unread mark — a green eye and "Needs review" for a finished turn,
+  a red cross with a small corner dot for one that failed — until the session is
+  actually shown in a foreground window. That mark then gives way to the read
+  glyph, while a separate execution state distinguishes Completed from Failed and
+  remains after the mark is spent. The mark is what is left after the toast has
+  gone: with several sessions open, or after stepping away, the finished one is
+  findable instead of merely somewhere in the list. It is independent of the
+  running, pinned, and archived glyphs (it never replaces one) and a marked row
+  stays visible under a collapsed project group, the same way a running row does.
+  Opening the session spends the mark; selecting it while Orbit is behind another
+  app does not, because that is not reading it, and neither is settling behind a
+  full-page surface (Files, Git, Usage, Worktrees, or a full-width Review).
+  Marks live in memory only — what happened while Orbit was closed is not claimed,
+  since there is no way to know whether it was already read elsewhere. The labels
+  distinguish a finished turn from a failed one without relying on colour.
+- **Onest interface font** — available in Settings → Appearance → Interface font,
+  bundled in Regular, Medium, SemiBold, and Bold weights for offline use.
 - Git page → commit bar → **model chip**: the **Generate** button now chooses its
   own model instead of always borrowing the chat session's. Commit messages are a
   short, cheap task, so a small local model is often enough, and a model with a
@@ -71,6 +109,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Refined session navigation.** Tinted project marks, tonal count and status
+  badges, clearer title/preview hierarchy, and distinct selection and keyboard
+  focus outlines. Provider marks overlap less, and truncated titles, prompts,
+  and branches have tooltips. Existing session information and actions remain.
+- **Session rows carry three lines.** Title, the first message, and a metadata
+  strip — age, workspace, and branch with `↑n`/`↓n` against its upstream (green
+  ahead, amber behind). The message line always shows the prompt, because the
+  title is capped and the row is narrower still: a title that happens to be the
+  same sentence is cut short, not redundant, so the message is the only place
+  the ask reads end to end. Branches are fetched off-thread per project (`git
+  branch` + `rev-list`, one pair at launch and whenever the project list or the
+  current checkout changes), so painting a row never shells out. A project that
+  is not a git repository has no branch item rather than an empty slot. The
+  workspace item appears in the flat list only — under a project header it would
+  repeat the header one line up.
+- **Session row actions moved to the right-click context menu.** The
+  hover-revealed `…` is gone, so the title owns the full line width; pin,
+  archive, copy path, reveal, clone, and delete are all on the context menu
+  (the palette still carries its own commands). The keyboard and palette delete
+  paths anchor the same confirmation to the row instead of to a button that no
+  longer exists.
 - Sidebar project names no longer look like the session titles under them. A
   group header takes the palette's accent hue at body-ink brightness — a quiet
   warm cast by default — or, when the project has a mark tint, that hue on its
@@ -105,6 +164,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Auto session titles now actually land.** The bundled title extension decided
+a session was worth naming only when its branch held *exactly one* user prompt at
+settle time, and it treated a settle with nothing to describe as final:
+
+  - sending a steering message or follow-up during the first run added a second
+    prompt, so the settle looked like a resumed session and no title was asked for;
+  - a session Orbit reopened from disk (its warm-process pool makes this the
+    normal case) was permanently ineligible, however untitled it was;
+  - one transient provider error was enough to lose the title for good — the
+    "retry on the next settle" path needed another settle with one prompt,
+    which a new prompt makes impossible, so the retry was dead code;
+  - a settle that arrived before the assistant had produced any text wrote the
+    session off for the life of the process.
+
+  The rule is now the one a reader expects: **any session without a name gets a
+title**, from its first exchange, on the first settle that has something to
+describe. An existing name is never replaced (that is the user's rename or an
+earlier title) except by the details popover's explicit **Generate title**. A
+settle with no reply yet leaves the session open for the next turn, and a
+transient failure is retried up to three times instead of once. A completed ask
+that produced no text is still final, so a model that keeps answering nothing is
+not asked on every turn.
 - The status bar no longer prints extension color codes as literal text. An
   entry set with `ctx.ui.setStatus()` that styled itself via `ctx.ui.theme.fg()`
   used to render the raw SGR escape (e.g. `[38;5;71m●[39m`), because the status

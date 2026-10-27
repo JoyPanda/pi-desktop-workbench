@@ -18,6 +18,8 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "已从侧边栏移除 %{name}",
         "Icon & color": "图标和颜色",
         "Reset": "重置",
+        "Turn finished — open to review": "回合已完成——打开查看",
+        "Turn failed — open to review": "回合失败——打开查看",
     },
     "ja": {
         "Copy path": "パスをコピー",
@@ -36,6 +38,8 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "%{name} をサイドバーから削除しました",
         "Icon & color": "アイコンと色",
         "Reset": "リセット",
+        "Turn finished — open to review": "ターン完了 — 開いて確認",
+        "Turn failed — open to review": "ターン失敗 — 開いて確認",
     },
     "ko": {
         "Copy path": "경로 복사",
@@ -54,6 +58,8 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "사이드바에서 %{name}을(를) 제거했습니다",
         "Icon & color": "아이콘 및 색상",
         "Reset": "초기화",
+        "Turn finished — open to review": "턴 완료 — 열어서 확인",
+        "Turn failed — open to review": "턴 실패 — 열어서 확인",
     },
     "es": {
         "Copy path": "Copiar ruta",
@@ -72,6 +78,8 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "Se quitó %{name} de la barra lateral",
         "Icon & color": "Icono y color",
         "Reset": "Restablecer",
+        "Turn finished — open to review": "Turno finalizado: abre para revisar",
+        "Turn failed — open to review": "Turno fallido: abre para revisar",
     },
     "fr": {
         "Copy path": "Copier le chemin",
@@ -90,6 +98,8 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "%{name} retiré de la barre latérale",
         "Icon & color": "Icône et couleur",
         "Reset": "Réinitialiser",
+        "Turn finished — open to review": "Tour terminé — ouvrez pour vérifier",
+        "Turn failed — open to review": "Tour échoué — ouvrez pour vérifier",
     },
     "de": {
         "Copy path": "Pfad kopieren",
@@ -108,6 +118,8 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "%{name} aus der Seitenleiste entfernt",
         "Icon & color": "Symbol und Farbe",
         "Reset": "Zurücksetzen",
+        "Turn finished — open to review": "Durchlauf beendet – zum Prüfen öffnen",
+        "Turn failed — open to review": "Durchlauf fehlgeschlagen – zum Prüfen öffnen",
     },
     "pt-BR": {
         "Copy path": "Copiar caminho",
@@ -126,6 +138,8 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "%{name} removido da barra lateral",
         "Icon & color": "Ícone e cor",
         "Reset": "Redefinir",
+        "Turn finished — open to review": "Turno concluído — abra para revisar",
+        "Turn failed — open to review": "Turno falhou — abra para revisar",
     },
     "ru": {
         "Copy path": "Копировать путь",
@@ -144,6 +158,8 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "%{name} убран из боковой панели",
         "Icon & color": "Значок и цвет",
         "Reset": "Сбросить",
+        "Turn finished — open to review": "Ход завершён — откройте для просмотра",
+        "Turn failed — open to review": "Ход не удался — откройте для просмотра",
     },
     "it": {
         "Copy path": "Copia percorso",
@@ -162,5 +178,7 @@ GLOSSARY = {
         "Removed %{name} from the sidebar": "%{name} rimosso dalla barra laterale",
         "Icon & color": "Icona e colore",
         "Reset": "Reimposta",
+        "Turn finished — open to review": "Turno completato — apri per rivedere",
+        "Turn failed — open to review": "Turno non riuscito — apri per rivedere",
     },
 }

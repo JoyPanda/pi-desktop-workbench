@@ -24,6 +24,7 @@ fn rows_for(workspaces: &[PathBuf]) -> Vec<SideRow> {
         &HashSet::new(),
         &None,
         &HashSet::new(),
+        &HashSet::new(),
     )
 }
 

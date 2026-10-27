@@ -84,7 +84,7 @@ fn probe_switch_session_mid_run() {
                     deltas_after_switch += 1;
                     eprint!("{delta}");
                 }
-                Event::AgentSettled => {
+                Event::AgentSettled { .. } => {
                     settled_after_switch = true;
                     eprintln!("\n>>> agent_settled after switch");
                 }

@@ -56,8 +56,9 @@ test("firstExchange finds the first user and assistant text and counts prompts",
     { type: "message", message: { role: "user", content: "second prompt" } },
     { type: "message", message: { role: "assistant", content: [{ type: "text", text: "second answer" }] } },
   ];
-  // The tool-call reply has no text, so the first textual assistant wins;
-  // user prompts (not replies) separate a fresh session from a resumed one.
+  // The tool-call reply has no text, so the first textual assistant wins; the
+  // prompt count is reported (a caller can tell how much predates this
+  // process), while the title gate itself keys on the session's name.
   assert.deepEqual(firstExchange(entries), {
     user: "first prompt",
     assistant: "answer",

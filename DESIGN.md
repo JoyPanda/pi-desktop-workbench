@@ -223,7 +223,7 @@ diffs, paths, token counts in tables.
 **The Catalog.** Appearance exposes a curated Interface and Code catalog
 (`theme::UI_FONTS` / `CODE_FONTS`) of bundled OFL faces — Inter, Fixel Text,
 Geist Sans, Atkinson Hyperlegible, Source Sans 3, Roboto, Noto Sans, DM Sans,
-Manrope, and JetBrains Mono, Fira Code, Geist Mono, Commit Mono, Source Code
+Manrope, Onest, and JetBrains Mono, Fira Code, Geist Mono, Commit Mono, Source Code
 Pro, Cascadia Code, Roboto Mono, Iosevka, DM Mono, IBM Plex Mono, Inconsolata,
 Noto Sans Mono, Space Mono, Anonymous Pro, Martian Mono. Every family ships as
 statically instanced, subset TTFs at the 400–700 weights it offers, under
@@ -573,15 +573,53 @@ The sidebar is quiet infrastructure.
 - Supported range: 200–320px.
 - Collapse/hide the sidebar before forcing the workspace to become cramped.
 - Sidebar sections use whitespace and labels rather than excessive containers.
+- Project marks sit on small theme-tinted tiles (the default inherits the accent;
+  custom tints and logos remain intact), with a quiet tonal session counter.
+  Session titles use primary ink and medium weight, stepping to semibold for the
+  selected session; previews use secondary ink and metadata stays muted. Real
+  execution states get semantic badge washes, never invented activity. Selection
+  combines the existing selected fill with a subtle accent outline; keyboard focus
+  has its own full-strength outline, including on the selected row. Resting rows
+  stay unboxed, and provider marks keep their individual hover targets.
 - A project group header carries a session count only when it is non-zero. A project
   with nothing in it already says so by having no rows under it.
-- A session row's title line is its anchor and is always there; the first-message
-  preview appears only when it says something the title does not
-  (`preview_adds_information`). pi titles a session from that message, so the title is
-  normally the same sentence cut short and the preview is the rest of it — a second line
-  the eye reads and learns nothing from. Rows are therefore one or two lines tall, and the
-  age rides whichever line is last.
+- A session row's title line is its anchor and is always there. The sidebar view
+  menu's **Show first message** toggle controls the preview below it (on by default,
+  remembered across restarts in both grouped and flat lists). When enabled, it carries
+  the whole first message: pi titles a session from that message, so the two often start the
+  same way, but the title is capped at 80 characters and the row shows far fewer — the
+  message line is the only place the ask reads to its end. Line 3 is the metadata strip —
+  age, workspace (flat list only: under a project header the name is already one line up),
+  and branch with `↑n`/`↓n` against its upstream. Rows are three lines tall and drop to two
+  when previews are hidden or nothing has been sent yet. The branch truncates last, and a divergence count
+  appears only when it is non-zero.
+- Every line of a session row is a truncating text run inside a flex row, with
+  `flex_1 min_w_0 truncate` on the text itself. `truncate()` on a bare block collapses to
+  its own ellipsis instead of filling the column.
+- A session row's actions live on its right-click context menu, the same gesture every
+  other row in the app uses. There is no hover-revealed `…` on a session row: the title
+  owns the full line width. The project group header keeps its own `…` (and `+`) because
+  a header is a section control, not a row.
 - Active navigation uses `selection`, not accent color alone.
+- Execution state lives in one **status lane**: a 16px slot at the leading edge of
+  the row's state line (the title line under a project header, the project line in
+  the flat list), so the list's activity is one vertical scan away instead of a
+  word competing with every title. The lane paints one glyph — a spinner while
+  running, a lock for an approval gate, a chat glyph for a question, a check when a
+  result has been read, an eye when it has not, a cross for a failure or a dead
+  process, a stop for an aborted run — and nothing at all for `Idle` / `Unknown`;
+  the slot keeps its width either way so every row's text stays on the same x. Only
+  the spinner moves. Attention states (blocked, needs review, failed) add words in
+  place of the age, so colour is never the only distinction.
+- A session whose turn settled while the user was not reading it keeps an **unread
+  mark** on its row — a green eye plus "Needs review" until the session is actually
+  shown in a foreground window, then a green check for the read result; a failed
+  background turn keeps a red cross with a small amber corner dot. The mark is
+  separate from the running, pin, and archive glyphs (it never replaces one), and a
+  marked row stays visible under a collapsed project group the way a running one
+  does. Selecting a row in a background window is not "shown": the mark survives
+  until Orbit is frontmost with that session on screen. Shape and label both carry
+  the state, so the marks remain distinguishable without colour.
 - Session state may use semantic indicators, but decorative animation is forbidden except
   for the currently running session treatment already defined above.
 - Sidebar width and collapsed state should persist per workspace/window when practical.

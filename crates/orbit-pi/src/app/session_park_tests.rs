@@ -256,6 +256,9 @@ fn shortcut_switch_to_a_warm_session_keeps_the_running_process(cx: &mut gpui::Te
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     parked_at: Instant::now(),
+                    execution: SessionExecution::default(),
+                    interaction: ParkedInteraction::default(),
+                    retry_detail: None,
                 },
             );
 
@@ -342,6 +345,9 @@ exec cat >/dev/null
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     parked_at: Instant::now(),
+                    execution: SessionExecution::default(),
+                    interaction: ParkedInteraction::default(),
+                    retry_detail: None,
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -374,12 +380,10 @@ exec cat >/dev/null
     });
 }
 
-/// A parked session has no dialog surface, so it must cancel any
-/// `extension_ui_request` it drains — with the top-level `cancelled` flag pi
-/// expects. Nesting it under `value` left the extension waiting and the run
-/// stuck `busy` forever, which is the "stops streaming midway" symptom.
+/// Unlike native approvals and inputs, a custom terminal surface cannot be
+/// parked. Its cancellation must still use pi's top-level `cancelled` flag.
 #[gpui::test]
-fn parked_session_cancels_extension_dialogs_with_a_top_level_flag(cx: &mut gpui::TestAppContext) {
+fn parked_session_cancels_custom_ui_with_a_top_level_flag(cx: &mut gpui::TestAppContext) {
     let app = test_app(cx);
     let out = std::env::temp_dir().join(format!(
         "orbit-park-dialog-{}-{:?}.txt",
@@ -390,11 +394,10 @@ fn parked_session_cancels_extension_dialogs_with_a_top_level_flag(cx: &mut gpui:
             .as_nanos()
     ));
     let _ = std::fs::remove_file(&out);
-    // Emits a guard-style request, then captures the one line the host sends
-    // back so the test can inspect the cancel payload.
+    // Capture the response for an unsupported background custom surface.
     let script = format!(
         r#"#!/bin/sh
-printf '%s\n' '{{"type":"extension_ui_request","id":"req-1","method":"confirm"}}'
+printf '%s\n' '{{"type":"extension_ui_request","id":"req-1","method":"custom"}}'
 IFS= read -r line
 printf '%s\n' "$line" > "{out}"
 exec cat >/dev/null
@@ -500,6 +503,9 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     parked_at: Instant::now(),
+                    execution: SessionExecution::default(),
+                    interaction: ParkedInteraction::default(),
+                    retry_detail: None,
                 },
             );
 
@@ -580,6 +586,9 @@ fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext)
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     parked_at: Instant::now(),
+                    execution: SessionExecution::default(),
+                    interaction: ParkedInteraction::default(),
+                    retry_detail: None,
                 },
             );
 
@@ -659,6 +668,9 @@ exec cat >/dev/null
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     parked_at: Instant::now(),
+                    execution: SessionExecution::default(),
+                    interaction: ParkedInteraction::default(),
+                    retry_detail: None,
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -684,6 +696,120 @@ exec cat >/dev/null
             assert!(
                 app.queue.is_empty(),
                 "the delivered follow-up is not shown again on resume"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn reading_a_result_does_not_erase_its_execution_outcome(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let path = PathBuf::from("/tmp/orbit-park-tests/completed.jsonl");
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            app.current_session_path = Some(path.clone());
+            app.execution.start();
+            app.execution
+                .apply_event(&Event::AgentSettled { aborted: false });
+            app.awaiting_review.insert(path.clone(), ReviewMark::Done);
+            super::sidebar::clear_review_mark(&mut app.awaiting_review, Some(&path), true);
+            assert_eq!(
+                app.sidebar_session_statuses().get(&path),
+                Some(&SessionStatus::Completed)
+            );
+            assert!(!app.awaiting_review.contains_key(&path));
+        });
+    });
+}
+
+#[gpui::test]
+fn a_background_approval_stays_pending_and_opens_on_resume(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let fake = FakePi::install("pending-approval", r#"#!/bin/sh
+printf '%s\n' '{"type":"agent_start"}' '{"type":"extension_ui_request","id":"allow-edit","method":"select","title":"[orbit-guard] edit\tfile.rs","options":["Allow once","Deny"]}'
+while IFS= read -r line; do :; done
+"#.to_string());
+    let path = fake.dir.join("session.jsonl");
+    let session = SessionInfo {
+        path: path.clone(),
+        id: "pending-approval".into(),
+        cwd: fake.dir.clone(),
+        title: "Pending approval".into(),
+        first_message: "edit a file".into(),
+        modified: SystemTime::now(),
+    };
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            let client = spawn_fake(app, &fake);
+            app.adopt_client(client);
+            app.current_session_path = Some(path.clone());
+            app.busy = true;
+            app.execution.start();
+            app.park_active_session();
+        });
+    });
+    pump_until(cx, &app, Duration::from_secs(5), |app| {
+        app.lives
+            .get(&path)
+            .is_some_and(|parked| parked.execution.status() == SessionStatus::WaitingApproval)
+    });
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let parked = app.lives.get(&path).expect("session remains parked");
+            assert_eq!(parked.execution.status(), SessionStatus::WaitingApproval);
+            assert!(parked.busy, "waiting work must not be reaped as idle");
+            app.switch_to_session(session.clone(), true, cx);
+            assert_eq!(
+                app.approval.as_ref().map(|request| request.id.as_str()),
+                Some("allow-edit")
+            );
+            assert_eq!(app.execution.status(), SessionStatus::WaitingApproval);
+            // Switching away again must park this exact approval, not deny it.
+            app.park_active_session();
+            assert!(app.approval.is_none());
+            app.switch_to_session(session.clone(), true, cx);
+            assert_eq!(
+                app.approval.as_ref().map(|request| request.id.as_str()),
+                Some("allow-edit")
+            );
+            app.approval = None;
+            app.respond_to_dialog("allow-edit", &DialogResponse::Value("Allow once".into()));
+            assert_eq!(app.execution.status(), SessionStatus::Running);
+        });
+    });
+}
+
+#[gpui::test]
+fn background_completion_survives_process_reaping_and_reading(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let fake = FakePi::install("completed-status", r#"#!/bin/sh
+printf '%s\n' '{"type":"agent_start"}' '{"type":"message_start","message":{"role":"assistant","content":[]}}' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"stopReason":"stop"}}' '{"type":"agent_end","willRetry":false}' '{"type":"agent_settled","aborted":false}'
+exec cat >/dev/null
+"#.to_string());
+    let path = fake.dir.join("session.jsonl");
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            let client = spawn_fake(app, &fake);
+            app.adopt_client(client);
+            app.current_session_path = Some(path.clone());
+            app.busy = true;
+            app.park_active_session();
+        });
+    });
+    pump_until(cx, &app, Duration::from_secs(5), |app| {
+        app.session_outcomes.get(&path) == Some(&SessionStatus::Completed)
+    });
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            assert_eq!(
+                app.sidebar_session_statuses().get(&path),
+                Some(&SessionStatus::Completed)
+            );
+            app.lives.remove(&path);
+            app.awaiting_review.remove(&path);
+            assert_eq!(
+                app.sidebar_session_statuses().get(&path),
+                Some(&SessionStatus::Completed)
             );
         });
     });

@@ -1,15 +1,15 @@
 use super::helpers::*;
 use super::*;
 
-use gpui::{point, Pixels};
+use gpui::{point, Hsla, Pixels};
 
 use crate::sessions::cap_chars;
 use crate::shimmer::ShimmerText;
 use crate::theme::tokens::{
     context_menu, list_item, picker, popover, BufferLineHeight, ButtonSize, DynamicSpacing,
-    IconSize, TextSize,
+    IconSize, Radius, TextSize,
 };
-use crate::workspace_mark::{self, WorkspaceMark, WorkspaceStatus};
+use crate::workspace_mark::{self, WorkspaceMark};
 
 /// Whether a workspace group is collapsed in the sidebar. The active
 /// workspace is expanded by default; all others are collapsed unless the
@@ -153,6 +153,11 @@ pub(crate) fn build_sidebar_rows(
     // session stays visible under a collapsed group header, like the open
     // session, so active work is never lost behind a collapse.
     running_paths: &HashSet<PathBuf>,
+    // Sessions carrying a review mark. They stay visible under a collapsed
+    // group header for the same reason running ones do — the whole point of
+    // the mark is that the result is still unread, and a collapse that hides
+    // it turns the mark back into a search (issue #83).
+    review_paths: &HashSet<PathBuf>,
 ) -> Vec<SideRow> {
     let mut side_rows: Vec<SideRow> = Vec::new();
     for (label, cwd, ixs) in sidebar_groups(sessions, workspaces, sort, added_at, pinned) {
@@ -169,6 +174,7 @@ pub(crate) fn build_sidebar_rows(
             pinned,
             active_path,
             running_paths,
+            review_paths,
         );
     }
     side_rows
@@ -247,6 +253,7 @@ fn emit_workspace_group(
     pinned: &HashSet<PathBuf>,
     active_path: &Option<PathBuf>,
     running_paths: &HashSet<PathBuf>,
+    review_paths: &HashSet<PathBuf>,
 ) {
     let collapsed = is_workspace_group_collapsed(
         &label,
@@ -269,7 +276,11 @@ fn emit_workspace_group(
         for &ix in ixs {
             let open = active_path.as_deref() == Some(sessions[ix].path.as_path());
             let running = running_paths.contains(&sessions[ix].path);
-            if open || running || pinned.contains(&sessions[ix].path) {
+            if open
+                || running
+                || pinned.contains(&sessions[ix].path)
+                || review_paths.contains(&sessions[ix].path)
+            {
                 side_rows.push(SideRow::Session(ix));
             }
         }
@@ -414,9 +425,9 @@ pub(crate) fn sticky_sidebar_header(list: &ListState, rows: &[SideRow]) -> Optio
     let header_ix = rows[..=scan_end]
         .iter()
         .rposition(|row| matches!(row, SideRow::Workspace { .. }))?;
-    // A collapsed group shows only its always-visible rows (the open, running
-    // or pinned sessions), so there is no long history to label — and pinning
-    // its header would mask the previous group's rows.
+    // A collapsed group shows only its always-visible rows (the open, running,
+    // pinned, or review-marked sessions), so there is no long history to label
+    // — and pinning its header would mask the previous group's rows.
     if matches!(
         rows.get(header_ix),
         Some(SideRow::Workspace {
@@ -452,20 +463,278 @@ pub(crate) fn sticky_sidebar_header(list: &ListState, rows: &[SideRow]) -> Optio
     })
 }
 
-/// The status a flat session row's workspace glyph conveys, from the row's
-/// own state — the open session leads (open folder), then a run in flight,
-/// then an archive. Workspace-level status is never used here, so siblings in
-/// the same folder stay plain.
-pub(crate) fn session_icon_status(active: bool, running: bool, archived: bool) -> WorkspaceStatus {
-    if active {
-        WorkspaceStatus::Current
-    } else if running {
-        WorkspaceStatus::Running
-    } else if archived {
-        WorkspaceStatus::Archived
-    } else {
-        WorkspaceStatus::Idle
+/// The one glyph a session row spends on execution state.
+///
+/// The row keeps a *lane* for it — the leading 16px of every row, at the same
+/// x — so the state of the whole list is one vertical scan away, instead of a
+/// word at the end of each title competing with the name for the line. Glyph,
+/// ink, and words resolve separately from the state, so the mapping is
+/// testable without a theme and paints from exactly one place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StatusLane {
+    /// A run is in flight; the glyph spins.
+    Progress,
+    /// The agent is blocked on a person, who is the only thing that can move it.
+    Blocked(BlockReason),
+    /// The last run finished and nobody has read the result yet.
+    UnreadDone,
+    /// A failed background run has not been opened yet.
+    UnreadFailed,
+    /// The completed result is visible or has been opened.
+    Done,
+    Failed,
+    Stopped,
+    /// Nothing has run yet.
+    Idle,
+    /// No execution state was ever observed — another client, an earlier launch.
+    Unknown,
+}
+
+/// Which person the agent is waiting on. Two different problems, two glyphs: an
+/// approval is a gate, a question is a conversation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BlockReason {
+    Approval,
+    Input,
+}
+
+/// The lane state for a row, from the two independent facts a row has: what the
+/// process is doing (which may never have been observed) and whether its last
+/// result was read. A live block outranks an unread mark — the agent is stuck
+/// *now*, and a stale "unread" badge would bury that.
+pub(crate) fn status_lane(status: Option<SessionStatus>, review: Option<ReviewMark>) -> StatusLane {
+    match status {
+        Some(SessionStatus::Running | SessionStatus::Retrying | SessionStatus::Compacting) => {
+            StatusLane::Progress
+        }
+        Some(SessionStatus::WaitingApproval) => StatusLane::Blocked(BlockReason::Approval),
+        Some(SessionStatus::WaitingInput) => StatusLane::Blocked(BlockReason::Input),
+        Some(SessionStatus::Failed) if review == Some(ReviewMark::Failed) => {
+            StatusLane::UnreadFailed
+        }
+        Some(SessionStatus::Failed | SessionStatus::Disconnected) => StatusLane::Failed,
+        Some(SessionStatus::Stopped) => StatusLane::Stopped,
+        Some(SessionStatus::Idle) => StatusLane::Idle,
+        Some(SessionStatus::Completed) | None => match review {
+            Some(ReviewMark::Failed) => StatusLane::UnreadFailed,
+            Some(ReviewMark::Done) => StatusLane::UnreadDone,
+            None if status.is_some() => StatusLane::Done,
+            None => StatusLane::Unknown,
+        },
     }
+}
+
+/// The lane glyph, or nothing. `Idle` and `Unknown` paint no glyph at all: a
+/// session that has never run has no state to report, and a column of faint
+/// dots would make the states that *do* matter harder to spot. The lane still
+/// reserves its width either way, so every row's text stays on one x.
+///
+/// The spinner is the only glyph that moves: a run in flight is the only thing
+/// on the row that is still happening.
+pub(crate) fn status_lane_icon(lane: StatusLane) -> Option<&'static str> {
+    Some(match lane {
+        StatusLane::Progress => "icons/running-spinner.svg",
+        StatusLane::Blocked(BlockReason::Approval) => "icons/lock.svg",
+        StatusLane::Blocked(BlockReason::Input) => "icons/chat.svg",
+        StatusLane::UnreadDone => "icons/eye.svg",
+        StatusLane::Done => "icons/circle-check.svg",
+        StatusLane::UnreadFailed | StatusLane::Failed => "icons/circle-x.svg",
+        StatusLane::Stopped => "icons/stop.svg",
+        StatusLane::Idle | StatusLane::Unknown => return None,
+    })
+}
+
+/// The ink the lane glyph wears. Colour is never the only signal — the glyph's
+/// shape already says what happened — but hue is what makes the column
+/// scannable: a block and a failure jump, a read result recedes to mute ink.
+pub(crate) fn status_lane_ink(lane: StatusLane, theme: &Theme) -> Hsla {
+    match lane {
+        StatusLane::Progress => theme.accent_text,
+        StatusLane::Blocked(_) => theme.warning,
+        StatusLane::UnreadDone | StatusLane::Done => theme.success,
+        StatusLane::UnreadFailed | StatusLane::Failed => theme.error,
+        StatusLane::Stopped => theme.text_muted,
+        StatusLane::Idle | StatusLane::Unknown => theme.text_disabled,
+    }
+}
+
+/// Attention states get words as well as a glyph, so colour is not the only
+/// distinction between a result needing review and a viewed result.
+pub(crate) fn status_lane_words(lane: StatusLane) -> Option<String> {
+    match lane {
+        StatusLane::Blocked(BlockReason::Approval) => Some(tr!("sidebar.status_approval")),
+        StatusLane::Blocked(BlockReason::Input) => Some(tr!("sidebar.status_input")),
+        StatusLane::UnreadDone => Some(tr!("sidebar.status_review_required")),
+        StatusLane::UnreadFailed | StatusLane::Failed => Some(tr!("sidebar.status_failed")),
+        _ => None,
+    }
+}
+
+/// Review state takes precedence over the execution label: a completed run
+/// needing attention must not announce itself as merely completed.
+pub(crate) fn status_lane_tip(lane: StatusLane, status: Option<SessionStatus>) -> Option<String> {
+    match lane {
+        StatusLane::UnreadDone => Some(tr!("sidebar.review_finished")),
+        StatusLane::UnreadFailed => Some(tr!("sidebar.review_failed")),
+        StatusLane::Done => Some(tr!("sidebar.status_viewed")),
+        _ => status.map(SessionStatus::label),
+    }
+}
+
+/// A fixed status slot keeps the header aligned as execution state changes.
+const SIDEBAR_STATUS_LANE: f32 = 16.;
+
+/// Paint the status independently of hover, with a tooltip describing its meaning.
+fn session_status_lane(
+    id: usize,
+    lane: StatusLane,
+    status: Option<SessionStatus>,
+    theme: Theme,
+) -> AnyElement {
+    let ink = status_lane_ink(lane, &theme);
+    let size = IconSize::XSmall.px(&theme);
+    let glyph: Option<AnyElement> = if lane == StatusLane::Progress {
+        Some(crate::app::running_spinner(
+            ElementId::NamedInteger("side-lane".into(), id as u64),
+            size,
+            ink,
+            theme,
+        ))
+    } else {
+        status_lane_icon(lane).map(|path| icon(path, size, ink).into_any_element())
+    };
+    let lane_el = div()
+        .flex_none()
+        .size(px(SIDEBAR_STATUS_LANE))
+        .flex()
+        .items_center()
+        .justify_center()
+        .relative()
+        .children(glyph)
+        .when(lane == StatusLane::UnreadFailed, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .size(px(5.))
+                    .rounded_full()
+                    .bg(theme.warning),
+            )
+        });
+    match status_lane_tip(lane, status) {
+        Some(tip) => lane_el.tip(tip).into_any_element(),
+        None => lane_el.into_any_element(),
+    }
+}
+
+/// The two arrows a branch needs, as `(ahead, behind)` labels. A count of zero
+/// has no label, and a branch with no upstream has no labels at all — `↑0 ↓0`
+/// is a row of arrows that says nothing (`DESIGN.md` §Status Row).
+pub(crate) fn divergence_labels(
+    ahead_behind: Option<(usize, usize)>,
+) -> (Option<String>, Option<String>) {
+    let Some((ahead, behind)) = ahead_behind else {
+        return (None, None);
+    };
+    (
+        (ahead > 0).then(|| format!("↑{ahead}")),
+        (behind > 0).then(|| format!("↓{behind}")),
+    )
+}
+
+/// Whether a settled turn should leave a review mark on its row (issue #83).
+///
+/// `in_front` means the transcript is genuinely in front of the user right now:
+/// the window is frontmost and no full-page surface covers the chat area. A
+/// turn the user watched is not news — the transcript repainted in front of
+/// them. Everything else leaves a mark: a background run, a parked session, or
+/// a settle in the open session while Orbit sits behind another app (selecting
+/// a row in a background window is not "reading" it).
+pub(crate) fn should_mark_review(in_front: bool, settled: &Path, open: Option<&Path>) -> bool {
+    !(in_front && open == Some(settled))
+}
+
+/// Spend the open session's review mark once that session is really on screen.
+/// Returns whether anything changed, so the caller only repaints on a real
+/// change. One rule for every path that can bring a session into view — a
+/// click, a shortcut, the window coming forward, a page closing — keeps them
+/// from drifting apart.
+pub(crate) fn clear_review_mark(
+    marks: &mut HashMap<PathBuf, ReviewMark>,
+    open: Option<&Path>,
+    in_front: bool,
+) -> bool {
+    if !in_front {
+        return false;
+    }
+    open.is_some_and(|path| marks.remove(path).is_some())
+}
+
+/// One fact on a session row's metadata line: quiet, small, and never wider
+/// than it needs to be.
+fn meta_text(text: String, color: Hsla, theme: &Theme) -> impl IntoElement + use<> {
+    div()
+        .flex_none()
+        .text_size(TextSize::XSmall.px(theme))
+        .text_color(color)
+        .child(text)
+}
+
+/// A project's glyph, in precedence order: the user's picked mark, then an
+/// automatically detected logo, then `status_icon` (the workspace status resolved
+/// in `view.rs`: open / running / archived / plain folder), then the plain
+/// folder. A custom mark is an explicit choice, so neither a detected logo nor a
+/// status glyph overrides it.
+///
+/// `status_icon` is resolved per frame rather than here: a workspace's status is
+/// a whole-column fact (it is "running" when *any* of its sessions is), and a
+/// row must not re-derive it. `None` means the map had no entry, not "no
+/// status".
+fn project_icon(
+    mark: &WorkspaceMark,
+    logo: Option<&Arc<Image>>,
+    status_icon: Option<&SharedString>,
+    size: IconSize,
+    theme: &Theme,
+) -> AnyElement {
+    // Untinted projects inherit the theme accent; an explicitly neutral mark
+    // stays neutral. The wash belongs to the mark, not the entire session.
+    let tint = match mark.tint.as_deref() {
+        None => theme.accent_text,
+        key => workspace_mark::tint_color(theme, key),
+    };
+    let frame = div()
+        .flex_none()
+        .size(size.px(theme) + DynamicSpacing::Base08.px(theme))
+        .rounded(Radius::Small.px(theme))
+        .bg(tint.opacity(0.10))
+        .flex()
+        .items_center()
+        .justify_center();
+    let has_custom_icon = mark
+        .icon
+        .as_deref()
+        .is_some_and(|icon| workspace_mark::PROJECT_ICONS.contains(&icon));
+    if !has_custom_icon {
+        if let Some(logo) = logo {
+            return frame
+                .child(
+                    img(ImageSource::Image(logo.clone()))
+                        .flex_none()
+                        .size(size.px(theme))
+                        .rounded(Radius::XSmall.px(theme))
+                        .object_fit(ObjectFit::Contain),
+                )
+                .into_any_element();
+        }
+    }
+    let path = status_icon
+        .cloned()
+        .unwrap_or_else(|| workspace_mark::icon_path(mark.icon.as_deref()));
+    frame
+        .child(icon_dyn(path, size.px(theme), tint))
+        .into_any_element()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -494,8 +763,19 @@ pub(crate) fn render_side_row(
     // Per-workspace sidebar marks (icon + tint), keyed by path.
     marks: &Rc<HashMap<PathBuf, WorkspaceMark>>,
     // Resolved per-workspace glyphs: the user's mark icon, or the folder
-    // status (current / running / archived-only / idle).
+    // status (current / running / archived-only / idle). Computed once per
+    // frame alongside the list so a header row never re-derives it.
     workspace_icons: &Rc<HashMap<PathBuf, SharedString>>,
+    logos: &Rc<HashMap<PathBuf, Arc<Image>>>,
+    // Branch per workspace, for the metadata line. Absent for a project that
+    // is not a git repository (or sits on a detached HEAD).
+    branches: &Rc<HashMap<PathBuf, BranchLine>>,
+    // Sessions whose last turn settled while the user was looking elsewhere.
+    // An unread glyph (plus its "Needs review" label) remains until the
+    // session is shown in a foreground window (issue #83); the execution state
+    // remains after that mark is spent.
+    review_marks: &Rc<HashMap<PathBuf, ReviewMark>>,
+    session_statuses: &Rc<HashMap<PathBuf, SessionStatus>>,
     session_menu: Option<&SessionMenu>,
     workspace_menu: Option<&WorkspaceMenu>,
     // Whether this row is the keyboard cursor (see `OrbitApp::sidebar_cursor`).
@@ -518,10 +798,8 @@ pub(crate) fn render_side_row(
             let this_menu = this.clone();
             let menu = workspace_menu.filter(|m| m.label == label);
             let mark = marks.get(cwd).cloned().unwrap_or_default();
-            let workspace_icon = workspace_icons
-                .get(cwd)
-                .cloned()
-                .unwrap_or_else(|| workspace_mark::icon_path(mark.icon.as_deref()));
+            let workspace_logo = logos.get(cwd);
+            let workspace_icon = workspace_icons.get(cwd);
             // Outer shell: inter-group spacing only — horizontal inset comes
             // from the list's `px_2`, so the hover pill lines up with the
             // session rows' (inside the same container) and the chevron lands
@@ -531,9 +809,8 @@ pub(crate) fn render_side_row(
             // session count pinned to the very end, and the row actions (a `…`
             // menu, then the new-session `+`) fading in to the count's left on
             // hover (all flex_none, so nothing shifts when they appear). The
-            // name takes the session title's size — only bolder — so the group
-            // reads as their parent, not as another section label; the mark
-            // and chevron step up with it.
+            // name and tinted mark distinguish the group from its sessions;
+            // the count stays visible while the contextual actions reveal.
             div()
                 .w_full()
                 .pt(DynamicSpacing::Base12.px(&theme))
@@ -542,7 +819,7 @@ pub(crate) fn render_side_row(
                 .child(
                     div()
                         .w_full()
-                        .h(px(26.))
+                        .min_h(ButtonSize::Default.height(&theme))
                         .pl(DynamicSpacing::Base06.px(&theme))
                         .pr(DynamicSpacing::Base08.px(&theme))
                         .rounded(list_item::RADIUS.px(&theme))
@@ -550,7 +827,11 @@ pub(crate) fn render_side_row(
                         .items_center()
                         .gap(DynamicSpacing::Base06.px(&theme))
                         .cursor_pointer()
-                        .when(cursor, |s| s.bg(theme.surface_hover))
+                        .border_1()
+                        .border_color(theme.border.opacity(0.))
+                        .when(cursor, |s| {
+                            s.bg(theme.surface_hover).border_color(theme.focus_ring)
+                        })
                         .hover(|s| s.bg(theme.surface_hover))
                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                             let label = label_for_click.clone();
@@ -593,10 +874,12 @@ pub(crate) fn render_side_row(
                             IconSize::XSmall.px(&theme),
                             theme.text_muted,
                         ))
-                        .child(icon_dyn(
+                        .child(project_icon(
+                            &mark,
+                            workspace_logo,
                             workspace_icon,
-                            IconSize::Medium.px(&theme),
-                            workspace_mark::tint_color(&theme, mark.tint.as_deref()),
+                            IconSize::Medium,
+                            &theme,
                         ))
                         .child(
                             div()
@@ -605,11 +888,8 @@ pub(crate) fn render_side_row(
                                 .truncate()
                                 .text_size(TextSize::Default.px(&theme))
                                 .font_weight(FontWeight::MEDIUM)
-                                // The project's own hue when it has one, else
-                                // the primary ink — never the secondary a
-                                // session title wears, so a group header and
-                                // the rows under it stay distinguishable
-                                // (issue #78).
+                                // Keep the user's project hue on the name as
+                                // well as its mark (issue #78).
                                 .text_color(workspace_mark::label_ink(&theme, mark.tint.as_deref()))
                                 .child(label.clone()),
                         )
@@ -656,16 +936,22 @@ pub(crate) fn render_side_row(
                             )),
                         )
                         // Session count, pinned to the header's right edge.
-                        // Small, muted metadata — legible beside the parent row
-                        // without competing with the name. A project with
+                        // A small tonal counter, subordinate to the name. A project with
                         // nothing in it says so by having no rows under it;
                         // a `0` here would only be a number doing no work.
                         .when(*count > 0, |header| {
                             header.child(
                                 div()
                                     .flex_none()
-                                    .text_size(TextSize::Small.px(&theme))
-                                    .text_color(theme.text_muted)
+                                    .min_w(ButtonSize::Compact.height(&theme))
+                                    .px(DynamicSpacing::Base04.px(&theme))
+                                    .py(DynamicSpacing::Base02.px(&theme))
+                                    .rounded(Radius::Small.px(&theme))
+                                    .bg(theme.accent.opacity(0.08))
+                                    .text_center()
+                                    .text_size(TextSize::XSmall.px(&theme))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text_secondary)
                                     .child(format!("{count}")),
                             )
                         }),
@@ -805,6 +1091,9 @@ pub(crate) fn render_side_row(
             // The open session runs live; parked (background) sessions run
             // in their own pi processes — both get the loader.
             let running = (active && agent_running) || running_paths.contains(&session.path);
+            // Files from other clients or earlier launches have no observed
+            // execution state. Do not label them idle or completed by guessing.
+            let status = session_statuses.get(&session.path).copied();
             let pinned = pinned_paths.contains(&session.path);
             let archived = archived_paths.contains(&session.path);
             let this = this.clone();
@@ -814,10 +1103,8 @@ pub(crate) fn render_side_row(
             // Sessions with a live pi process (running or warm) must not be
             // deleted — the process would recreate the file mid-run.
             let deletable = !active && !running && !live_paths.contains(&session.path);
-            // Running sessions lead with a small spinner and a shimmering
-            // title (shadcn's Marker + `shimmer`); row actions stay available
-            // on hover.
-            let title = session_title(*ix, session.title.clone().into(), theme, active, running);
+            // Keep titles still; the status icon communicates background activity.
+            let title = session_title(*ix, session.title.clone().into(), theme, active, false);
             // Indented under its workspace group so the list reads as a
             // tree. The open session takes the `selection` fill with `selection_fg`
             // ink — the same selected-destination grammar as the nav rows;
@@ -831,13 +1118,13 @@ pub(crate) fn render_side_row(
             let mut row = div()
                 .id(ElementId::NamedInteger("side-session".into(), *ix as u64))
                 .w_full()
-                .py(DynamicSpacing::Base01.px(&theme))
+                .py(DynamicSpacing::Base02.px(&theme))
                 .cursor_pointer()
                 .when_some(shortcut_hint, |row, hint| row.tip(hint))
                 // Right-click anywhere on the row opens its actions menu at
-                // the pointer, context-menu style (context menus are the
-                // secondary-action surface; the `…` button stays for
-                // discoverability).
+                // the pointer. That context menu is the row's only action
+                // surface — there is no hover-revealed '…' to compete with
+                // the title for the line.
                 .on_mouse_down(MouseButton::Right, {
                     let session = session.clone();
                     let this = this.clone();
@@ -868,50 +1155,127 @@ pub(crate) fn render_side_row(
                         app.input.read(cx).focus(window);
                     });
                 });
+            // Project and status sit above the task; the original prompt and
+            // branch remain available below it.
             let mut card = div()
                 .group("srow")
                 .relative()
                 .w_full()
-                .pl(px(22.))
-                .pr(DynamicSpacing::Base08.px(&theme))
-                // 8px above and below the title line. The previous 4px sat
-                // inside the line box and read as about 1px around the glyphs;
-                // this matches the taller conversation rows in Cursor.
+                .px(DynamicSpacing::Base08.px(&theme))
                 .py(DynamicSpacing::Base08.px(&theme))
                 .rounded(list_item::RADIUS.px(&theme))
+                .border_1()
+                .border_color(theme.border.opacity(0.))
                 .flex()
                 .items_center()
                 .gap(DynamicSpacing::Base06.px(&theme))
                 .when(active, |card| {
                     card.bg(theme.surface_selected)
+                        .border_color(theme.accent.opacity(0.40))
                         .text_color(theme.selection_fg)
                 })
-                .when(cursor && !active, |card| card.bg(theme.surface_hover))
+                // Focus remains visible even on the selected session. Reserve
+                // the border in every state so hover/focus never shifts text.
+                .when(cursor, |card| {
+                    card.border_color(theme.focus_ring)
+                        .when(!active, |card| card.bg(theme.surface_hover))
+                })
                 .when(!active && !cursor, |card| {
                     card.hover(|s| s.bg(theme.surface_hover))
                 });
-            // Text column: title + actions, then the first-message preview
-            // with the age. The title line is the row's anchor and is always
-            // there; the preview is an expansion on it, so a row whose preview
-            // is just the title continued drops to one line rather than
-            // spending a second line re-reading the same sentence. Rows are
-            // therefore one or two lines tall, and the age rides whichever
-            // line is last.
             let age = sessions::relative_time(session.modified);
             // Summary is a whole-list choice, not a per-row guess, so every
             // row grows by the same line when it is on.
             let show_summary = row_show.summary;
             let show_updated = row_show.updated;
-            let second_line = show_summary || show_workspace;
+            // When enabled, line 2 is the prompt itself: the title is capped
+            // and the row is narrower still, so a title that happens to be the
+            // same sentence is cut, not redundant — the message line is the
+            // only place the ask is readable.
+            let message = session.first_message.trim().to_string();
             // Flat list has no workspace headers — name the workspace on the
-            // row instead. The glyph is the row's own status (open on the
-            // active session, sync while running, archive when archived),
-            // falling back to the workspace mark / plain folder.
+            // row instead, with the workspace-status glyph the headers use
+            // (open / running / archived). This row's own run is the status
+            // lane's job, one column to the right.
             let workspace_label = sessions::workspace_label(&session.cwd);
             let mark = marks.get(&session.cwd).cloned().unwrap_or_default();
-            let workspace_icon = workspace_mark::resolved_icon_path(
-                &mark,
-                session_icon_status(active, running, archived),
+            let workspace_logo = logos.get(&session.cwd);
+            let workspace_icon = workspace_icons.get(&session.cwd);
+            let branch = branches.get(&session.cwd);
+            let providers = sessions::cached_session_providers(&session.path);
+            let review = review_marks
+                .get(&session.path)
+                .copied()
+                // A run in flight supersedes the mark: the lane's spinner is
+                // the current truth, and the settle that ends this run sets a
+                // fresh one.
+                .filter(|_| !running);
+            // Resolve the glyph and attention label from the same state.
+            let lane = status_lane(status, review);
+            let meta_ink = if active {
+                theme.text_secondary
+            } else {
+                theme.text_muted
+            };
+            // Keep the status or age visible even while the pointer is over the row.
+            let slot_words = if status == Some(SessionStatus::Disconnected) {
+                Some(SessionStatus::Disconnected.label())
+            } else {
+                status_lane_words(lane)
+            };
+            let slot_ink = if slot_words.is_some() {
+                status_lane_ink(lane, &theme)
+            } else {
+                meta_ink
+            };
+            let has_state = !matches!(lane, StatusLane::Idle | StatusLane::Unknown);
+            let row_slot = div()
+                .flex_none()
+                .max_w(px(110.))
+                .truncate()
+                .text_size(TextSize::XSmall.px(&theme))
+                .text_color(slot_ink)
+                .child(slot_words.unwrap_or_else(|| {
+                    if show_updated {
+                        age
+                    } else {
+                        String::new()
+                    }
+                }));
+            let mut status_details = Some(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(DynamicSpacing::Base06.px(&theme))
+                    .when(pinned, |line| {
+                        line.child(icon(
+                            "icons/pin.svg",
+                            IconSize::XSmall.px(&theme),
+                            theme.warning,
+                        ))
+                    })
+                    .when(archived, |line| {
+                        line.child(icon(
+                            "icons/archive.svg",
+                            IconSize::XSmall.px(&theme),
+                            meta_ink,
+                        ))
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(DynamicSpacing::Base02.px(&theme))
+                            .px(DynamicSpacing::Base04.px(&theme))
+                            .py(DynamicSpacing::Base01.px(&theme))
+                            .rounded(Radius::Small.px(&theme))
+                            .when(has_state, |badge| {
+                                badge.bg(status_lane_ink(lane, &theme).opacity(0.10))
+                            })
+                            .child(session_status_lane(*ix, lane, status, theme))
+                            .child(row_slot),
+                    ),
             );
             card = card.child(
                 div()
@@ -920,200 +1284,213 @@ pub(crate) fn render_side_row(
                     .flex()
                     .flex_col()
                     .justify_center()
-                    .gap(DynamicSpacing::Base02.px(&theme))
-                    // Line 1 — title with the row actions pinned to its
-                    // right: a small running spinner leads, the hover-revealed
-                    // `…` menu trails. Wrapped in a flex row so the
-                    // `flex_1 min_w_0` title takes the full column width and
-                    // paints the name — instead of collapsing to "…" as a bare
-                    // flex-column child.
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap(DynamicSpacing::Base06.px(&theme))
-                            .when(running, |line| {
-                                line.child(crate::app::running_spinner(
-                                    ElementId::NamedInteger("side-spin".into(), *ix as u64),
-                                    IconSize::XSmall.px(&theme),
-                                    theme.accent_text,
-                                    theme,
-                                ))
-                            })
-                            .when(pinned, |line| {
-                                line.child(icon(
-                                    "icons/pin.svg",
-                                    IconSize::Medium.px(&theme),
-                                    theme.text_muted,
-                                ))
-                            })
-                            .when(archived, |line| {
-                                line.child(icon(
-                                    "icons/archive.svg",
-                                    IconSize::Medium.px(&theme),
-                                    theme.text_muted,
-                                ))
-                            })
-                            .child(title)
-                            .when(active && show_workspace, |line| {
-                                line.child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(theme.accent_text)
-                                        .child(tr!("sidebar.current")),
-                                )
-                            })
-                            .child(session_menu_button(
-                                *ix,
-                                menu,
-                                session.path.clone(),
-                                session.title.clone(),
-                                deletable,
-                                this_for_menu,
-                                theme,
-                            ))
-                            .when(!second_line && show_updated, |line| {
-                                line.child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(theme.text_muted)
-                                        .child(age.clone()),
-                                )
-                            }),
-                    )
-                    // Line 2 — the workspace name (flat list only), the
-                    // first-message summary when that field is on, and the
-                    // age at the very end when Updated is on.
-                    .when(second_line, |col| {
+                    .gap(DynamicSpacing::Base04.px(&theme))
+                    // Only the flat list needs a project header on each row.
+                    .when(show_workspace, |col| {
                         col.child(
                             div()
                                 .w_full()
                                 .flex()
                                 .items_center()
                                 .gap(DynamicSpacing::Base06.px(&theme))
-                                .when(show_workspace, |line| {
-                                    line.child(icon_dyn(
-                                        workspace_icon,
-                                        IconSize::XSmall.px(&theme),
-                                        workspace_mark::tint_color(&theme, mark.tint.as_deref()),
-                                    ))
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .max_w(px(120.))
-                                            .truncate()
-                                            .text_size(TextSize::XSmall.px(&theme))
-                                            .text_color(theme.text_secondary)
-                                            .child(workspace_label),
-                                    )
-                                })
-                                .when(show_summary, |line| {
-                                    line.child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(TextSize::Small.px(&theme))
-                                            .line_height(BufferLineHeight::Standard.relative())
-                                            .text_color(if active {
-                                                theme.text_secondary
-                                            } else {
-                                                theme.text_muted
-                                            })
-                                            .child(session.first_message.clone()),
-                                    )
-                                })
-                                .when(show_updated, |line| {
-                                    line.child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(TextSize::XSmall.px(&theme))
-                                            .text_color(if active {
-                                                theme.text_secondary
-                                            } else {
-                                                theme.text_muted
-                                            })
-                                            .child(age),
-                                    )
-                                }),
+                                .child(project_icon(
+                                    &mark,
+                                    workspace_logo,
+                                    workspace_icon,
+                                    IconSize::Small,
+                                    &theme,
+                                ))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(TextSize::Small.px(&theme))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(workspace_mark::label_ink(
+                                            &theme,
+                                            mark.tint.as_deref(),
+                                        ))
+                                        .child(workspace_label),
+                                )
+                                .children(status_details.take()),
                         )
-                    }),
+                    })
+                    // Let the task title use the full row width.
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(DynamicSpacing::Base06.px(&theme))
+                            .child(title)
+                            .children(status_details)
+                            .when(active && show_workspace, |line| {
+                                line.child(
+                                    div()
+                                        .flex_none()
+                                        .px(DynamicSpacing::Base04.px(&theme))
+                                        .py(DynamicSpacing::Base01.px(&theme))
+                                        .rounded(Radius::Small.px(&theme))
+                                        .bg(theme.accent.opacity(0.10))
+                                        .text_size(TextSize::XSmall.px(&theme))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.accent_text)
+                                        .child(tr!("sidebar.current")),
+                                )
+                            }),
+                    )
+                    // Line 2 — what was actually asked, one line. An empty
+                    // message (a session with nothing sent yet) drops the line.
+                    // The text sits in a flex row with `flex_1 min_w_0` like the
+                    // title: `truncate()` on a bare block collapses the line to
+                    // its ellipsis instead of filling the column.
+                    .when(show_summary && !message.is_empty(), |col| {
+                        col.child(
+                            div().w_full().flex().items_center().child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(TextSize::Small.px(&theme))
+                                    .line_height(BufferLineHeight::Standard.relative())
+                                    .text_color(theme.text_secondary)
+                                    .tip(message.clone())
+                                    .child(message),
+                            ),
+                        )
+                    })
+                    // Branch and divergence stay together on the metadata line.
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(DynamicSpacing::Base06.px(&theme))
+                            .when_some(branch, |line, branch| {
+                                let (ahead, behind) = divergence_labels(branch.ahead_behind);
+                                line.child(icon(
+                                    "icons/branch.svg",
+                                    IconSize::XSmall.px(&theme),
+                                    theme.syn_function,
+                                ))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(TextSize::XSmall.px(&theme))
+                                        .text_color(meta_ink)
+                                        .tip(branch.name.clone())
+                                        .child(branch.name.clone()),
+                                )
+                                // Colour is never the only signal: the arrow
+                                // says which way the counts point, and both
+                                // read as text before they read as hue.
+                                .when_some(ahead, |line, ahead| {
+                                    line.child(meta_text(ahead, theme.success, &theme))
+                                })
+                                .when_some(
+                                    behind,
+                                    |line, behind| {
+                                        line.child(meta_text(behind, theme.warning, &theme))
+                                    },
+                                )
+                            })
+                            .when(branch.is_none(), |line| line.child(div().flex_1()))
+                            .when(!providers.is_empty(), |line| {
+                                let remaining = providers.len().saturating_sub(3);
+                                let all_providers = providers
+                                    .iter()
+                                    .map(|entry| match &entry.model {
+                                        Some(model) => format!("{} · {model}", entry.provider),
+                                        None => entry.provider.clone(),
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                line.child(
+                                    div()
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .children(providers.iter().take(3).enumerate().map(
+                                            |(index, entry)| {
+                                                let tint = provider_mark_color(
+                                                    &entry.provider,
+                                                    &theme,
+                                                    meta_ink,
+                                                );
+                                                let label = match &entry.model {
+                                                    Some(model) => {
+                                                        format!("{} · {model}", entry.provider)
+                                                    }
+                                                    None => entry.provider.clone(),
+                                                };
+                                                let visible_count = providers.len().min(3);
+                                                // Each badge owns its exposed portion as a
+                                                // hover target; the last owns its full width.
+                                                div()
+                                                    .relative()
+                                                    .flex_none()
+                                                    .w(if index + 1 == visible_count {
+                                                        IconSize::Medium.square(&theme)
+                                                    } else {
+                                                        IconSize::Small.px(&theme)
+                                                    })
+                                                    .h(IconSize::Medium.square(&theme))
+                                                    .tip(label)
+                                                    .child(
+                                                        div()
+                                                            .absolute()
+                                                            .left_0()
+                                                            .top_0()
+                                                            .size(IconSize::Medium.square(&theme))
+                                                            .rounded_full()
+                                                            .bg(theme.surface)
+                                                            .border_1()
+                                                            .border_color(tint.opacity(0.35))
+                                                            .flex()
+                                                            .items_center()
+                                                            .justify_center()
+                                                            .child(icon_dyn(
+                                                                provider_icon(&entry.provider),
+                                                                IconSize::Small.px(&theme),
+                                                                tint,
+                                                            )),
+                                                    )
+                                            },
+                                        ))
+                                        .when(remaining > 0, |icons| {
+                                            icons.child(
+                                                div()
+                                                    .tip(all_providers)
+                                                    .text_size(TextSize::XSmall.px(&theme))
+                                                    .text_color(meta_ink)
+                                                    .child(format!("+{remaining}")),
+                                            )
+                                        }),
+                                )
+                            }),
+                    ),
             );
+            // Row actions live on the right-click context menu — the same
+            // gesture the rest of the app uses for row actions — so there is
+            // no hover-revealed '…' and the title owns the whole line. The
+            // popup still needs a stable element to hang off: a zero-size
+            // anchor at the card's top-left, which is what the keyboard and
+            // palette paths (no pointer origin) anchor to.
+            card = card.children(menu.map(|menu| {
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size(px(0.))
+                    .child(session_menu_popup(menu, this_for_menu.clone(), theme))
+            }));
             row = row.child(card);
             row.into_any_element()
         }
     }
-}
-
-/// The hover-revealed '…' button on a quiet session row. Clicking it opens
-/// the row's actions popup; propagation stops so the row's open handler
-/// doesn't also fire.
-pub(crate) fn session_menu_button(
-    ix: usize,
-    menu: Option<&SessionMenu>,
-    path: PathBuf,
-    title: String,
-    deletable: bool,
-    this: Entity<OrbitApp>,
-    theme: Theme,
-) -> impl IntoElement + use<> {
-    let menu_open = menu.is_some();
-    let this_for_popup = this.clone();
-    icon_button_frame(
-        div().id(ElementId::NamedInteger("side-more".into(), ix as u64)),
-        &theme,
-        ButtonSize::Compact,
-    )
-    .group(BUTTON_GROUP)
-    .relative()
-    .tip(tr!("sidebar.more_actions"))
-    .cursor_pointer()
-    // Hidden until the row (or the button itself) is hovered, or while
-    // this row's menu is open. Icon-only, no background — a filled hover
-    // square reads as a patch covering the row's right edge.
-    .opacity(if menu_open { 1.0 } else { 0.0 })
-    .group_hover("srow", |s| s.opacity(1.))
-    .active(|s| s.opacity(PRESS_DIM))
-    .on_mouse_up(MouseButton::Left, move |_, window, cx| {
-        // Keep the click from also opening the session via the row.
-        cx.stop_propagation();
-        let (path, title, deletable) = (path.clone(), title.clone(), deletable);
-        this.update(cx, |app, cx| {
-            app.toggle_session_menu(
-                SessionMenu {
-                    path,
-                    title,
-                    deletable,
-                    confirm_delete: false,
-                    at: None,
-                },
-                window,
-                cx,
-            );
-        });
-    })
-    .child(icon(
-        "icons/more.svg",
-        ButtonSize::Compact.icon_size().px(&theme),
-        theme.text_muted,
-    ))
-    // The dropdown hangs off a zero-size anchor pinned to the button's
-    // top-left corner. The button centers its icon (`items_center` +
-    // `justify_center`), and Taffy lays absolutely-positioned children out
-    // with the container's alignment — without the pin, the popup's
-    // static position is pulled toward the button's center and it opens
-    // up-left of the trigger instead of just below it.
-    .children(menu.map(|menu| {
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size(px(0.))
-            .child(session_menu_popup(menu, this_for_popup.clone(), theme))
-    }))
 }
 
 /// A session row's title. Quiet rows render as one truncated line; a running
@@ -1126,15 +1503,11 @@ fn session_title(
     active: bool,
     running: bool,
 ) -> AnyElement {
-    let color = if active {
-        theme.text_primary
-    } else {
-        theme.text_secondary
-    };
+    let color = theme.text_primary;
     let weight = if active {
-        FontWeight::MEDIUM
+        FontWeight::SEMIBOLD
     } else {
-        FontWeight::NORMAL
+        FontWeight::MEDIUM
     };
     let size = TextSize::Default.px(&theme);
     let line_height = BufferLineHeight::Standard.relative();
@@ -1147,6 +1520,7 @@ fn session_title(
             .line_height(line_height)
             .font_weight(weight)
             .text_color(color)
+            .tip(title.clone())
             .child(title)
             .into_any_element();
     }
@@ -1270,6 +1644,33 @@ pub(crate) fn session_menu_popup(
             .flex_col()
             .py(picker::list_padding_y(&theme))
             .gap(DynamicSpacing::Base01.px(&theme))
+            .child(
+                picker_entry(div().id("menu-rename"), &theme)
+                    .h(picker::entry_height(&theme))
+                    .flex_none()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme.overlay))
+                    .text_color(theme.text_secondary)
+                    .on_mouse_down(MouseButton::Left, {
+                        let this = this.clone();
+                        move |_, window, cx| {
+                            cx.stop_propagation();
+                            this.update(cx, |app, cx| app.on_menu_rename_session(window, cx));
+                        }
+                    })
+                    .child(icon(
+                        "icons/pencil.svg",
+                        context_menu::ICON.px(&theme),
+                        theme.text_muted,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(tr!("explorer.rename")),
+                    ),
+            )
             .child(menu_item(
                 "menu-pin",
                 "icons/pin.svg",
@@ -1365,12 +1766,11 @@ pub(crate) fn session_menu_popup(
 
     // Float the popup: `anchored` takes it out of the layout (no other row
     // moves). A right-clicked menu lands at the pointer in window
-    // coordinates; the '…' button's menu pins its top-left corner just
-    // below the trigger (a `ButtonSize::Compact` button, so its height plus
-    // `popover::MENU_OFFSET` drops the top edge Zed's menu gap under it,
-    // left-aligned to the trigger — the standard app dropdown position). `deferred` paints it above the rest of the list — same
-    // convention as the composer chip pickers. `snap_to_window` keeps it
-    // inside the window near the edges.
+    // coordinates; a menu opened from the keyboard or the command palette
+    // (no pointer origin) drops just under the row's title line, left-aligned
+    // to its card — the standard app dropdown position. `deferred` paints it
+    // above the rest of the list — same convention as the composer chip
+    // pickers. `snap_to_window` keeps it inside the window near the edges.
     let anchor = if let Some(at) = menu.at {
         anchored().anchor(Corner::TopLeft).position(at)
     } else {
@@ -1379,7 +1779,7 @@ pub(crate) fn session_menu_popup(
             .anchor(Corner::TopLeft)
             .offset(point(
                 px(0.),
-                ButtonSize::Compact.height(&theme) + popover::MENU_OFFSET,
+                TextSize::Default.px(&theme) + DynamicSpacing::Base06.px(&theme),
             ))
     };
     anchor
@@ -2093,7 +2493,7 @@ pub(crate) fn sidebar_options_popup(
                         true,
                         move |app, cx| app.set_sidebar_archived_filter(option, cx),
                     )
-                })),
+                }))
         );
 
     anchored()
@@ -2207,37 +2607,10 @@ pub(crate) fn empty_sessions_state(theme: Theme) -> impl IntoElement + use<> {
 
 // ── controller ────────────────────────────────────────────────────
 impl OrbitApp {
-    /// Open (or toggle closed) the row-actions popup for a session row.
-    pub(super) fn toggle_session_menu(
-        &mut self,
-        menu: SessionMenu,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Same-click dismissal must not re-open (see toggle_session_picker).
-        const GESTURE: Duration = Duration::from_millis(200);
-        if let Some(dismissed) = self.menu_dismissed_at.take() {
-            if dismissed.elapsed() < GESTURE {
-                return;
-            }
-        }
-        if self.session_menu.as_ref() == Some(&menu) {
-            self.session_menu = None;
-            cx.notify();
-            return;
-        }
-        self.dismiss_transient_popups(window, cx);
-        self.workspace_menu = None;
-        self.session_menu = Some(menu);
-        cx.notify();
-    }
-
     /// Open the session row menu from a right-click, floating it at the
-    /// pointer ([`SessionMenu::at`]). Unlike the `…` button's toggle this
-    /// always (re)positions the menu — a right-click while another row's menu
-    /// is up moves it to the new row instead of dismissing — and skips the
-    /// gesture guard, which only exists for the left-click dismiss/reopen
-    /// race.
+    /// pointer ([`SessionMenu::at`]). Always (re)positions the menu — a
+    /// right-click while another row's menu is up moves it to the new row
+    /// instead of dismissing.
     pub(super) fn open_session_menu_at(
         &mut self,
         menu: SessionMenu,
@@ -2273,6 +2646,34 @@ impl OrbitApp {
             self.close_model_selector(window, cx);
         }
         self.close_sidebar_options();
+    }
+
+    pub(super) fn on_menu_rename_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.session_menu.take() else {
+            return;
+        };
+        if self.current_session_path.as_ref() == Some(&menu.path) {
+            if self.pending_session_rename.is_none() {
+                self.begin_session_rename(window, cx);
+            }
+            cx.notify();
+            return;
+        }
+        let Some(session) = self
+            .sessions
+            .iter()
+            .find(|session| session.path == menu.path)
+            .cloned()
+        else {
+            cx.notify();
+            return;
+        };
+        self.switch_to_session(session, true, cx);
+        // A cold switch must finish before pi can safely accept a rename.
+        if self.runtime_is_live() {
+            self.pending_session_rename = Some(menu.path);
+        }
+        cx.notify();
     }
 
     pub(super) fn on_menu_copy_path(&mut self, cx: &mut Context<Self>) {
@@ -2353,6 +2754,9 @@ impl OrbitApp {
                 // A deleted session must not leave a stale pin behind.
                 crate::pins::remove(&menu.path);
                 crate::archive::remove(&menu.path);
+                // Nor a review mark for a row that can never come back.
+                self.awaiting_review.remove(&menu.path);
+                self.session_outcomes.remove(&menu.path);
             }
             self.sessions = sessions::load_sessions();
             self.prune_workflow_store();
@@ -2460,7 +2864,7 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Same-click dismissal must not re-open (see toggle_session_menu).
+        // Same-click dismissal must not re-open (see toggle_workspace_menu).
         const GESTURE: Duration = Duration::from_millis(200);
         if let Some(dismissed) = self.menu_dismissed_at.take() {
             if dismissed.elapsed() < GESTURE {
@@ -2554,6 +2958,9 @@ impl OrbitApp {
             .filter(|(_, parked)| parked.busy)
             .map(|(path, _)| path.clone())
             .collect();
+        // A marked session is unread news; collapsing a group must not hide it
+        // (issue #83). The flat list has no collapse, so it needs no set.
+        let reviewed: HashSet<PathBuf> = self.awaiting_review.keys().cloned().collect();
         match self.sidebar_group_by {
             SidebarGroupBy::OneList => build_flat_sidebar_rows(sessions, pinned),
             SidebarGroupBy::Workspace => build_sidebar_rows(
@@ -2568,6 +2975,7 @@ impl OrbitApp {
                 pinned,
                 &self.current_session_path,
                 &running,
+                &reviewed,
             ),
         }
     }
@@ -2873,10 +3281,240 @@ fn clamp_cursor(index: usize, count: usize) -> Option<usize> {
 mod tests {
     use super::*;
 
+    #[gpui::test]
+    fn row_rename_waits_for_the_target_session_state(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::theme::Theme::for_id(crate::theme::ThemeKey::ORBIT));
+            let app = cx.new(OrbitApp::new);
+            app.update(cx, |app, cx| {
+                let path = PathBuf::from("/tmp/rename-target.jsonl");
+                app.current_session_path = Some(path.clone());
+                app.pending_session_rename = Some(path);
+                let mut refresh = false;
+                app.on_response(
+                    "get_state",
+                    true,
+                    Some(&serde_json::json!({"sessionFile": "/tmp/other.jsonl"})),
+                    None,
+                    "test",
+                    &mut refresh,
+                    cx,
+                );
+                assert!(!app.session_rename_ready);
+                assert!(app.pending_session_rename.is_some());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn row_rename_opens_after_target_session_state_arrives(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::theme::Theme::for_id(crate::theme::ThemeKey::ORBIT));
+            let app = cx.new(OrbitApp::new);
+            app.update(cx, |app, cx| {
+                let path = PathBuf::from("/tmp/rename-target.jsonl");
+                app.current_session_path = Some(path.clone());
+                app.pending_session_rename = Some(path);
+                let mut refresh = false;
+                app.on_response(
+                    "get_state",
+                    true,
+                    Some(&serde_json::json!({"sessionFile": "/tmp/rename-target.jsonl"})),
+                    None,
+                    "test",
+                    &mut refresh,
+                    cx,
+                );
+                assert!(app.session_rename_ready);
+                assert!(app.pending_session_rename.is_none());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn failed_session_switch_cancels_pending_row_rename(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(crate::theme::Theme::for_id(crate::theme::ThemeKey::ORBIT));
+            let app = cx.new(OrbitApp::new);
+            app.update(cx, |app, cx| {
+                app.pending_session_rename = Some(PathBuf::from("/tmp/rename-target.jsonl"));
+                let mut refresh = false;
+                app.on_response(
+                    "switch_session",
+                    false,
+                    None,
+                    Some("failed"),
+                    "test",
+                    &mut refresh,
+                    cx,
+                );
+                assert!(app.pending_session_rename.is_none());
+                assert!(!app.session_rename_ready);
+            });
+        });
+    }
+
     #[test]
     fn cursor_clamps_to_the_visible_rows() {
         assert_eq!(clamp_cursor(0, 0), None);
         assert_eq!(clamp_cursor(3, 2), Some(1));
         assert_eq!(clamp_cursor(1, 5), Some(1));
+    }
+
+    /// A branch arrow appears only for a count that exists: `↑0 ↓0` is a row of
+    /// arrows that says nothing.
+    #[test]
+    fn divergence_arrows_appear_only_for_a_non_zero_count() {
+        assert_eq!(divergence_labels(None), (None, None));
+        assert_eq!(divergence_labels(Some((0, 0))), (None, None));
+        assert_eq!(
+            divergence_labels(Some((2, 0))),
+            (Some("↑2".to_string()), None)
+        );
+        assert_eq!(
+            divergence_labels(Some((0, 1))),
+            (None, Some("↓1".to_string()))
+        );
+        assert_eq!(
+            divergence_labels(Some((3, 4))),
+            (Some("↑3".to_string()), Some("↓4".to_string()))
+        );
+    }
+
+    /// The lane is the sidebar's whole answer to "what is this row doing", so
+    /// its mapping has to be exact: a live block outranks a stale unread mark,
+    /// and a read result recedes instead of disappearing.
+    #[test]
+    fn status_lane_orders_a_block_over_an_unread_mark() {
+        use StatusLane::*;
+        assert_eq!(status_lane(Some(SessionStatus::Running), None), Progress);
+        assert_eq!(status_lane(Some(SessionStatus::Retrying), None), Progress);
+        assert_eq!(status_lane(Some(SessionStatus::Compacting), None), Progress);
+        assert_eq!(
+            status_lane(Some(SessionStatus::WaitingApproval), None),
+            Blocked(BlockReason::Approval)
+        );
+        assert_eq!(
+            status_lane(Some(SessionStatus::WaitingInput), None),
+            Blocked(BlockReason::Input)
+        );
+        // A block is happening now; the unread mark describes a run that is
+        // already over, so it cannot be allowed to win.
+        assert_eq!(
+            status_lane(Some(SessionStatus::WaitingApproval), Some(ReviewMark::Done)),
+            Blocked(BlockReason::Approval)
+        );
+        assert_eq!(status_lane(Some(SessionStatus::Failed), None), Failed);
+        assert_eq!(status_lane(Some(SessionStatus::Disconnected), None), Failed);
+        assert_eq!(status_lane(Some(SessionStatus::Stopped), None), Stopped);
+        assert_eq!(status_lane(Some(SessionStatus::Completed), None), Done);
+        assert_eq!(
+            status_lane(Some(SessionStatus::Completed), Some(ReviewMark::Done)),
+            UnreadDone
+        );
+        // No process was ever observed (another client, an earlier launch): the
+        // read mark is then all the row knows.
+        assert_eq!(status_lane(None, Some(ReviewMark::Done)), UnreadDone);
+        assert_eq!(status_lane(None, Some(ReviewMark::Failed)), UnreadFailed);
+        assert_eq!(
+            status_lane(Some(SessionStatus::Failed), Some(ReviewMark::Failed)),
+            UnreadFailed
+        );
+        assert_eq!(status_lane(Some(SessionStatus::Idle), None), Idle);
+        assert_eq!(status_lane(None, None), Unknown);
+    }
+
+    /// Attention states get words; quiet states leave room for the age.
+    #[test]
+    fn attention_states_get_words() {
+        assert!(status_lane_words(StatusLane::Blocked(BlockReason::Approval)).is_some());
+        assert!(status_lane_words(StatusLane::Blocked(BlockReason::Input)).is_some());
+        assert!(status_lane_words(StatusLane::Failed).is_some());
+        assert!(status_lane_words(StatusLane::UnreadDone).is_some());
+        assert!(status_lane_words(StatusLane::UnreadFailed).is_some());
+        for quiet in [
+            StatusLane::Progress,
+            StatusLane::Done,
+            StatusLane::Stopped,
+            StatusLane::Idle,
+            StatusLane::Unknown,
+        ] {
+            assert_eq!(status_lane_words(quiet), None);
+        }
+    }
+
+    #[test]
+    fn review_mark_changes_icon_and_tooltip_when_result_is_opened() {
+        let status = Some(SessionStatus::Completed);
+        let unread = status_lane(status, Some(ReviewMark::Done));
+        let viewed = status_lane(status, None);
+        assert_eq!(unread, StatusLane::UnreadDone);
+        assert_eq!(viewed, StatusLane::Done);
+        assert_ne!(status_lane_icon(unread), status_lane_icon(viewed));
+        assert_eq!(
+            status_lane_tip(unread, status),
+            Some(tr!("sidebar.review_finished"))
+        );
+        assert_eq!(
+            status_lane_tip(viewed, status),
+            Some(tr!("sidebar.status_viewed"))
+        );
+
+        let failed = status_lane(Some(SessionStatus::Failed), Some(ReviewMark::Failed));
+        assert_eq!(
+            status_lane_tip(failed, Some(SessionStatus::Failed)),
+            Some(tr!("sidebar.review_failed"))
+        );
+        assert_eq!(
+            status_lane_tip(StatusLane::Progress, Some(SessionStatus::Retrying)),
+            Some(SessionStatus::Retrying.label())
+        );
+        assert_eq!(
+            status_lane_tip(StatusLane::Failed, Some(SessionStatus::Disconnected)),
+            Some(SessionStatus::Disconnected.label())
+        );
+        assert_eq!(status_lane_tip(StatusLane::Unknown, None), None);
+    }
+
+    /// Every lane that has a state paints a glyph from the icon set, a lane
+    /// with nothing to say paints nothing, and the tooltip never invents a
+    /// state the row does not know.
+    #[test]
+    fn only_lanes_with_a_state_paint_a_glyph() {
+        for lane in [
+            StatusLane::Progress,
+            StatusLane::Blocked(BlockReason::Approval),
+            StatusLane::Blocked(BlockReason::Input),
+            StatusLane::UnreadDone,
+            StatusLane::UnreadFailed,
+            StatusLane::Done,
+            StatusLane::Failed,
+            StatusLane::Stopped,
+        ] {
+            let icon = status_lane_icon(lane).expect("a state needs a glyph");
+            assert!(icon.starts_with("icons/"), "{lane:?} → {icon}");
+        }
+        assert_eq!(status_lane_icon(StatusLane::Idle), None);
+        assert_eq!(status_lane_icon(StatusLane::Unknown), None);
+        for lane in [
+            StatusLane::Progress,
+            StatusLane::Blocked(BlockReason::Approval),
+            StatusLane::Blocked(BlockReason::Input),
+            StatusLane::UnreadDone,
+            StatusLane::UnreadFailed,
+            StatusLane::Done,
+            StatusLane::Failed,
+            StatusLane::Stopped,
+            StatusLane::Idle,
+            StatusLane::Unknown,
+        ] {
+            if status_lane_tip(lane, None).is_some() {
+                assert!(matches!(
+                    lane,
+                    StatusLane::UnreadDone | StatusLane::UnreadFailed | StatusLane::Done
+                ));
+            }
+        }
+        assert!(status_lane_tip(StatusLane::Progress, Some(SessionStatus::Running)).is_some());
     }
 }

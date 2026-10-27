@@ -122,13 +122,13 @@ impl OrbitApp {
         cx: &mut Context<Self>,
     ) {
         if self.is_running() {
-            // A blocking dialog belongs to the session being left; cancel it
-            // so the parked run can settle instead of waiting on a modal.
-            self.cancel_open_dialog(cx);
+            // Blocking native requests stay pending with the parked session.
+            self.cancel_custom_surfaces(cx);
             self.park_active_session();
         } else {
             self.drop_client();
         }
+        self.execution = SessionExecution::default();
         self.transcript.clear();
         self.current_title = None;
         self.reset_session_name(cx);
@@ -605,9 +605,12 @@ impl OrbitApp {
             return;
         }
         let current = crate::git::current_branch(&cwd).unwrap_or_else(|| "HEAD".into());
-        let branches = crate::git::list_branches(&cwd).unwrap_or_else(|err| {
+        let branches = crate::git::list_branch_entries(&cwd).unwrap_or_else(|err| {
             self.toast_error(tr!("pickers.branch_list_failed", error = err));
-            vec![current.clone()]
+            vec![crate::git::BranchEntry {
+                name: current.clone(),
+                commit_date: None,
+            }]
         });
         let workspace_label = sessions::workspace_label(&cwd);
 

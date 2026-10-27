@@ -263,7 +263,9 @@ impl OrbitApp {
                 "cancelled": true
             }),
         };
-        self.send(CommandBody::Raw(payload), "extension_ui_response");
+        if self.send(CommandBody::Raw(payload), "extension_ui_response") {
+            self.execution.respond(id);
+        }
     }
 
     /// Open the inline approval bar for a guard request. pi blocks one request
@@ -341,10 +343,7 @@ impl OrbitApp {
         self.ask_focus_pending = false;
         // Custom-UI surfaces belong to the departing session too; cancel them
         // so their parked runs can settle.
-        let custom_ids: Vec<String> = self.custom_ui.ids().map(str::to_string).collect();
-        for id in custom_ids {
-            self.close_custom_ui(&id, cx);
-        }
+        self.cancel_custom_surfaces(cx);
         let Some(dialog) = self.dialog.take() else {
             return;
         };
@@ -352,6 +351,13 @@ impl OrbitApp {
         let id = dialog.read(cx).request_id().to_string();
         self.respond_to_dialog(&id, &DialogResponse::Cancelled);
         cx.notify();
+    }
+
+    pub(super) fn cancel_custom_surfaces(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<String> = self.custom_ui.ids().map(str::to_string).collect();
+        for id in ids {
+            self.close_custom_ui(&id, cx);
+        }
     }
 
     // ── approval bar keyboard control (the `Approval` key context) ──────

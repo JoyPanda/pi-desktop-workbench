@@ -329,6 +329,10 @@ legacy app today:
 
 ### Implementation status (living)
 
+Appearance's interface-font picker includes bundled Onest in Regular, Medium,
+SemiBold, and Bold weights; it works offline without an OS font installation.
+The default interface face and saved font preferences remain unchanged.
+
 Done: streaming transcript + virtualization; markdown + highlighting; composer with steering, follow-ups, cancel, autocomplete, attachments; extension dialogs; diff/Review + Git page + GitHub issues/PRs (where `gh` is available); sessions (list/switch/new/delete/clone/cross-workspace) over an Orbit-owned project list (only folders the user added; removing one never touches pi) whose groups sort by activity, added date, name, or session count, with a **warm process pool** so re-opening a recent session is a resume, not a Node spawn; Git worktrees as first-class workspaces (`worktree.rs` + the Worktrees page: discovery, create from a new/existing branch, open/rename/move/lock/remove/prune/repair, configurable `.wt` root, optional async setup script with `ORBIT_ROOT_PATH`/`ORBIT_WORKTREE_PATH`, sessions rooted in and restored to the worktree — D14); Explorer project panel + editable Files surface; integrated terminal (⌘J); usage, skills, plugins, models, providers, settings pages; transcript find; image lightbox; theming (dark/light/system, ten Classic palettes plus an opt-in Operational pair) + reduce-motion; localization (ten locales + System, D9); in-app signed updater + Version History; notifications; open-in-editor; signed/notarizable macOS packaging + best-effort Windows/Linux bundles (D5); CI; access modes (a guard, not a sandbox), workflow modes (Plan/Build/Ask per D8), and the auto-title / quota extension bridges (D10); Zed design tokens (D11) with context menus, the tooltip, the extension dialog, the floating modal cards (provider usage / API-key / editor, update dialog, custom UI), the sidebar session / workspace rows, the transcript's message / card chrome, the settings section / group / row chrome, UI type on `TextSize` across every surface, corner radii on `Radius`, and one-shot motion on `AnimationDuration` migrated onto them.
 
 Attached images are compressed when they are queued (`attachments.rs`): the
@@ -365,6 +369,75 @@ because it averages output tokens over the whole request (prefill plus decode).
 The navigation rail's user-turn index is likewise cached in `Transcript` and
 rebuilt only when the message list changes, and debug builds log one local
 `[orbit:perf]` line per settle (window, cache, prompt, output, duration, rate).
+
+The sidebar keeps the title, prompt preview, age/status, branch/divergence,
+provider/model marks, and pin/archive indicators. Flat mode adds the workspace
+above the title; grouped mode names it once in the project header. Tinted project
+marks and count badges establish hierarchy, semantic status washes distinguish
+outcomes, and primary-ink titles lead secondary previews and muted metadata.
+The selected row keeps its theme selection fill with a subtle accent outline;
+the keyboard cursor adds a full focus outline even when that row is selected.
+Title, preview, and branch tooltips expose truncated text without widening the
+sidebar. Spacing and mark geometry follow the existing theme tokens, and the
+list remains virtualized with the same session data and action handlers.
+The sidebar view menu's **Show first message** toggle hides or restores the preview
+in both grouped and flat lists. It defaults to shown and persists as
+`show_first_message` in `workspaces.json`; missing or invalid values keep previews
+visible. Toggling remeasures rows while retaining the logical scroll anchor, and
+never edits session content or hides other metadata. When enabled, the message line
+shows the whole prompt — pi titles a session from that message, so the two
+can start alike, but the title is capped at 80 characters while a row shows
+about thirty, so trimming the message to a "remainder" hid the end of the ask
+instead of de-duplicating it. Branch metadata is a
+per-project cache (`OrbitApp::sidebar_branches`), filled off-thread by
+`git branch --show-current` + `rev-list --left-right` at launch and whenever the
+project list or the current checkout changes, so rendering a row never spawns
+git; a project that is not a repository, or is on a detached HEAD, has no branch
+item rather than an empty slot, and `↑n`/`↓n` appear only for non-zero counts
+(`divergence_labels`). Row actions are the right-click context menu's job — the
+session row carries no hover-revealed `…`, which is why the title owns the full
+line width and why the keyboard/palette delete path anchors its confirmation to
+the row itself.
+
+Session rows show execution status independently of read/unread state. The same
+`SessionExecution` reducer consumes the foreground and parked sessions' real pi
+events: Running, Waiting for approval/input, Retrying, Compacting, Completed,
+Failed, Stopped, Disconnected, or Idle when no outcome is known. Only
+`agent_settled` completes a run; `agent_end` may still lead to retries or queued
+work. The RPC parser preserves the settle's `aborted` bit, including stops before
+an assistant message exists. Outcomes survive reading, switching, and warm-process
+reaping for this app launch (`session_outcomes`); historical and externally written
+sessions carry no status label until observed, rather than guessing from old files. Tool errors alone do not fail the session.
+
+Native approval/dialog/questionnaire surfaces park with their session, including
+partially entered answers, and background requests wait instead of being denied.
+Opening the session restores its surface; waiting sessions remain busy and visible
+under collapsed project groups. Custom terminal surfaces still cancel on departure.
+
+Session rows spend exactly one glyph on execution state, in a fixed 16px **status
+lane** at the leading edge of the row's state line (`status_lane`, `status_lane_icon`,
+`status_lane_ink`, `status_lane_words`): accent spinner while running, amber lock for
+an approval gate or chat glyph for a question, green check for a read result, green
+eye for an unread one, red cross for a failure or a dead process, mute stop for an
+aborted run, and no glyph at all for Idle / Unknown (the lane still reserves its
+width). Only the spinner animates. Blocked, unread, and failed states add words in
+place of the age, so colour is never the only signal; the tooltip names the rest.
+
+A turn that settles while the user is not reading it leaves a separate unread mark on
+its row (`OrbitApp::awaiting_review`) — a green eye with "Needs review", or a red cross
+with a small corner dot when the turn failed. The execution glyph underneath
+distinguishes Completed from Failed and remains after the mark is spent, so reading a
+result costs the mark, not the outcome. Only the mark clears when the session is
+genuinely in front of the user — `transcript_in_front` (window frontmost, and no
+full-page surface covering the chat area: Files, Git, Usage, Worktrees, or a
+full-width Review pane, the same rule the renderer uses to hide the chat column),
+checked once on the heartbeat rather than from a hook on each path that can bring a
+session into view. That single rule is what keeps the distinction honest: selecting a
+row in a background window does not spend the mark, and a settle behind a full-page
+surface or another app still leaves one. Marks are memory-only — a cold start does
+not guess what was read elsewhere — and a marked row joins the open, running, and
+pinned rows in staying visible under a collapsed project group, so the result cannot
+scroll out of reach before it is seen.
 
 Every icon-only button carries the app's native tooltip — a localized label, usually
 with its shortcut appended (the send / stop button set the register) — across the top

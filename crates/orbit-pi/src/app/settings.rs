@@ -5847,6 +5847,9 @@ impl OrbitApp {
     }
 
     pub(super) fn rename_session(&mut self, cx: &mut Context<Self>) {
+        if self.pending_session_rename.is_some() {
+            return;
+        }
         // Enter while an IME candidate window is open confirms the candidate;
         // it must not commit a half-composed name. The click path is covered
         // by the same guard, since the preedit text is not a final answer.
@@ -6851,6 +6854,14 @@ impl OrbitApp {
         cx: &Context<Self>,
     ) -> AnyElement {
         let open = self.settings_select == Some(kind);
+        let model_provider = match kind {
+            SettingsSelect::TitleModel if selected == 0 => Some(self.model_provider.as_str()),
+            SettingsSelect::TitleModel | SettingsSelect::DefaultModel if selected > 0 => self
+                .available_models
+                .get(selected - 1)
+                .map(|model| model.provider.as_str()),
+            _ => None,
+        };
         let chip_this = this.clone();
         div()
             .flex()
@@ -6881,7 +6892,7 @@ impl OrbitApp {
                         chip_this.update(cx, |app, cx| {
                             // A dismissal from this same click's mouse-down
                             // must not immediately re-open (see
-                            // `toggle_session_menu`).
+                            // `toggle_workspace_menu`).
                             const GESTURE: Duration = Duration::from_millis(200);
                             if let Some(dismissed) = app.menu_dismissed_at.take() {
                                 if dismissed.elapsed() < GESTURE {
@@ -6910,6 +6921,13 @@ impl OrbitApp {
                             }
                             cx.notify();
                         });
+                    })
+                    .when_some(model_provider, |chip, provider| {
+                        chip.child(icon_dyn(
+                            provider_icon(provider),
+                            context_menu::ICON.px(&theme),
+                            provider_mark_color(provider, &theme, theme.text_muted),
+                        ))
                     })
                     .child(label)
                     .child(icon(
@@ -6945,6 +6963,18 @@ impl OrbitApp {
             .map(|ix| (ix, options[ix].clone()))
             .collect();
         let empty = rows.is_empty();
+        let model_rows = matches!(
+            kind,
+            SettingsSelect::TitleModel | SettingsSelect::DefaultModel
+        )
+        .then(|| {
+            self.available_models
+                .iter()
+                .map(|model| (model.provider.clone(), model.name.clone()))
+                .collect::<Vec<_>>()
+        });
+        let active_provider = self.model_provider.clone();
+        let active_model = self.model_label.clone();
         let highlight = self.settings_select_highlight;
         // Font rows paint their own family. Only the visible slice resolves
         // a face; the row stays one picker entry tall so a tall face cannot
@@ -6990,6 +7020,25 @@ impl OrbitApp {
                         let selected_row = orig_ix == selected;
                         let highlighted_row = highlight == Some(orig_ix);
                         let this = this.clone();
+                        let model = model_rows.as_ref().and_then(|models| {
+                            orig_ix.checked_sub(1).and_then(|ix| models.get(ix))
+                        });
+                        let provider = model.map(|(provider, _)| provider.as_str()).or_else(|| {
+                            (model_rows.is_some()
+                                && kind == SettingsSelect::TitleModel
+                                && orig_ix == 0)
+                                .then_some(active_provider.as_str())
+                        });
+                        let primary = model.map_or(option.as_str(), |(_, name)| name.as_str());
+                        let secondary = model
+                            .map(|(provider, _)| crate::providers::provider_display_name(provider))
+                            .or_else(|| {
+                                (model_rows.is_some()
+                                    && kind == SettingsSelect::TitleModel
+                                    && orig_ix == 0
+                                    && !active_model.is_empty())
+                                .then(|| active_model.clone())
+                            });
                         // Every row is exactly one picker entry tall
                         // (`uniform_list` strides by the first row, and
                         // `list_h` uses the same `row_h`). The block shell
@@ -7015,6 +7064,13 @@ impl OrbitApp {
                                     } else {
                                         theme.text_secondary
                                     })
+                                    .when_some(provider, |row, provider| {
+                                        row.child(icon_dyn(
+                                            provider_icon(provider),
+                                            context_menu::ICON.px(&theme),
+                                            provider_mark_color(provider, &theme, theme.text_muted),
+                                        ))
+                                    })
                                     .child(
                                         div()
                                             .flex_1()
@@ -7024,8 +7080,23 @@ impl OrbitApp {
                                             .when(font_preview, |label| {
                                                 label.font_family(option.clone())
                                             })
-                                            .child(option.clone()),
+                                            .child(if font_preview {
+                                                option.clone()
+                                            } else {
+                                                primary.to_owned()
+                                            }),
                                     )
+                                    .when_some(secondary, |row, name| {
+                                        row.child(
+                                            div()
+                                                .flex_none()
+                                                .max_w(px(120.))
+                                                .truncate()
+                                                .text_size(TextSize::Small.px(&theme))
+                                                .text_color(theme.text_muted)
+                                                .child(name),
+                                        )
+                                    })
                                     .when(selected_row, |row| {
                                         row.child(icon(
                                             "icons/check.svg",

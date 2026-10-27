@@ -223,7 +223,9 @@ pub enum Event {
     AgentEnd {
         will_retry: bool,
     },
-    AgentSettled,
+    AgentSettled {
+        aborted: bool,
+    },
     TurnStart,
     TurnEnd {
         value: Value,
@@ -967,7 +969,12 @@ impl Event {
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
             },
-            "agent_settled" => Event::AgentSettled,
+            "agent_settled" => Event::AgentSettled {
+                aborted: value
+                    .get("aborted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            },
             "turn_start" => Event::TurnStart,
             "turn_end" => Event::TurnEnd { value },
             "message_start" => Event::MessageStart { value },
@@ -1042,7 +1049,7 @@ impl Event {
                 )
             }
             Event::Auth(event) => auth_one_line(event),
-            Event::AgentSettled => "agent_settled ✓".into(),
+            Event::AgentSettled { aborted } => format!("agent_settled (aborted={aborted})"),
             Event::ExtensionUiRequest { method, .. } => format!("ui request: {method}"),
             Event::ProcessExited => "pi exited".into(),
             Event::Unknown(v) => trim(&v.to_string(), 80),
@@ -1656,6 +1663,18 @@ mod tests {
     fn tolerates_unknown_events() {
         let ev = Event::parse_line(r#"{"type":"brand_new_shape","thing":1}"#);
         assert!(matches!(ev, Event::Unknown(_)));
+    }
+
+    #[test]
+    fn settled_preserves_the_abort_without_requiring_a_final_message() {
+        assert!(matches!(
+            Event::parse_line(r#"{"type":"agent_settled","aborted":true}"#),
+            Event::AgentSettled { aborted: true }
+        ));
+        assert!(matches!(
+            Event::parse_line(r#"{"type":"agent_settled"}"#),
+            Event::AgentSettled { aborted: false }
+        ));
     }
 
     #[test]

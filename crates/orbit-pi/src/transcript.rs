@@ -1248,7 +1248,7 @@ impl Transcript {
                 false
             }
             // A settled run closes its working clock; the next run re-arms it.
-            Event::AgentSettled => {
+            Event::AgentSettled { .. } => {
                 self.end_live_run();
                 false
             }
@@ -3898,7 +3898,7 @@ mod tests {
         assert!(t.tail_summary.get());
         assert_eq!(t.scroller.item_count(), 3);
         assert_eq!(t.changed_files_summary(), vec![("a.rs".into(), 2, 1)]);
-        t.apply_event(&Event::AgentSettled);
+        t.apply_event(&Event::AgentSettled { aborted: false });
         assert!(t.tail_summary.get());
         assert_eq!(t.changed_files_summary(), vec![("a.rs".into(), 2, 1)]);
         // The next send opens a new turn before its user row is appended.
@@ -3909,7 +3909,7 @@ mod tests {
             value: json!({"role": "user", "content": "more"}),
         });
         assert!(!t.tail_summary.get());
-        t.apply_event(&Event::AgentSettled);
+        t.apply_event(&Event::AgentSettled { aborted: false });
         assert!(!t.tail_summary.get());
         assert_eq!(t.scroller.item_count(), 3);
     }
@@ -3948,7 +3948,7 @@ mod tests {
         });
         assert!(t.is_streaming());
         assert!(t.tail_summary.get());
-        t.apply_event(&Event::AgentSettled);
+        t.apply_event(&Event::AgentSettled { aborted: false });
         assert_eq!(t.changed_files_summary(), vec![("a.rs".into(), 2, 1)]);
     }
 

@@ -168,6 +168,10 @@ impl Render for OrbitApp {
         // so a frame that covers it (Settings, a feature page) stops the
         // heartbeat repainting for a field nobody can see.
         self.backdrop_live = false;
+        if self.session_rename_ready {
+            self.session_rename_ready = false;
+            self.begin_session_rename(window, cx);
+        }
         // A clicked banner asks for the window; bring it forward on the frame
         // that follows the click (macOS activates the app, but a minimized
         // window would otherwise stay behind).
@@ -281,6 +285,17 @@ impl Render for OrbitApp {
         let live_paths: Rc<HashSet<PathBuf>> = Rc::new(self.lives.keys().cloned().collect());
         // Per-workspace sidebar marks (icon + tint), read by every header row.
         let marks: Rc<HashMap<PathBuf, WorkspaceMark>> = Rc::new(self.workspace_marks.clone());
+        // Branch per project, for the rows' metadata line. Fetched off-thread
+        // (`refresh_sidebar_branches`); render only reads it.
+        let branches: Rc<HashMap<PathBuf, crate::app::BranchLine>> =
+            Rc::new(self.sidebar_branches.clone());
+        let logos = Rc::new(self.sidebar_logos.clone());
+        // Rows whose last turn settled while the user was elsewhere. The row
+        // paints the mark; it never replaces a running / pin / archive glyph
+        // (issue #83).
+        let review_marks: Rc<HashMap<PathBuf, crate::app::ReviewMark>> =
+            Rc::new(self.awaiting_review.clone());
+        let session_statuses = Rc::new(self.sidebar_session_statuses());
         // Pinned header for the expanded workspace group currently at the top
         // of the session list: it stays there while that group's own sessions
         // scroll, and the next group's header pushes it away (see
@@ -312,6 +327,10 @@ impl Render for OrbitApp {
                     &live_paths,
                     &marks,
                     &workspace_icons,
+                    &logos,
+                    &branches,
+                    &review_marks,
+                    &session_statuses,
                     session_menu.as_ref().as_ref(),
                     workspace_menu.as_ref().as_ref(),
                     sidebar_cursor == Some(sticky.ix),
@@ -334,9 +353,10 @@ impl Render for OrbitApp {
         let pane_open = self.sidepane.read(cx).is_open();
         let pane_visible =
             pane_open && !self.settings_open && !self.usage_open && self.dependencies_ready();
-        // Feature pages (Files / Git / Usage) own the main column, so a
-        // full-page Review pane yields to the one that just opened rather
-        // than covering it.
+        // Feature pages (Files / Git / Usage / Worktrees) own the main column, so a
+        // full-page Review pane yields to the one that just opened rather than
+        // covering it. `OrbitApp::chat_column_covered` (events.rs) answers the
+        // same question for the review-mark bookkeeping — keep them in step.
         let viewer_open = self.file_viewer.read(cx).is_open();
         let feature_open = viewer_open || self.git_open || self.usage_open || self.worktrees_open;
         // A page that opens under a full-page Review pane gets the window
@@ -723,6 +743,10 @@ impl Render for OrbitApp {
                                                                     &live_paths,
                                                                     &marks,
                                                                     &workspace_icons,
+                                                                    &logos,
+                                                                    &branches,
+                                                                    &review_marks,
+                                                                    &session_statuses,
                                                                     session_menu.as_ref().as_ref(),
                                                                     row_workspace_menu,
                                                                     sidebar_cursor == Some(ix),
@@ -739,10 +763,7 @@ impl Render for OrbitApp {
                                             .into_any_element()
                                     }),
                             )
-                            // footer — connection status, then the utility
-                            // icons on the last edge, set off from the session
-                            // list by a hairline. The gutter matches the
-                            // section label above so the column has one edge.
+                            // Connection status and global actions share a quiet footer.
                             .child(
                                 div()
                                     .id("sidebar-footer")
@@ -753,51 +774,69 @@ impl Render for OrbitApp {
                                     .border_color(theme.border)
                                     .flex()
                                     .items_center()
-                                    // Connection status — a dot alone while
-                                    // the runtime is live: "Connected" is the
-                                    // steady state, so a permanent label spends
-                                    // the row's best corner on a non-event. When
-                                    // it is not live the label appears and the
-                                    // pair reconnects on click.
-                                    .child(if self.runtime_is_live() {
-                                        div()
-                                            .flex_none()
-                                            .size(px(6.))
-                                            .rounded_full()
-                                            .bg(theme.success)
-                                            .into_any_element()
-                                    } else {
+                                    .child({
+                                        let live = self.runtime_is_live();
+                                        let retrying = self.sidebar_runtime_retrying();
+                                        let (label, dot) = if live {
+                                            (tr!("status.connected"), theme.success)
+                                        } else if retrying {
+                                            (tr!("sidebar.status_retrying"), theme.warning)
+                                        } else {
+                                            (tr!("status.offline"), theme.error)
+                                        };
                                         div()
                                             .id("sidebar-runtime-status")
                                             .flex()
+                                            .flex_shrink()
                                             .min_w_0()
                                             .items_center()
                                             .gap(DynamicSpacing::Base06.px(&theme))
-                                            .cursor_pointer()
-                                            .tip(tr!("view.reconnect"))
-                                            .active(|s| s.opacity(PRESS_DIM))
-                                            .on_mouse_up(
-                                                MouseButton::Left,
-                                                cx.listener(|this, _: &MouseUpEvent, _, cx| {
-                                                    this.runtime_restart(cx)
-                                                }),
-                                            )
-                                            .child(
-                                                div()
+                                            .when(!live && !retrying, |status| {
+                                                status
+                                                    .cursor_pointer()
+                                                    .tip(tr!("view.reconnect"))
+                                                    .hover(|s| s.text_color(theme.text_primary))
+                                                    .active(|s| s.opacity(PRESS_DIM))
+                                                    .on_mouse_up(
+                                                        MouseButton::Left,
+                                                        cx.listener(
+                                                            |this, _: &MouseUpEvent, _, cx| {
+                                                                this.runtime_restart(cx)
+                                                            },
+                                                        ),
+                                                    )
+                                            })
+                                            .text_color(theme.text_secondary)
+                                            .child({
+                                                let dot = div()
                                                     .flex_none()
                                                     .size(px(6.))
                                                     .rounded_full()
-                                                    .bg(theme.error),
-                                            )
+                                                    .bg(dot);
+                                                if retrying && !theme::reduce_motion(cx) {
+                                                    dot.with_animation(
+                                                        "sidebar-runtime-retrying",
+                                                        Animation::new(Duration::from_millis(900))
+                                                            .repeat(),
+                                                        |dot, phase| {
+                                                            let pulse = (phase
+                                                                * std::f32::consts::TAU)
+                                                                .cos();
+                                                            dot.opacity(0.7 + 0.3 * pulse)
+                                                        },
+                                                    )
+                                                    .into_any_element()
+                                                } else {
+                                                    dot.into_any_element()
+                                                }
+                                            })
                                             .child(
                                                 div()
                                                     .min_w_0()
                                                     .truncate()
                                                     .text_size(TextSize::Small.px(&theme))
-                                                    .text_color(theme.text_secondary)
-                                                    .child(tr!("status.offline")),
+                                                    .child(label),
                                             )
-                                            .into_any_element()
                                     })
                                     .child(div().flex_1())
                                     .when_some(
@@ -3814,8 +3853,6 @@ impl OrbitApp {
             .gap(DynamicSpacing::Base06.px(&theme))
             .child(search)
             .child(usage)
-            // Separates "where you go" from "how it is configured".
-            .child(div().flex_none().w(px(1.)).h(px(12.)).bg(theme.border))
             .child(settings)
     }
 

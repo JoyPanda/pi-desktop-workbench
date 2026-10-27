@@ -357,7 +357,7 @@ pub struct GitPanel {
     ahead_behind: Option<(usize, usize)>,
     /// Whether HEAD resolves (drives "Publish branch" on a fresh branch).
     has_commits: bool,
-    branches: Vec<String>,
+    branches: Vec<git::BranchEntry>,
     /// Branches most recently checked out (from the HEAD reflog), newest
     /// first: the picker's "Recent branches" section.
     recent_branches: Vec<String>,
@@ -1073,7 +1073,7 @@ impl GitPanel {
                 Ok((
                     git::current_branch(&cwd),
                     git::ahead_behind(&cwd),
-                    git::list_branches(&cwd).unwrap_or_default(),
+                    git::list_branch_entries(&cwd).unwrap_or_default(),
                     git::recent_branches(&cwd),
                     git::has_commits(&cwd),
                     git::remote_web(&cwd),
@@ -6931,6 +6931,16 @@ impl GitPanel {
         )
     }
 
+    /// The tip commit date of a local branch, for the menu's last-active
+    /// column. `recent_branches` carries names only (it comes from the reflog),
+    /// so its rows read the date from the branch list.
+    fn branch_commit_date(&self, name: &str) -> Option<&str> {
+        self.branches
+            .iter()
+            .find(|entry| entry.name == name)
+            .and_then(|entry| entry.commit_date.as_deref())
+    }
+
     fn branch_menu(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.branch_menu_open {
             return None;
@@ -6998,24 +7008,26 @@ impl GitPanel {
             .child(tr!("git_panel.create_new_branch")),
         );
 
-        let mut locals: Vec<String> = self
+        let mut locals: Vec<&git::BranchEntry> = self
             .branches
             .iter()
-            .filter(|b| matches(b.as_str()))
-            .cloned()
+            .filter(|b| matches(b.name.as_str()))
             .collect();
-        locals.sort_by_key(|b| b.to_lowercase());
+        locals.sort_by_key(|b| b.name.to_lowercase());
 
-        let remotes: Vec<String> = self
+        let remotes: Vec<&git_ops::RefEntry> = self
             .refs
             .iter()
             .filter(|r| r.kind == git::RefKind::Remote && matches(r.name.as_str()))
-            .map(|r| r.name.clone())
             .collect();
 
         // "Recent" is only meaningful before a search narrows the list.
-        let recent: Vec<String> = if needle.is_empty() {
-            self.recent_branches.iter().take(5).cloned().collect()
+        let recent: Vec<(&str, Option<&str>)> = if needle.is_empty() {
+            self.recent_branches
+                .iter()
+                .take(5)
+                .map(|name| (name.as_str(), self.branch_commit_date(name)))
+                .collect()
         } else {
             Vec::new()
         };
@@ -7025,8 +7037,15 @@ impl GitPanel {
                 &tr!("git_panel.recent_branches"),
                 theme,
             ));
-            for branch in &recent {
-                list = list.child(self.branch_row(branch, current.as_deref(), false, theme, cx));
+            for (branch, date) in &recent {
+                list = list.child(self.branch_row(
+                    branch,
+                    *date,
+                    current.as_deref(),
+                    false,
+                    theme,
+                    cx,
+                ));
             }
         }
         if !locals.is_empty() {
@@ -7034,8 +7053,15 @@ impl GitPanel {
                 &tr!("git_panel.local_branches"),
                 theme,
             ));
-            for branch in &locals {
-                list = list.child(self.branch_row(branch, current.as_deref(), false, theme, cx));
+            for entry in &locals {
+                list = list.child(self.branch_row(
+                    &entry.name,
+                    entry.commit_date.as_deref(),
+                    current.as_deref(),
+                    false,
+                    theme,
+                    cx,
+                ));
             }
         }
         if !remotes.is_empty() {
@@ -7043,8 +7069,15 @@ impl GitPanel {
                 &tr!("git_panel.remote_branches"),
                 theme,
             ));
-            for branch in &remotes {
-                list = list.child(self.branch_row(branch, current.as_deref(), true, theme, cx));
+            for entry in &remotes {
+                list = list.child(self.branch_row(
+                    &entry.name,
+                    entry.commit_date.as_deref(),
+                    current.as_deref(),
+                    true,
+                    theme,
+                    cx,
+                ));
             }
         }
         if locals.is_empty() && remotes.is_empty() && recent.is_empty() {
@@ -7087,11 +7120,14 @@ impl GitPanel {
         )
     }
 
-    /// One row in the branch picker: the name, a `Current` marker for HEAD,
-    /// and a hover-revealed delete for a non-current local branch.
+    /// One row in the branch picker: the name, the age of its tip commit, a
+    /// `Current` marker for HEAD, and a hover-revealed delete for a
+    /// non-current local branch. The age is the row's last child so every
+    /// date lands on the same right edge, whatever precedes it.
     fn branch_row(
         &self,
         name: &str,
+        commit_date: Option<&str>,
         current: Option<&str>,
         remote: bool,
         theme: Theme,
@@ -7164,6 +7200,19 @@ impl GitPanel {
                         ButtonSize::Compact.icon_size().px(&theme),
                         theme.text_muted,
                     )),
+            );
+        }
+        if let Some(age) = commit_date.map(crate::gh::relative_time) {
+            row = row.child(
+                div()
+                    .flex_none()
+                    .text_size(picker::SECONDARY_TEXT.px(&theme))
+                    .text_color(if selected {
+                        theme.text_secondary
+                    } else {
+                        theme.text_muted
+                    })
+                    .child(age),
             );
         }
         row.into_any_element()

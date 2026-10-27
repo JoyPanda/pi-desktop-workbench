@@ -113,7 +113,7 @@ fn live_prompt_streams_agent_events() {
                     saw_text = true;
                     eprint!("{delta}");
                 }
-                Event::AgentSettled => settled = true,
+                Event::AgentSettled { .. } => settled = true,
                 _ => {}
             }
         }

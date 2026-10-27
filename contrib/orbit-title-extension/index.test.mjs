@@ -242,11 +242,14 @@ test("the /generate-title command titles a resumed session", async () => {
   assert.deepEqual(pi.state.set, ["Fix login redirect"]);
 });
 
-test("leaves a resumed session with more than one user prompt alone", async () => {
+test("titles a resumed session that carries no name", async () => {
   setConfig({ enabled: true, model: null });
   const pi = fakePi();
   activate(pi);
   const ctx = fakeCtx();
+  // A session Orbit reopened from disk has several user prompts already. It is
+  // untitled, so the next settle names it — "fresh vs resumed" is answered by
+  // whether a name exists, not by how many prompts the branch holds.
   ctx.sessionManager.getBranch = () => [
     ...exchange(),
     { type: "message", message: { role: "user", content: "again" } },
@@ -255,7 +258,53 @@ test("leaves a resumed session with more than one user prompt alone", async () =
   await pi.fire("agent_settled", {}, ctx);
   await pendingTitle();
 
-  assert.equal(ctx.calls.length, 0);
+  assert.deepEqual(pi.state.set, ["Fix login redirect"]);
+  assert.equal(ctx.calls.length, 1);
+});
+
+test("titles through a steering message queued during the first run", async () => {
+  setConfig({ enabled: true, model: null });
+  const pi = fakePi();
+  activate(pi);
+  const ctx = fakeCtx();
+  // Sending a second prompt while the first turn runs used to leave the session
+  // with two user prompts at settle time, which read as "resumed" and cost it
+  // the title.
+  ctx.sessionManager.getBranch = () => [
+    { type: "message", message: { role: "user", content: "fix the redirect loop on login" } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Working on it." }] } },
+    { type: "message", message: { role: "user", content: "also add a test" } },
+    {
+      type: "message",
+      message: { role: "assistant", content: [{ type: "text", text: "I traced it to the oauth callback." }] },
+    },
+  ];
+  await pi.fire("agent_settled", {}, ctx);
+  await pendingTitle();
+
+  assert.deepEqual(pi.state.set, ["Fix login redirect"]);
+});
+
+test("a settle with no reply to describe does not write the session off", async () => {
+  setConfig({ enabled: true, model: null });
+  const pi = fakePi();
+  activate(pi);
+  const ctx = fakeCtx();
+  // A first settle that lands before the assistant produced text (an aborted or
+  // tool-only turn) has nothing to describe; the next turn still titles it.
+  ctx.sessionManager.getBranch = () => [
+    { type: "message", message: { role: "user", content: "fix the redirect loop on login" } },
+  ];
+  await pi.fire("agent_settled", {}, ctx);
+  await pendingTitle();
+  assert.equal(ctx.calls.length, 0, "nothing to describe yet");
+
+  ctx.sessionManager.getBranch = () => exchange();
+  await pi.fire("agent_settled", {}, ctx);
+  await pendingTitle();
+
+  assert.deepEqual(pi.state.set, ["Fix login redirect"]);
+  assert.equal(ctx.calls.length, 1);
 });
 
 test("a failed ask is retried on the next settle", async () => {
@@ -275,7 +324,34 @@ test("a failed ask is retried on the next settle", async () => {
   await pendingTitle();
   assert.deepEqual(pi.state.set, []);
 
+  // The retry happens after the user's next prompt, so the branch has grown by
+  // then — which is exactly the case the old "only one user prompt" rule
+  // rejected, making the retry dead in practice.
+  ctx.sessionManager.getBranch = () => [
+    ...exchange(),
+    { type: "message", message: { role: "user", content: "thanks, now add a test" } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: "Added." }] } },
+  ];
   await pi.fire("agent_settled", {}, ctx);
   await pendingTitle();
   assert.deepEqual(pi.state.set, ["Fix login redirect"]);
+});
+
+test("gives up after three transient failures", async () => {
+  setConfig({ enabled: true, model: null });
+  const pi = fakePi();
+  activate(pi);
+  const ctx = fakeCtx();
+  let asked = 0;
+  ctx.modelRegistry.complete = async () => {
+    asked += 1;
+    throw new Error("model unavailable");
+  };
+  for (let settle = 0; settle < 5; settle += 1) {
+    await pi.fire("agent_settled", {}, ctx);
+    await pendingTitle();
+  }
+
+  assert.equal(asked, 3, "bounded: a broken model is not asked every turn");
+  assert.deepEqual(pi.state.set, []);
 });

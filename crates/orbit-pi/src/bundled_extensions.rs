@@ -255,6 +255,11 @@ mod tests {
         assert!(TITLE_INDEX_JS.contains("agent_settled"));
         assert!(TITLE_INDEX_JS.contains("./title.js"));
         assert!(TITLE_HELPERS_JS.contains("buildTitlePrompt"));
+        // The automatic pass decides from the session's *name*, not from how
+        // many prompts it holds: a resumed untitled session, or one whose first
+        // run took a steering message, still gets a title (see CHANGELOG).
+        assert!(!TITLE_INDEX_JS.contains("userCount !== 1"));
+        assert!(TITLE_INDEX_JS.contains("MAX_ASK_ATTEMPTS"));
         let dir = scratch_dir();
         let entry = install_extension(
             &dir,

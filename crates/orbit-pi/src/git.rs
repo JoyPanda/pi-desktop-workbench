@@ -61,22 +61,55 @@ pub fn current_branch(cwd: &Path) -> Option<String> {
         .or_else(|| read_head_branch(cwd))
 }
 
+/// A local branch plus the date of its tip commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchEntry {
+    pub name: String,
+    /// RFC 3339 committer date of the branch tip; `None` when git prints no
+    /// date for the ref, in which case the picker simply omits the age.
+    pub commit_date: Option<String>,
+}
+
 /// Local branches, newest commit first.
 pub fn list_branches(cwd: &Path) -> Result<Vec<String>, String> {
+    Ok(list_branch_entries(cwd)?
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect())
+}
+
+/// Local branches with their tip commit date, newest commit first. Feeds the
+/// branch picker's "last active" column; [`list_branches`] reuses it so the
+/// two can never disagree on ordering.
+pub fn list_branch_entries(cwd: &Path) -> Result<Vec<BranchEntry>, String> {
     let out = run_git(
         cwd,
         &[
             "for-each-ref",
             "--sort=-committerdate",
             "refs/heads/",
-            "--format=%(refname:short)",
+            // A tab separator can't collide with a ref name: git forbids
+            // whitespace in refs. `run_git` trims the output, so a branch
+            // with no date arrives without its trailing tab.
+            "--format=%(refname:short)%09%(committerdate:iso-strict)",
         ],
     )?;
     Ok(out
         .lines()
         .filter(|line| !line.is_empty())
-        .map(str::to_string)
+        .map(parse_branch_entry)
         .collect())
+}
+
+fn parse_branch_entry(line: &str) -> BranchEntry {
+    let (name, date) = match line.split_once('\t') {
+        Some((name, date)) => (name, Some(date.trim())),
+        None => (line, None),
+    };
+    BranchEntry {
+        name: name.to_string(),
+        commit_date: date.filter(|date| !date.is_empty()).map(str::to_string),
+    }
 }
 
 /// Switch to an existing branch, keeping the working tree when possible.
@@ -1376,6 +1409,77 @@ mod tests {
         git_ok(&root, &["add", "."]);
         git_ok(&root, &["commit", "--quiet", "-m", "baseline"]);
         root
+    }
+
+    #[test]
+    fn parses_branch_entry_lines() {
+        let dated = parse_branch_entry("feat/x\t2024-05-01T10:00:00+02:00");
+        assert_eq!(dated.name, "feat/x");
+        assert_eq!(
+            dated.commit_date.as_deref(),
+            Some("2024-05-01T10:00:00+02:00")
+        );
+
+        // `run_git` trims, so an undated branch loses its trailing tab.
+        let undated = parse_branch_entry("unborn");
+        assert_eq!(undated.name, "unborn");
+        assert_eq!(undated.commit_date, None);
+    }
+
+    /// The branch picker's "last active" column reads `list_branch_entries`,
+    /// so it must carry a tip date per branch and stay newest-first;
+    /// `list_branches` is the same ordering without dates.
+    #[test]
+    fn branch_entries_carry_the_tip_date_newest_first() {
+        let root = repository();
+        // Pin the committer date so ordering cannot depend on how fast the
+        // test ran.
+        let commit_at = |date: &str, message: &str| {
+            let status = command(&root)
+                .args(["commit", "--quiet", "-am", message])
+                .env("GIT_COMMITTER_DATE", date)
+                .env("GIT_AUTHOR_DATE", date)
+                .status()
+                .unwrap();
+            assert!(status.success(), "commit at {date} failed");
+        };
+
+        git_ok(&root, &["checkout", "--quiet", "-b", "feat/old"]);
+        fs::write(root.join("src/lib.rs"), "fn old() {}\n").unwrap();
+        commit_at("2020-01-01T00:00:00+00:00", "old");
+
+        git_ok(&root, &["checkout", "--quiet", "main"]);
+        git_ok(&root, &["checkout", "--quiet", "-b", "feat/new"]);
+        fs::write(root.join("src/lib.rs"), "fn new() {}\n").unwrap();
+        commit_at("2024-01-01T00:00:00+00:00", "new");
+
+        let entries = list_branch_entries(&root).unwrap();
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        let position = |name: &str| {
+            names
+                .iter()
+                .position(|candidate| *candidate == name)
+                .unwrap()
+        };
+        // The pinned dates order the two feature branches; `main` keeps the
+        // real baseline date, so the assertion is newest-first, not a fixed
+        // list.
+        assert!(position("feat/new") < position("feat/old"));
+        let dates: Vec<&str> = entries
+            .iter()
+            .map(|entry| entry.commit_date.as_deref().expect("dated branch"))
+            .collect();
+        let mut newest_first = dates.clone();
+        newest_first.sort_unstable();
+        newest_first.reverse();
+        assert_eq!(dates, newest_first);
+        assert!(entries[position("feat/new")]
+            .commit_date
+            .as_deref()
+            .is_some_and(|date| date.starts_with("2024-01-01")));
+        assert_eq!(list_branches(&root).unwrap(), names);
+
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]

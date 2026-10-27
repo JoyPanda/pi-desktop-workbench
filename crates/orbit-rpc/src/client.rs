@@ -539,8 +539,8 @@ impl PiClient {
             .expect("spawn pi stderr thread");
     }
 
-    /// Cancel an `extension_ui_request` the host cannot answer — a parked
-    /// session has no dialog surface, so its blocked run must be released.
+    /// Cancel an `extension_ui_request` the host cannot answer, such as a
+    /// custom terminal surface opened by a background session.
     /// pi resolves the extension's pending promise on the *top-level*
     /// `cancelled` flag; nesting it under `value` (as this helper used to)
     /// left the extension waiting and the parked run stuck busy forever.

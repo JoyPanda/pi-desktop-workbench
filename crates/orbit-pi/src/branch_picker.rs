@@ -1,7 +1,9 @@
 //! Git branch picker — search, checkout, and create-from-current-state.
 //!
-//! Opened from the status-bar branch chip; follows the same popover conventions
-//! as [`crate::command_palette::CommandPalette`].
+//! Branches arrive newest-commit first and each row carries that commit's age,
+//! so the list answers "which branch was I last working on" before the user
+//! reads a single name. Opened from the status-bar branch chip; follows the
+//! same popover conventions as [`crate::command_palette::CommandPalette`].
 
 use gpui::{
     div, point, prelude::*, px, App, Context, ElementId, Entity, FocusHandle, Focusable,
@@ -14,11 +16,14 @@ use crate::app::{
     picker_surface,
 };
 use crate::composer::ComposerInput;
+use crate::git::BranchEntry;
 use crate::theme::tokens::RaisedExt;
-use crate::theme::tokens::{context_menu, input, picker, ButtonSize, DynamicSpacing, TextSize};
+use crate::theme::tokens::{
+    context_menu, input, list, picker, ButtonSize, DynamicSpacing, TextSize,
+};
 use crate::theme::{self, Theme};
 
-const POPOVER_W: f32 = 280.;
+const POPOVER_W: f32 = 320.;
 /// Branch rows visible before the list scrolls.
 const VISIBLE_ROWS: f32 = 7.;
 
@@ -47,6 +52,25 @@ type BranchAction = Box<dyn Fn(String, &mut Window, &mut App)>;
 /// Dismiss callback; `bool` is true when an outside mouse-down closed it.
 type BranchPickerDismiss = Box<dyn Fn(bool, &mut Window, &mut App)>;
 
+/// One branch row: the name plus its "last active" age, both resolved once
+/// when the picker opens (a popover never lives long enough for the label to
+/// go stale).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Row {
+    name: String,
+    /// Age of the tip commit in words (`3d ago`), `None` when git has no date.
+    age: Option<String>,
+}
+
+impl Row {
+    fn new(entry: BranchEntry) -> Self {
+        Self {
+            age: entry.commit_date.as_deref().map(crate::gh::relative_time),
+            name: entry.name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Browse,
@@ -54,7 +78,7 @@ enum Mode {
 }
 
 pub struct BranchPicker {
-    branches: Vec<String>,
+    branches: Vec<Row>,
     current: String,
     filter: Entity<ComposerInput>,
     create_input: Entity<ComposerInput>,
@@ -71,7 +95,7 @@ pub struct BranchPicker {
 impl BranchPicker {
     pub fn new(
         workspace_label: String,
-        branches: Vec<String>,
+        branches: Vec<BranchEntry>,
         current: String,
         on_checkout: BranchAction,
         on_create: BranchAction,
@@ -103,7 +127,7 @@ impl BranchPicker {
                 .with_wrap(false)
         });
         Self {
-            branches,
+            branches: branches.into_iter().map(Row::new).collect(),
             current,
             filter,
             create_input,
@@ -144,8 +168,8 @@ impl BranchPicker {
         }
         let rows = self.filtered_branches(&self.last_filter);
         if let Some(branch) = rows.get(self.highlighted).cloned() {
-            if branch != self.current {
-                (self.on_checkout)(branch, window, cx);
+            if branch.name != self.current {
+                (self.on_checkout)(branch.name, window, cx);
             } else {
                 (self.on_dismiss)(false, window, cx);
             }
@@ -170,10 +194,10 @@ impl BranchPicker {
         (self.on_dismiss)(true, window, cx);
     }
 
-    fn filtered_branches(&self, needle: &str) -> Vec<String> {
+    fn filtered_branches(&self, needle: &str) -> Vec<Row> {
         self.branches
             .iter()
-            .filter(|branch| needle.is_empty() || branch.to_lowercase().contains(needle))
+            .filter(|branch| needle.is_empty() || branch.name.to_lowercase().contains(needle))
             .cloned()
             .collect()
     }
@@ -315,11 +339,14 @@ impl Render for BranchPicker {
             .flex_col()
             .gap(px(row_gap(&theme)));
         for (ix, branch) in rows.iter().enumerate() {
-            let selected = *branch == self.current;
+            let selected = branch.name == self.current;
             let highlighted = ix == self.highlighted;
-            let branch_label = branch.clone();
-            let branch_compare = branch.clone();
-            let branch_action = branch.clone();
+            let name = branch.name.clone();
+            let action = branch.name.clone();
+            let age = branch.age.clone();
+            // The current branch is the one row a click can't checkout, so
+            // the highlight is the selection signal and the check is the
+            // fact.
             let this = this.clone();
             list = list.child(
                 picker_entry(
@@ -351,37 +378,74 @@ impl Render for BranchPicker {
                 .on_mouse_up(
                     gpui::MouseButton::Left,
                     cx.listener(move |picker, _, window, cx| {
-                        if branch_compare == picker.current {
+                        if picker.current == action {
                             (picker.on_dismiss)(false, window, cx);
                         } else {
-                            (picker.on_checkout)(branch_action.clone(), window, cx);
+                            (picker.on_checkout)(action.clone(), window, cx);
                         }
                     }),
                 )
                 .child(icon(
                     "icons/branch.svg",
                     context_menu::ICON.px(&theme),
-                    theme.text_muted,
+                    if selected {
+                        theme.accent_text
+                    } else {
+                        theme.text_muted
+                    },
                 ))
+                // Name and age share one baseline row: the name truncates,
+                // the age keeps its column so the dates read straight down
+                // the list.
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .text_color(if selected {
+                        .font_weight(if highlighted || selected {
+                            FontWeight::MEDIUM
+                        } else {
+                            FontWeight::NORMAL
+                        })
+                        .text_color(if highlighted {
                             theme.text_primary
+                        } else if selected {
+                            theme.selection_fg
                         } else {
                             theme.text_secondary
                         })
-                        .child(branch_label),
+                        .child(name),
                 )
-                .when(selected, |row| {
-                    row.child(icon(
-                        "icons/check.svg",
-                        context_menu::ICON.px(&theme),
-                        theme.accent_text,
-                    ))
-                }),
+                .when_some(age, |row, age| {
+                    row.child(
+                        div()
+                            .flex_none()
+                            .text_size(picker::SECONDARY_TEXT.px(&theme))
+                            .text_color(if highlighted || selected {
+                                theme.text_secondary
+                            } else {
+                                theme.text_muted
+                            })
+                            .child(age),
+                    )
+                })
+                // The check keeps its slot on every row — empty rows reserve
+                // it — so the ages above stay in one right-aligned column
+                // instead of jumping left on the current branch.
+                .child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .w(context_menu::ICON.px(&theme))
+                        .when(selected, |slot| {
+                            slot.child(icon(
+                                "icons/check.svg",
+                                context_menu::ICON.px(&theme),
+                                theme.accent_text,
+                            ))
+                        }),
+                ),
             );
         }
 
@@ -407,7 +471,23 @@ impl Render for BranchPicker {
             )
             .child(
                 menu_header(tr!("branch_picker.branches"), &theme)
-                    .pt(picker::list_padding_y(&theme)),
+                    .pt(picker::list_padding_y(&theme))
+                    // Branch count in the header's trailing slot, on the
+                    // sub-header's own metrics — same as the workspace
+                    // picker.
+                    .when(!rows.is_empty(), |header| {
+                        header.child(
+                            div()
+                                .flex_none()
+                                .h(list::sub_header_height(&theme))
+                                .px(list::sub_header_inset_x(&theme))
+                                .flex()
+                                .items_center()
+                                .text_size(list::SUB_HEADER_TEXT.px(&theme))
+                                .text_color(theme.text_muted)
+                                .child(rows.len().to_string()),
+                        )
+                    }),
             )
             .child(if rows.is_empty() {
                 // Zed's no-match state: one muted picker entry.

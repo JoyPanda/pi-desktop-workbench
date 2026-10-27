@@ -275,13 +275,15 @@ impl OrbitApp {
         let opened = self.begin_turn(cx);
         // The composer's own prompt is the only one whose `handled` answer may
         // tear down the working row (see `prompt_in_flight`).
-        self.prompt_in_flight = Some(id);
+        self.prompt_in_flight = Some(id.clone());
+        self.execution.prompt_id = Some(id);
         // The turn is in flight from here, not from pi's `agent_start`: the
         // composer flips to Stop, the heartbeat polls at 60 Hz, and every
         // `is_running()` gate agrees, so a slow provider (or a pi that is still
         // booting) can never look like a dropped keystroke. `agent_start`
         // re-sets the same flag, and every settle path clears it.
         self.busy = true;
+        self.execution.start();
         // Same for the transcript: the live "Working for…" row goes up now,
         // with its clock running from the send.
         self.transcript.expect_reply();
@@ -434,7 +436,32 @@ impl OrbitApp {
         let Some(client) = self.client.take() else {
             return;
         };
-        let busy = self.busy || self.transcript.is_streaming();
+        let busy = self.busy
+            || self.transcript.is_streaming()
+            || self.retrying
+            || self.is_compacting
+            || self.execution.status().is_in_progress();
+        if busy && !self.execution.status().is_in_progress() {
+            self.execution.start();
+        }
+        if let Some(path) = &self.current_session_path {
+            self.remember_session_outcome(path.clone(), self.execution.status());
+        }
+        let execution = std::mem::take(&mut self.execution);
+        let interaction = ParkedInteraction {
+            dialog: self.dialog.take(),
+            approval: self.approval.take(),
+            ask: self.ask.take(),
+            ask_tool_id: self.ask_tool_id.take(),
+            ask_questions: std::mem::take(&mut self.ask_questions),
+            ask_replay: self.ask_replay.take(),
+        };
+        self.dialog_focus_pending = false;
+        self.approval_focus_pending = false;
+        self.ask_focus_pending = false;
+        self.prompt_in_flight = None;
+        self.retrying = false;
+        self.is_compacting = false;
         let transcript = std::mem::replace(&mut self.transcript, Transcript::new());
         let widgets = std::mem::take(&mut self.extension_widgets);
         let subagents = std::mem::take(&mut self.subagents);
@@ -445,6 +472,9 @@ impl OrbitApp {
             client,
             transcript,
             busy,
+            execution,
+            interaction,
+            retry_detail: self.retry_detail.take(),
             added: self.added,
             removed: self.removed,
             mcp_stamp: self.mcp_stamp,
@@ -715,6 +745,8 @@ impl OrbitApp {
     /// Explorer, the terminal, or Settings is up; without this the fresh task
     /// opens behind a panel that still covers the chat column.
     pub(super) fn close_surfaces_for_new_task(&mut self, cx: &mut Context<Self>) {
+        self.pending_session_rename = None;
+        self.session_rename_ready = false;
         self.settings_open = false;
         self.provider_editor = None;
         self.provider_key_editor = None;
@@ -1072,9 +1104,9 @@ impl OrbitApp {
         cx: &mut Context<Self>,
     ) {
         self.cancel_fork_followup();
-        // Leaving this session: cancel any open blocking dialog first, so a
-        // parked run never waits on a modal tied to the previous session.
-        self.cancel_open_dialog(cx);
+        // Custom terminal surfaces cannot run offscreen; native blocking
+        // requests are parked with their session and restored on return.
+        self.cancel_custom_surfaces(cx);
         // A new task owns the window: drop whatever surface was covering the
         // chat column before the fresh session paints.
         self.close_surfaces_for_new_task(cx);
@@ -1085,9 +1117,11 @@ impl OrbitApp {
         if self.runtime_is_live() {
             self.park_active_session();
         } else {
+            self.cancel_open_dialog(cx);
             self.drop_client();
         }
 
+        self.execution = SessionExecution::default();
         self.busy = false;
         self.transcript.clear();
         self.current_title = None;
@@ -1192,6 +1226,8 @@ impl OrbitApp {
         push: bool,
         cx: &mut Context<Self>,
     ) {
+        self.pending_session_rename = None;
+        self.session_rename_ready = false;
         // Opening a session means viewing the chat: leave whichever full-page
         // surface (GitHub / Usage) was covering the main area. Without this
         // the switch happens out of sight and the page stays up, so clicking
@@ -1206,9 +1242,8 @@ impl OrbitApp {
             return;
         }
         self.cancel_fork_followup();
-        // A blocking dialog belongs to the session being left; cancel it so
-        // the now-parked run can settle instead of waiting on an unseen modal.
-        self.cancel_open_dialog(cx);
+        // Native dialogs and approvals stay pending with their own session.
+        self.cancel_custom_surfaces(cx);
         // ── park the outgoing session (running or idle) ──
         // Its unsent composer text/attachments go with it, keyed to the file.
         self.save_composer_draft(cx);
@@ -1225,6 +1260,25 @@ impl OrbitApp {
         // The queue belongs to the session we just left; the target's state
         // re-establishes it from `get_state`/`queue_update`.
         self.reset_queue();
+        // Interaction state is per-session too. `park_active_session` hands it
+        // to the parked process when there is one; a session with no live
+        // process (or a parked one being dropped as stale) has nothing to hand
+        // over, and leaving its dialog, approval, questionnaire, or retry
+        // bookkeeping in place would show it on the incoming session.
+        self.execution = SessionExecution::default();
+        self.prompt_in_flight = None;
+        self.retrying = false;
+        self.is_compacting = false;
+        self.retry_detail = None;
+        self.dialog = None;
+        self.dialog_focus_pending = false;
+        self.approval = None;
+        self.approval_focus_pending = false;
+        self.ask = None;
+        self.ask_tool_id = None;
+        self.ask_questions.clear();
+        self.ask_replay = None;
+        self.ask_focus_pending = false;
 
         // ── activate the target ──
         // A parked process spawned before the latest MCP configuration change
@@ -1249,6 +1303,33 @@ impl OrbitApp {
             self.turns = parked.turns;
             self.push_turn_records(cx);
             self.busy = parked.busy;
+            self.execution = parked.execution;
+            self.prompt_in_flight = self.execution.prompt_id.clone();
+            self.retrying = self.execution.retrying;
+            self.is_compacting = self.execution.compacting;
+            self.retry_detail = parked.retry_detail;
+            self.dialog = parked.interaction.dialog;
+            self.approval = parked.interaction.approval;
+            self.ask = parked.interaction.ask;
+            self.ask_tool_id = parked.interaction.ask_tool_id;
+            self.ask_questions = parked.interaction.ask_questions;
+            self.ask_replay = parked.interaction.ask_replay;
+            self.dialog_focus_pending = self.dialog.is_some();
+            self.approval_focus_pending = self.approval.is_some();
+            self.approval_highlight = 0;
+            self.ask_focus_pending = self.ask.is_some();
+            // Requests received while parked have no UI entity yet. Reopen
+            // the saved request only when there is no existing surface.
+            if self.dialog.is_none() && self.approval.is_none() && self.ask.is_none() {
+                if let Some(request) = self.execution.pending_request.clone() {
+                    self.handle_extension_ui_request(
+                        request.id,
+                        &request.method,
+                        &request.value,
+                        cx,
+                    );
+                }
+            }
             self.added = parked.added;
             self.removed = parked.removed;
             self.extension_widgets = parked.widgets;
@@ -1282,6 +1363,12 @@ impl OrbitApp {
             self.subagent_scroll_placed = 0;
             self.subagent_list_rows = 0;
             self.clear_subagent_folds();
+            self.execution = SessionExecution::from_status(
+                self.session_outcomes
+                    .get(&session.path)
+                    .copied()
+                    .unwrap_or_default(),
+            );
             self.preview_session_transcript(session.path.clone(), cx);
             if !session.cwd.is_dir() {
                 // The session's workspace is gone (a removed worktree, a
@@ -1730,6 +1817,9 @@ impl OrbitApp {
     /// The command palette's Rename Session: open the details popover (the
     /// header's info control owns the rename field) and put the caret in it.
     pub(super) fn begin_session_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_session_rename.is_some() {
+            return;
+        }
         self.quota_popup_open = false;
         self.session_details_open = true;
         self.seed_session_name_input(cx);
@@ -2037,7 +2127,7 @@ impl OrbitApp {
         // control. `None` (hidden) when pi lacks `quota.*` and no MCP server
         // is configured.
         let mcp_chip = self.mcp_chip_parts(*theme::get(cx));
-        if self.quota.reports().is_empty() && mcp_chip.is_none() {
+        if self.quota.usage_reports(&self.model_provider).is_empty() && mcp_chip.is_none() {
             return None;
         }
         let theme = *theme::get(cx);
@@ -2203,7 +2293,7 @@ impl OrbitApp {
         let theme = *theme::get(cx);
         let this = cx.entity();
 
-        let reports = self.quota.reports();
+        let reports = self.quota.usage_reports(&self.model_provider);
         // The user's hide list only shapes the popover; Settings still shows
         // every connected provider. Split once so the header count and the
         // "Hidden" group agree, and so a hidden provider is one click back.
@@ -2641,7 +2731,7 @@ impl OrbitApp {
         cx: &mut Context<Self>,
     ) {
         // A dismissal from this same click's mouse-down must not
-        // immediately re-open (see `toggle_session_menu`).
+        // immediately re-open (see `toggle_workspace_menu`).
         const GESTURE: Duration = Duration::from_millis(200);
         if let Some(dismissed) = self.menu_dismissed_at.take() {
             if dismissed.elapsed() < GESTURE {
