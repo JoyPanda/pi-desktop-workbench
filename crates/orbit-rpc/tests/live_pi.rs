@@ -39,7 +39,7 @@ fn live_get_state_round_trip() {
 
     let client =
         PiClient::spawn(&repo_root(), Some(Path::new("/tmp/orbit-pi-sessions"))).expect("spawn pi");
-    let rx = client.send(CommandBody::GetState).expect("send get_state");
+    let (_, rx) = client.send(CommandBody::GetState).expect("send get_state");
 
     let deadline = Instant::now() + Duration::from_secs(15);
     let state = loop {

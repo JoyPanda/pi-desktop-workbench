@@ -25,12 +25,12 @@ use std::{
 
 use gpui::{
     anchored, canvas, deferred, div, img, linear_color_stop, linear_gradient, list, point,
-    prelude::*, px, Animation, AnimationExt, AnyElement, App, Bounds, ClipboardItem, CursorStyle,
-    DispatchPhase, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight, GlobalElementId,
-    Hitbox, HitboxBehavior, Hsla, Image, ImageSource, InspectorElementId, InteractiveText,
-    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels,
-    ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle, StyledText, TextAlign,
-    TextLayout, TextRun, TransformationMatrix, UnderlineStyle, Window,
+    prelude::*, px, relative, Animation, AnimationExt, AnyElement, App, Bounds, ClipboardItem,
+    CursorStyle, DispatchPhase, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight,
+    GlobalElementId, Hitbox, HitboxBehavior, Hsla, Image, ImageSource, InspectorElementId,
+    InteractiveText, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ObjectFit, Pixels, ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle,
+    StyledText, TextAlign, TextLayout, TextRun, TransformationMatrix, UnderlineStyle, Window,
 };
 
 use std::ops::Range;
@@ -41,9 +41,10 @@ use serde_json::Value;
 
 use orbit_rpc::MessageUsage;
 
+use crate::agent_call_display::AgentCallDisplay;
 use crate::app::{
-    button_frame, file_badge, file_glyph, icon_button_frame, nerd_font_family, picker_entry,
-    picker_surface, TipExt, BUTTON_GROUP,
+    button_frame, file_badge, file_glyph, file_icon_tile, icon_button_frame, nerd_font_family,
+    picker_entry, picker_surface, OrbitApp, TipExt, BUTTON_GROUP,
 };
 use crate::context_meter::{format_tokens, hit_percent_label};
 use crate::highlight::{self, Token};
@@ -51,8 +52,8 @@ use crate::message_scroller::{self, MessageScrollerState};
 use crate::shimmer::ShimmerText;
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    context_menu, picker, popover, BufferLineHeight, ButtonSize, DynamicSpacing, IconSize, Radius,
-    StyledExt, TextSize, BORDER_WIDTH,
+    button, context_menu, panel, picker, popover, BufferLineHeight, ButtonSize, DynamicSpacing,
+    IconSize, Radius, StyledExt, TextSize, BORDER_WIDTH,
 };
 use crate::theme::{self, Theme, ThemeMode};
 use crate::transcript::{ChatMessage, Step, SummaryRow, ToolCall, ToolFacts};
@@ -177,6 +178,9 @@ pub(crate) struct TranscriptView {
     pub expanded_turns: Rc<RefCell<HashSet<usize>>>,
     pub expanded_files: Rc<RefCell<HashSet<usize>>>,
     pub expanded_activities: ExpandedActivities,
+    /// What an agent call the reader has not toggled should do (Settings →
+    /// Agent). See [`crate::agent_call_display`].
+    pub agent_calls: AgentCallDisplay,
     /// Per-tool detail-card open state, keyed `(message_ix, tool_ix)`.
     pub expanded_tools: ExpandedTools,
     pub copied: Rc<RefCell<HashMap<usize, Instant>>>,
@@ -1012,6 +1016,9 @@ struct RowPaint {
     /// frame; `None` when no Nerd Font is available (extension badges fall
     /// back).
     nerd: Option<SharedString>,
+    /// What an agent call the reader has not toggled should do — the
+    /// Settings → Agent preference (issue #80).
+    agent_calls: AgentCallDisplay,
     live: bool,
     live_elapsed: Option<Duration>,
     /// Live output rate for the streaming row (`None` until meaningful).
@@ -1065,6 +1072,9 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let expanded_turns = view.expanded_turns.clone();
     let expanded_files = view.expanded_files.clone();
     let expanded_activities = view.expanded_activities.clone();
+    // Copy: the mode is a three-way enum, so every row carries its own copy
+    // instead of sharing a cell.
+    let agent_calls = view.agent_calls;
     let expanded_tools = view.expanded_tools.clone();
     let copied = view.copied.clone();
     let copied_sections = view.copied_sections.clone();
@@ -1293,40 +1303,44 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 )
                 .into_any_element();
         }
-        render_row(RowPaint {
-            messages: messages.clone(),
-            text_selection: text_selection.clone(),
-            ix,
-            row_count,
-            theme: *theme::get(cx),
-            nerd: nerd.clone(),
-            live,
-            live_elapsed,
-            live_tps,
-            fold_open,
-            copied: copied_now,
-            suppress_footer: suppress_message_footer(summary_files.is_some(), ix, row_count),
-            expanded_turns: expanded_turns.clone(),
-            expanded_activities: expanded_activities.clone(),
-            copied_at: copied.clone(),
-            scroller: scroller.clone(),
-            expanded_tools: expanded_tools.clone(),
-            copied_sections: copied_sections.clone(),
-            expanded_sections: expanded_sections.clone(),
-            expanded_blocks: expanded_blocks.clone(),
-            thinking_scrolls: thinking_scrolls.clone(),
-            collapsed_thoughts: collapsed_thoughts.clone(),
-            thinking_detached: thinking_detached.clone(),
-            hovered_usage: hovered_usage.clone(),
-            image_opener: image_opener.clone(),
-            search_hit: search_hits
-                .as_ref()
-                .is_some_and(|hits| hits.borrow().contains(&ix)),
-            search_active: search_active
-                .as_ref()
-                .is_some_and(|active| active.get() == Some(ix)),
-            table_breakout,
-        })
+        render_row(
+            RowPaint {
+                messages: messages.clone(),
+                text_selection: text_selection.clone(),
+                ix,
+                row_count,
+                theme: *theme::get(cx),
+                nerd: nerd.clone(),
+                agent_calls,
+                live,
+                live_elapsed,
+                live_tps,
+                fold_open,
+                copied: copied_now,
+                suppress_footer: suppress_message_footer(summary_files.is_some(), ix, row_count),
+                expanded_turns: expanded_turns.clone(),
+                expanded_activities: expanded_activities.clone(),
+                copied_at: copied.clone(),
+                scroller: scroller.clone(),
+                expanded_tools: expanded_tools.clone(),
+                copied_sections: copied_sections.clone(),
+                expanded_sections: expanded_sections.clone(),
+                expanded_blocks: expanded_blocks.clone(),
+                thinking_scrolls: thinking_scrolls.clone(),
+                collapsed_thoughts: collapsed_thoughts.clone(),
+                thinking_detached: thinking_detached.clone(),
+                hovered_usage: hovered_usage.clone(),
+                image_opener: image_opener.clone(),
+                search_hit: search_hits
+                    .as_ref()
+                    .is_some_and(|hits| hits.borrow().contains(&ix)),
+                search_active: search_active
+                    .as_ref()
+                    .is_some_and(|active| active.get() == Some(ix)),
+                table_breakout,
+            },
+            cx,
+        )
         .into_any_element()
     })
     .w_full()
@@ -1743,7 +1757,7 @@ fn snippet(text: &str, max_graphemes: usize) -> String {
     }
 }
 
-fn render_row(paint: RowPaint) -> AnyElement {
+fn render_row(paint: RowPaint, cx: &gpui::App) -> AnyElement {
     let messages = paint.messages.borrow();
     let Some(message) = messages.get(paint.ix) else {
         return div().into_any_element();
@@ -1762,7 +1776,7 @@ fn render_row(paint: RowPaint) -> AnyElement {
     let inner = if let Some(summary) = message.summary.as_ref() {
         render_summary_card(summary, &paint)
     } else if message.user {
-        render_user_bubble(message, &paint).into_any_element()
+        render_user_bubble(message, &paint, cx).into_any_element()
     } else {
         render_assistant(message, &paint).into_any_element()
     };
@@ -1836,9 +1850,9 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
         .items_center()
         .gap(DynamicSpacing::Base08.px(&theme))
         // Square hover fill over a rounded card otherwise; see the tool card.
-        .rounded_t(Radius::XLarge.px(&theme))
+        .rounded_t(panel::RADIUS.px(&theme))
         .when(!expanded, |header| {
-            header.rounded_b(Radius::XLarge.px(&theme))
+            header.rounded_b(panel::RADIUS.px(&theme))
         })
         .cursor_pointer()
         .hover(|style| style.bg(theme.overlay_strong))
@@ -1887,7 +1901,7 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
         .w_full()
         .min_w_0()
         .overflow_hidden()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.overlay)
@@ -1909,6 +1923,7 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
                     paint.copied_sections.clone(),
                     paint.expanded_blocks.clone(),
                     true,
+                    true,
                     paint.scroller.clone(),
                     Some(paint.table_breakout),
                 )),
@@ -1920,10 +1935,19 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
 /// End-aligned user row: neutral raised bubble, persistent quiet
 /// footer below. Attached images render as a tile grid above the text
 /// bubble.
-fn render_user_bubble(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement {
+fn render_user_bubble(message: &ChatMessage, paint: &RowPaint, cx: &gpui::App) -> impl IntoElement {
     let theme = paint.theme;
     let ix = paint.ix;
     let text = message.text();
+    // A prompt that carried files ends with the mention block the composer
+    // folded in. Render that block as file rows — the same tile the composer
+    // tray uses — while the typed prose stays prose. The split is read back
+    // from the text itself, so a session reloaded from pi shows exactly what
+    // the live send showed.
+    let (body, attached) = match OrbitApp::split_attached_files(&text) {
+        Some((body, paths)) => (body, paths),
+        None => (text.as_str(), Vec::new()),
+    };
     div()
         .w_full()
         .min_w_0()
@@ -1950,7 +1974,7 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint) -> impl IntoEleme
                                 (ix as u64) << 20 | image_ix as u64,
                             ))
                             .size(px(112.))
-                            .rounded(Radius::XLarge.px(&theme))
+                            .rounded(panel::RADIUS.px(&theme))
                             .border_1()
                             .border_color(theme.border)
                             .overflow_hidden()
@@ -1972,11 +1996,11 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint) -> impl IntoEleme
                     })),
             )
         })
-        .when(!text.is_empty(), |column| {
+        .when(!body.trim().is_empty(), |column| {
             column.child(
                 div()
                     .max_w(px(USER_BUBBLE_MAX_WIDTH))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .bg(theme.surface_elevated)
                     .text_color(theme.text_primary)
                     .px(DynamicSpacing::Base12.px(&theme))
@@ -1984,16 +2008,34 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint) -> impl IntoEleme
                     .text_size(TextSize::Default.px(&theme))
                     .whitespace_normal()
                     .child(render_prose(
-                        &text,
+                        body,
                         ix,
                         0,
                         theme,
                         paint.copied_sections.clone(),
                         paint.expanded_blocks.clone(),
                         true,
+                        true,
                         paint.scroller.clone(),
                         None,
                     )),
+            )
+        })
+        // The files the prompt referenced, in the order they were folded.
+        .when(!attached.is_empty(), |column| {
+            column.child(
+                div()
+                    .max_w(px(USER_BUBBLE_MAX_WIDTH))
+                    .flex()
+                    .flex_wrap()
+                    .justify_end()
+                    .gap(DynamicSpacing::Base06.px(&theme))
+                    .children(
+                        attached
+                            .iter()
+                            .enumerate()
+                            .map(|(file_ix, path)| user_file_chip(cx, path, ix, file_ix, theme)),
+                    ),
             )
         })
         .child(render_message_footer(
@@ -2011,6 +2053,71 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint) -> impl IntoEleme
             paint.copied_at.clone(),
             paint.hovered_usage.clone(),
         ))
+}
+
+/// One attached file under a sent user message: the same 20px file-type tile
+/// the composer tray uses, beside the path the agent was given. The path is
+/// real selectable text, not decoration — what a reader copies out of the chip
+/// is what pi received.
+fn user_file_chip(
+    cx: &gpui::App,
+    path: &str,
+    ix: usize,
+    file_ix: usize,
+    theme: Theme,
+) -> AnyElement {
+    let key = ElementId::NamedInteger("user-file".into(), (ix as u64) << 16 | file_ix as u64);
+    let scope = text_scope();
+    let range = scope
+        .as_ref()
+        .and_then(|scope| scope.state.borrow().range_for(&key, path));
+    let runs = highlight_runs(
+        vec![code_run(path.len(), theme.text_secondary, &ui_font())],
+        range,
+        selection_color(theme),
+    );
+    div()
+        .debug_selector(move || format!("user-file-{ix}-{file_ix}"))
+        .flex_none()
+        .h(ButtonSize::Medium.height(&theme))
+        // One line box tall, exactly like `button_frame`: a taller inherited
+        // line height centres the box but leaves the glyphs sitting low in it,
+        // which reads as the icon being too high beside the path.
+        .line_height(relative(1.))
+        // Symmetric inset: the icon and the path's trailing edge sit the same
+        // distance from the chip's borders, so the pair reads centred.
+        .px(DynamicSpacing::Base06.px(&theme))
+        .gap(DynamicSpacing::Base06.px(&theme))
+        .rounded(button::radius(ButtonSize::Medium).px(&theme))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.surface_elevated)
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .debug_selector(move || format!("user-file-tile-{ix}-{file_ix}"))
+                .flex_none()
+                .child(file_icon_tile(cx, path, theme.ui_px(20.), theme)),
+        )
+        // A deep path is clipped, never allowed to push the bubble past its
+        // reading column; the full text still rides the selection and copy.
+        .child(
+            div()
+                .debug_selector(move || format!("user-file-text-{ix}-{file_ix}"))
+                .min_w_0()
+                .max_w(px(360.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(SelectableText::new(
+                    key,
+                    StyledText::new(path.to_string()).with_runs(runs),
+                    path.to_string().into(),
+                    Vec::new(),
+                    scope,
+                )),
+        )
+        .into_any_element()
 }
 
 fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement {
@@ -2079,7 +2186,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                     .borrow()
                     .get(&(ix, 0))
                     .copied()
-                    .unwrap_or(group_live);
+                    .unwrap_or_else(|| paint.agent_calls.open_by_default(group_live));
                 let group_has_work = message.steps[..group_end]
                     .iter()
                     .any(|step| !step.thinking.is_empty() || !step.tools.is_empty());
@@ -2092,6 +2199,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                         group_live,
                         theme,
                         paint.nerd.as_ref(),
+                        paint.agent_calls,
                         paint.expanded_activities.clone(),
                         paint.expanded_tools.clone(),
                         paint.copied_sections.clone(),
@@ -2121,6 +2229,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                         theme,
                         paint.copied_sections.clone(),
                         paint.expanded_blocks.clone(),
+                        !paint.live,
                         !paint.live,
                         paint.scroller.clone(),
                         Some(paint.table_breakout),
@@ -2158,7 +2267,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                 .borrow()
                 .get(&(ix, step_ix))
                 .copied()
-                .unwrap_or(group_live);
+                .unwrap_or_else(|| paint.agent_calls.open_by_default(group_live));
             content = content.child(render_activity_group(
                 ix,
                 step_ix..group_end,
@@ -2167,6 +2276,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                 group_live,
                 theme,
                 paint.nerd.as_ref(),
+                paint.agent_calls,
                 paint.expanded_activities.clone(),
                 paint.expanded_tools.clone(),
                 paint.copied_sections.clone(),
@@ -2245,7 +2355,7 @@ fn render_assistant_error(error: &str, ix: usize, theme: Theme) -> AnyElement {
         .bg(theme.error.opacity(0.1))
         .border_1()
         .border_color(theme.error.opacity(0.45))
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .px(DynamicSpacing::Base12.px(&theme))
         .py(DynamicSpacing::Base08.px(&theme))
         .flex()
@@ -2392,6 +2502,7 @@ fn render_activity_group(
     live: bool,
     theme: Theme,
     nerd: Option<&SharedString>,
+    agent_calls: AgentCallDisplay,
     expanded_activities: ExpandedActivities,
     expanded_tools: ExpandedTools,
     copied_sections: CopiedSections,
@@ -2558,6 +2669,11 @@ fn render_activity_group(
                 // earlier call is done and shows its check even while a
                 // later step streams.
                 let pulse = live && flat == last_tool;
+                // An explicit open wins; otherwise the reader's preference
+                // decides (a tool card has no run state of its own, so
+                // `follow_run` means closed — the pre-#80 behavior).
+                let explicit_open = expanded_tools.borrow().contains(&(ix, flat));
+                let tool_open = explicit_open || agent_calls.open_by_default(false);
                 render_activity_card(
                     tool,
                     pulse,
@@ -2565,7 +2681,7 @@ fn render_activity_group(
                     theme,
                     nerd,
                     (ix, flat),
-                    expanded_tools.borrow().contains(&(ix, flat)),
+                    tool_open,
                     expanded_tools.clone(),
                     copied_sections.clone(),
                     expanded_sections.clone(),
@@ -2696,7 +2812,7 @@ fn render_thinking_body(
     };
     let mut card = div()
         .debug_selector(move || format!("thought-card-{}-{}", key.0, key.1))
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.overlay)
@@ -2941,7 +3057,7 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
         .w_full()
         .min_w_0()
         .overflow_hidden()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.overlay)
@@ -3055,7 +3171,7 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                 .px(DynamicSpacing::Base08.px(&theme))
                 .py(DynamicSpacing::Base04.px(&theme))
                 .rounded(Radius::Medium.px(&theme))
-                .when(chosen, |row| row.bg(theme.selection));
+                .when(chosen, |row| row.bg(theme.surface_selected));
             // A plain number keeps the list readable at a glance.
             row = row.child(
                 div()
@@ -3216,7 +3332,7 @@ fn render_activity_card(
         .w_full()
         .min_w_0()
         .overflow_hidden()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.overlay)
@@ -3229,9 +3345,9 @@ fn render_activity_card(
                 .gap(DynamicSpacing::Base08.px(&theme))
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(BufferLineHeight::Standard.relative())
-                .rounded_t(Radius::XLarge.px(&theme))
+                .rounded_t(panel::RADIUS.px(&theme))
                 .when(header_is_only_child, |row| {
-                    row.rounded_b(Radius::XLarge.px(&theme))
+                    row.rounded_b(panel::RADIUS.px(&theme))
                 })
                 .when(has_detail, |row| row.cursor_pointer())
                 .hover(|style| style.bg(theme.overlay_strong))
@@ -3520,7 +3636,7 @@ fn render_tool_error_strip(tool: &ToolCall, round_bottom: bool, theme: Theme) ->
         .border_t_1()
         .border_color(theme.border)
         .bg(theme.error.opacity(0.07))
-        .when(round_bottom, |s| s.rounded_b(Radius::XLarge.px(&theme)))
+        .when(round_bottom, |s| s.rounded_b(panel::RADIUS.px(&theme)))
         .px(DynamicSpacing::Base08.px(&theme))
         .py(DynamicSpacing::Base04.px(&theme))
         .flex()
@@ -3607,7 +3723,7 @@ fn render_tool_detail(
                 .border_color(theme.border)
                 // With no sections below it, the diff is the card's last
                 // child and carries its bottom radius.
-                .when(!has_sections, |d| d.rounded_b(Radius::XLarge.px(&theme)))
+                .when(!has_sections, |d| d.rounded_b(panel::RADIUS.px(&theme)))
                 .child(render_edit_diff(
                     rows,
                     key,
@@ -3631,7 +3747,7 @@ fn render_tool_detail(
             .flex_col()
             // The surface is always the card's last child, so it carries the
             // card's bottom radius (gpui clips children to a rectangle).
-            .rounded_b(Radius::XLarge.px(&theme))
+            .rounded_b(panel::RADIUS.px(&theme))
             // Without a diff above it, the surface owns the rule that
             // separates it from the card header.
             .when(diff.is_none(), |s| {
@@ -6072,6 +6188,7 @@ fn render_prose(
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
+    settled: bool,
     scroller: MessageScrollerState,
     table_breakout: Option<TableBreakout>,
 ) -> impl IntoElement + use<> {
@@ -6122,6 +6239,7 @@ fn render_prose(
                         copied_sections.clone(),
                         expanded_blocks.clone(),
                         collapsible,
+                        settled,
                         scroller.clone(),
                     ))
             })
@@ -6146,6 +6264,7 @@ pub(crate) fn render_markdown_document(text: &str, theme: Theme) -> impl IntoEle
         copied,
         expanded,
         false,
+        true,
         MessageScrollerState::new(1),
         None,
     )
@@ -6183,6 +6302,7 @@ fn render_block(
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
+    settled: bool,
     scroller: MessageScrollerState,
 ) -> AnyElement {
     match block {
@@ -6225,6 +6345,7 @@ fn render_block(
             copied_sections,
             expanded_blocks,
             collapsible,
+            settled,
             scroller,
         )
         .into_any_element(),
@@ -6313,7 +6434,7 @@ fn render_markdown_image(
             // `max_w_full` clamps the width. A definite height (including 0)
             // makes gpui compute the width *from* it instead — 0 × ratio —
             // and the loaded image collapses to nothing.
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.border)
             .object_fit(ObjectFit::Contain)
@@ -6334,7 +6455,7 @@ fn markdown_image_fallback(alt: &str, theme: Theme) -> AnyElement {
     div()
         .px(DynamicSpacing::Base08.px(&theme))
         .py(DynamicSpacing::Base08.px(&theme))
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.overlay)
@@ -6359,7 +6480,7 @@ fn render_alert(
     div()
         .w_full()
         .min_w_0()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .bg(color.opacity(0.08))
         .px(DynamicSpacing::Base12.px(&theme))
         .py(px(10.))
@@ -6544,9 +6665,33 @@ fn render_code_block(
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
+    settled: bool,
     scroller: MessageScrollerState,
-) -> impl IntoElement {
+) -> AnyElement {
     let code = lines.join("\n");
+    // A mermaid fence Orbit can lay out becomes a diagram (D2); one it cannot
+    // — another diagram type, or a statement outside the supported subset —
+    // keeps the source block below, so a fence never reads as a broken preview.
+    // Only once the text settles: a half-streamed fence is not a graph yet, and
+    // laying one out per heartbeat would trade a frame for a flicker.
+    let diagram = if settled {
+        mermaid_diagram(language, &code)
+    } else {
+        None
+    };
+    if let Some(diagram) = diagram {
+        return render_mermaid_block(
+            diagram,
+            lines,
+            ix,
+            salt,
+            block_ix,
+            theme,
+            copied_sections,
+            expanded_blocks,
+            scroller,
+        );
+    }
     let tokens = language
         .and_then(highlight::lang_for_tag)
         .map(|lang| highlight::tokenize_cached(lang, &code));
@@ -6555,41 +6700,7 @@ fn render_code_block(
     // the step/user run it was parsed from, so two steps' third blocks
     // never share copy feedback, element state, or fold state.
     let block_key = salt as usize + block_ix;
-    let copied = copied_sections
-        .borrow()
-        .get(&(ix, block_key, CODE_COPY_SECTION))
-        .is_some_and(|at| at.elapsed() < COPY_FEEDBACK);
-    let copy_button = icon_button_frame(
-        div().id(ElementId::NamedInteger(
-            "copy-code".into(),
-            (ix as u64) << 32 | block_key as u64,
-        )),
-        &theme,
-        CODE_COPY_BUTTON,
-    )
-    .tip(tr!("transcript.copy_code"))
-    .cursor_pointer()
-    .hover(|style| style.bg(theme.overlay_strong))
-    .child(glyph(
-        if copied {
-            "icons/check.svg"
-        } else {
-            "icons/copy.svg"
-        },
-        CODE_COPY_BUTTON.icon_size().px(&theme),
-        if copied {
-            theme.success
-        } else {
-            theme.text_muted
-        },
-    ))
-    .on_click(move |_, _, cx| {
-        cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
-        copied_sections
-            .borrow_mut()
-            .insert((ix, block_key, CODE_COPY_SECTION), Instant::now());
-        cx.refresh_windows();
-    });
+    let copy_button = code_copy_button(ix, block_key, &code, &copied_sections, theme);
     // Title strip: the language name and the copy affordance in one row, so
     // context and action sit in the same place on every code block.
     let header = div()
@@ -6603,7 +6714,7 @@ fn render_code_block(
         .bg(theme.overlay)
         // The title strip is the card's first child; gpui clips children to a
         // rectangle, so the strip carries the card's top radius itself.
-        .rounded_t(Radius::XLarge.px(&theme))
+        .rounded_t(panel::RADIUS.px(&theme))
         .border_b_1()
         .border_color(theme.border)
         .child(
@@ -6632,52 +6743,20 @@ fn render_code_block(
     let mut card = div()
         .w_full()
         .min_w_0()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.code_bg)
         .overflow_hidden()
         .child(header)
-        .child(
-            div()
-                .id(ElementId::NamedInteger(
-                    "code-scroll".into(),
-                    (ix as u64) << 32 | block_key as u64,
-                ))
-                .w_full()
-                .min_w_0()
-                .flex()
-                .items_start()
-                .overflow_x_scroll()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_none()
-                        .px(DynamicSpacing::Base16.px(&theme))
-                        .pt(DynamicSpacing::Base08.px(&theme))
-                        .pb(DynamicSpacing::Base12.px(&theme))
-                        .font_family(theme::code_font_family())
-                        .text_size(theme.code_px(13.))
-                        .line_height(theme.code_px(21.))
-                        .text_color(theme.code_text)
-                        .children(visible.iter().enumerate().map(|(line_ix, line)| {
-                            let line_id = ElementId::NamedInteger(
-                                "code-line".into(),
-                                code_line_id(ix, salt, block_ix, line_ix),
-                            );
-                            code_line(
-                                line,
-                                tokens
-                                    .as_deref()
-                                    .and_then(|lines| lines.get(line_ix))
-                                    .map(Vec::as_slice),
-                                line_id,
-                                theme,
-                            )
-                        })),
-                ),
-        );
+        .child(code_lines_body(
+            visible,
+            tokens.as_deref(),
+            ix,
+            salt,
+            block_ix,
+            theme,
+        ));
 
     if folded {
         let hidden = lines.len() - CODE_PREVIEW_LINES;
@@ -6729,7 +6808,250 @@ fn render_code_block(
         );
     }
 
-    card
+    card.into_any_element()
+}
+
+/// The copy affordance shared by code blocks and diagrams: copies `code` and
+/// flashes a check for [`COPY_FEEDBACK`], keyed by block so two blocks never
+/// share the flash.
+fn code_copy_button(
+    ix: usize,
+    block_key: usize,
+    code: &str,
+    copied_sections: &CopiedSections,
+    theme: Theme,
+) -> AnyElement {
+    let code = code.to_string();
+    let copied_sections = copied_sections.clone();
+    let copied = copied_sections
+        .borrow()
+        .get(&(ix, block_key, CODE_COPY_SECTION))
+        .is_some_and(|at| at.elapsed() < COPY_FEEDBACK);
+    icon_button_frame(
+        div().id(ElementId::NamedInteger(
+            "copy-code".into(),
+            (ix as u64) << 32 | block_key as u64,
+        )),
+        &theme,
+        CODE_COPY_BUTTON,
+    )
+    .tip(tr!("transcript.copy_code"))
+    .cursor_pointer()
+    .hover(|style| style.bg(theme.overlay_strong))
+    .child(glyph(
+        if copied {
+            "icons/check.svg"
+        } else {
+            "icons/copy.svg"
+        },
+        CODE_COPY_BUTTON.icon_size().px(&theme),
+        if copied {
+            theme.success
+        } else {
+            theme.text_muted
+        },
+    ))
+    .on_click(move |_, _, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
+        copied_sections
+            .borrow_mut()
+            .insert((ix, block_key, CODE_COPY_SECTION), Instant::now());
+        cx.refresh_windows();
+    })
+    .into_any_element()
+}
+
+/// One code block's body: syntax-highlighted monospace lines that scroll
+/// horizontally rather than wrapping or clipping. Shared by the code block
+/// and a diagram's source disclosure.
+fn code_lines_body(
+    lines: &[String],
+    tokens: Option<&Vec<Vec<Token>>>,
+    ix: usize,
+    salt: u64,
+    block_ix: usize,
+    theme: Theme,
+) -> impl IntoElement {
+    let block_key = salt as usize + block_ix;
+    div()
+        .id(ElementId::NamedInteger(
+            "code-scroll".into(),
+            (ix as u64) << 32 | block_key as u64,
+        ))
+        .w_full()
+        .min_w_0()
+        .flex()
+        .items_start()
+        .overflow_x_scroll()
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_none()
+                .px(DynamicSpacing::Base16.px(&theme))
+                .pt(DynamicSpacing::Base08.px(&theme))
+                .pb(DynamicSpacing::Base12.px(&theme))
+                .font_family(theme::code_font_family())
+                .text_size(theme.code_px(13.))
+                .line_height(theme.code_px(21.))
+                .text_color(theme.code_text)
+                .children(lines.iter().enumerate().map(|(line_ix, line)| {
+                    let line_id = ElementId::NamedInteger(
+                        "code-line".into(),
+                        code_line_id(ix, salt, block_ix, line_ix),
+                    );
+                    code_line(
+                        line,
+                        tokens
+                            .and_then(|lines| lines.get(line_ix))
+                            .map(Vec::as_slice),
+                        line_id,
+                        theme,
+                    )
+                })),
+        )
+}
+
+/// The laid-out diagram for a fence, or `None` when it is not a mermaid fence
+/// this build can draw.
+fn mermaid_diagram(language: Option<&str>, code: &str) -> Option<Rc<crate::mermaid::Flowchart>> {
+    match language {
+        Some(tag) if tag.eq_ignore_ascii_case("mermaid") => crate::mermaid::diagram(code),
+        _ => None,
+    }
+}
+
+/// A rendered mermaid fence: the diagram on the code block's card, with the
+/// source one click away.
+///
+/// The diagram is the fast path — reading a flow at a glance — but the source
+/// stays a real code block, selectable and copyable, because that is what a
+/// reader takes to their editor. The disclosure reuses the code fold's state:
+/// the two never coexist for one block, so one key covers both.
+#[allow(clippy::too_many_arguments)]
+fn render_mermaid_block(
+    diagram: Rc<crate::mermaid::Flowchart>,
+    lines: &[String],
+    ix: usize,
+    salt: u64,
+    block_ix: usize,
+    theme: Theme,
+    copied_sections: CopiedSections,
+    expanded_blocks: ExpandedBlocks,
+    scroller: MessageScrollerState,
+) -> AnyElement {
+    let code = lines.join("\n");
+    let block_key = salt as usize + block_ix;
+    let showing_source = expanded_blocks.borrow().contains(&(ix, salt, block_ix));
+    let copy_button = code_copy_button(ix, block_key, &code, &copied_sections, theme);
+
+    let header = div()
+        .w_full()
+        .min_w_0()
+        .h(px(34.))
+        .px(DynamicSpacing::Base12.px(&theme))
+        .flex()
+        .items_center()
+        .gap(DynamicSpacing::Base08.px(&theme))
+        .bg(theme.overlay)
+        .rounded_t(panel::RADIUS.px(&theme))
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_size(TextSize::Small.px(&theme))
+                .line_height(theme.ui_px(15.))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text_muted)
+                .child(tr!("transcript_view.mermaid_diagram")),
+        )
+        .child(copy_button);
+
+    let body: AnyElement = if showing_source {
+        let tokens =
+            highlight::lang_for_tag("mermaid").map(|lang| highlight::tokenize_cached(lang, &code));
+        code_lines_body(lines, tokens.as_deref(), ix, salt, block_ix, theme).into_any_element()
+    } else {
+        div()
+            .id(ElementId::NamedInteger(
+                "diagram-scroll".into(),
+                (ix as u64) << 32 | block_key as u64,
+            ))
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_start()
+            .overflow_x_scroll()
+            .child(
+                div()
+                    .flex_none()
+                    .p(DynamicSpacing::Base16.px(&theme))
+                    .child(crate::mermaid::render_diagram(&diagram, theme)),
+            )
+            .into_any_element()
+    };
+
+    let toggle_label = if showing_source {
+        tr!("transcript.show_less")
+    } else {
+        tr!("transcript_view.show_source")
+    };
+    let toggle = div()
+        .id(ElementId::NamedInteger(
+            "diagram-source".into(),
+            (ix as u64) << 32 | block_key as u64,
+        ))
+        .w_full()
+        .min_w_0()
+        .h(px(30.))
+        .px(DynamicSpacing::Base12.px(&theme))
+        .border_t_1()
+        .border_color(theme.border)
+        .flex()
+        .items_center()
+        .gap(DynamicSpacing::Base06.px(&theme))
+        .cursor_pointer()
+        .text_size(TextSize::Small.px(&theme))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_secondary)
+        .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
+        .child(toggle_label)
+        .child(div().flex_1())
+        .child(glyph(
+            if showing_source {
+                "icons/chevron-down.svg"
+            } else {
+                "icons/chevron-right.svg"
+            },
+            IconSize::XSmall.px(&theme),
+            theme.text_muted,
+        ))
+        .on_click(move |_, _, cx| {
+            let key = (ix, salt, block_ix);
+            let mut open = expanded_blocks.borrow_mut();
+            if !open.remove(&key) {
+                open.insert(key);
+            }
+            drop(open);
+            scroller.remeasure_toggle(ix);
+            cx.refresh_windows();
+        });
+
+    div()
+        .w_full()
+        .min_w_0()
+        .rounded(panel::RADIUS.px(&theme))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.code_bg)
+        .overflow_hidden()
+        .child(header)
+        .child(body)
+        .child(toggle)
+        .into_any_element()
 }
 
 /// Display label for a code block's title strip: a friendly language name
@@ -6737,8 +7059,10 @@ fn render_code_block(
 /// `Plain text` for a bare fence.
 fn code_block_label(language: Option<&str>) -> String {
     match language {
-        // D2: no native diagram renderer. A mermaid fence stays a copyable
-        // code block — the label says so instead of pretending to preview.
+        // D2: this is the *fallback* label. A mermaid fence that lays out is
+        // drawn by `render_mermaid_block` and never reaches here; one that does
+        // not keeps its source, and the label says so instead of pretending to
+        // preview.
         Some(tag) if tag.eq_ignore_ascii_case("mermaid") => {
             tr!("transcript_view.mermaid_source")
         }
@@ -6983,7 +7307,7 @@ fn render_table(
         .max_w_full()
         .min_w_0()
         .overflow_hidden()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .child(
@@ -7214,7 +7538,7 @@ pub(crate) fn render_changed_files(
     let mut card = div()
         .w_full()
         .min_w_0()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.background)
@@ -8398,9 +8722,10 @@ mod tests {
 
     #[test]
     fn mermaid_fences_stay_copyable_code_blocks() {
-        // D2: diagrams are never faked. A mermaid fence parses as an ordinary
-        // code block (so it is copyable) and its label is honest about the
-        // missing preview.
+        // D2 revised: a mermaid fence is still parsed as a code block — the
+        // renderer upgrades it to a diagram only when it can lay one out, and
+        // the source stays one click away. The fallback label is honest about
+        // the case where it cannot.
         let blocks = parse_blocks("```mermaid\ngraph TD; A-->B;\n```");
         assert!(matches!(&blocks[0], Block::Code(Some(lang), lines)
                 if lang == "mermaid" && lines == &["graph TD; A-->B;".to_string()]));
@@ -8408,6 +8733,112 @@ mod tests {
             code_block_label(Some("Mermaid")),
             "Mermaid · source (preview unavailable)"
         );
+    }
+
+    #[gpui::test]
+    fn a_mermaid_fence_paints_a_diagram(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+
+        struct DiagramDocView;
+        impl gpui::Render for DiagramDocView {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                div().w(px(360.)).child(render_markdown_document(
+                    "```mermaid\ngraph TD\n  A[Ask] --> B{Ready?}\n  B -->|yes| C[Ship]\n  B -->|no| A\n```",
+                    theme::Theme::for_id(theme::ThemeId::Orbit),
+                ))
+            }
+        }
+
+        let view = cx.update(|_, cx| cx.new(|_| DiagramDocView));
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(420.), px(420.)),
+            move |_, _| view.clone(),
+        );
+        cx.run_until_parked();
+
+        // The drawing gets real bounds: a fallback source block would paint
+        // no diagram at all, and a zero-height element would mean layout
+        // never reached the canvas.
+        let bounds = cx
+            .debug_bounds("mermaid-diagram")
+            .expect("the diagram is painted");
+        assert!(
+            bounds.size.width > px(100.),
+            "width {:?}",
+            bounds.size.width
+        );
+        assert!(
+            bounds.size.height > px(100.),
+            "height {:?}",
+            bounds.size.height
+        );
+    }
+
+    #[gpui::test]
+    fn a_streaming_fence_keeps_its_source_block(cx: &mut gpui::TestAppContext) {
+        // "Once generation is complete": a half-streamed fence is not a graph
+        // yet, and laying one out per heartbeat would trade a frame for a
+        // flicker. The same fence upgrades as soon as the row settles.
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        let settled = Rc::new(Cell::new(false));
+
+        struct StreamingView(Rc<Cell<bool>>);
+        impl gpui::Render for StreamingView {
+            fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+                let theme = theme::Theme::for_id(theme::ThemeId::Orbit);
+                div().w(px(360.)).child(render_code_block(
+                    Some("mermaid"),
+                    &["graph TD".to_string(), "  A --> B".to_string()],
+                    0,
+                    0,
+                    0,
+                    theme,
+                    Rc::new(RefCell::new(HashMap::new())),
+                    Rc::new(RefCell::new(HashSet::new())),
+                    false,
+                    self.0.get(),
+                    MessageScrollerState::new(1),
+                ))
+            }
+        }
+
+        let view = cx.update(|_, cx| cx.new(|_| StreamingView(settled.clone())));
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            let view = view.clone();
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(420.), px(420.)),
+                move |_, _| view.clone(),
+            );
+            cx.run_until_parked();
+        };
+        paint(cx);
+        assert!(
+            cx.debug_bounds("mermaid-diagram").is_none(),
+            "a live row keeps the source block until it settles"
+        );
+
+        settled.set(true);
+        paint(cx);
+        assert!(
+            cx.debug_bounds("mermaid-diagram").is_some(),
+            "the settled row draws the diagram"
+        );
+    }
+
+    #[test]
+    fn mermaid_fences_upgrade_only_when_a_diagram_lays_out() {
+        // The fence tag picks the renderer, not the body: a mermaid fence
+        // Orbit cannot draw keeps its source block, and no other fence ever
+        // becomes a diagram.
+        assert!(mermaid_diagram(Some("mermaid"), "graph TD\n A --> B").is_some());
+        assert!(mermaid_diagram(Some("Mermaid"), "flowchart LR\n A --> B").is_some());
+        assert!(mermaid_diagram(Some("mermaid"), "pie title Pets").is_none());
+        assert!(mermaid_diagram(Some("rust"), "graph TD\n A --> B").is_none());
+        assert!(mermaid_diagram(None, "graph TD\n A --> B").is_none());
     }
 
     #[test]
@@ -9055,6 +9486,7 @@ mod tests {
             turn_started: Rc::new(Cell::new(None)),
             expanded_turns: Rc::new(RefCell::new(HashSet::new())),
             expanded_files: Rc::new(RefCell::new(HashSet::new())),
+            agent_calls: crate::agent_call_display::AgentCallDisplay::FollowRun,
             expanded_activities: Rc::new(RefCell::new(HashMap::new())),
             expanded_tools: Rc::new(RefCell::new(HashSet::new())),
             copied: Rc::new(RefCell::new(HashMap::new())),
@@ -9230,6 +9662,99 @@ mod tests {
         assert!(
             last_after.right() <= px(300.),
             "the last column must be reachable"
+        );
+    }
+
+    /// A prompt sent with attached files ends with the mention block the
+    /// composer folded in. It renders as file chips — the same 20px tile the
+    /// composer tray uses — instead of leaving a raw `@/path` line inside the
+    /// bubble, and because the block is read back out of the message text a
+    /// reloaded session shows the same chips.
+    #[gpui::test]
+    fn attached_files_render_as_chips_in_the_sent_message(cx: &mut gpui::TestAppContext) {
+        struct BubbleView {
+            messages: Rc<RefCell<Vec<ChatMessage>>>,
+            state: TextSelectionState,
+            scroller: MessageScrollerState,
+        }
+
+        impl gpui::Render for BubbleView {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let view = test_view(
+                    self.state.clone(),
+                    self.messages.clone(),
+                    self.scroller.clone(),
+                );
+                render_transcript(view, cx)
+            }
+        }
+
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+        let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![ChatMessage {
+            user: true,
+            summary: None,
+            steps: vec![Step {
+                text: "check the install process\n\n@/Users/someone/Downloads/APP-Install.md"
+                    .into(),
+                ..Step::default()
+            }],
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        }]));
+        let scroller = MessageScrollerState::new(1);
+        let view = cx.update(|_, cx| {
+            cx.new(|_| BubbleView {
+                messages,
+                state,
+                scroller,
+            })
+        });
+        let _ = cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(900.), px(600.)),
+            |_, _| view.clone(),
+        );
+
+        let chip = cx
+            .debug_bounds("user-file-0-0")
+            .expect("the folded mention block renders as a file chip");
+        let tile = cx.debug_bounds("user-file-tile-0-0").expect("file tile");
+        let text = cx.debug_bounds("user-file-text-0-0").expect("path text");
+
+        // The icon and the path share one centreline: a taller inherited line
+        // height used to centre the text's box while its glyphs sat low, making
+        // the tile read as sitting too high.
+        assert_eq!(
+            (tile.origin.y + tile.size.height / 2.).round(),
+            (text.origin.y + text.size.height / 2.).round(),
+            "the file tile and the path are vertically centred on each other"
+        );
+        assert_eq!(
+            (chip.origin.y + chip.size.height / 2.).round(),
+            (tile.origin.y + tile.size.height / 2.).round(),
+            "the tile is centred in the chip"
+        );
+        assert_eq!(tile.size, gpui::size(px(20.), px(20.)), "one tile size");
+        // Equal insets: the icon and the end of the path sit the same distance
+        // from the chip's left and right borders.
+        let left_inset = tile.origin.x - chip.origin.x;
+        let right_inset = (chip.origin.x + chip.size.width) - (text.origin.x + text.size.width);
+        assert!(
+            (left_inset - right_inset).abs() <= px(0.5),
+            "icon inset {left_inset:?} must match the path's {right_inset:?}"
+        );
+        // One 16px line box — the same `line_height(1.)` every button and chip
+        // uses — not the taller default whose extra leading leaves the glyphs
+        // sitting low in the box while the tile stays centred.
+        assert!(
+            text.size.height <= px(16.),
+            "the path renders in one button-height line box, got {:?}",
+            text.size.height
         );
     }
 
@@ -10019,6 +10544,137 @@ mod tests {
                 .iter()
                 .any(|uri| uri.starts_with("https://private-user-images")),
             "the expired signed URL must never be fetched: {requested:?}"
+        );
+    }
+
+    /// Issue #80: an agent call the reader never touched must obey Settings →
+    /// Agent instead of snapping shut when the run settles. `follow_run` is the
+    /// old behavior (open while live, closed once settled); the fixed modes
+    /// ignore the run state, and an explicit toggle still wins over both.
+    #[gpui::test]
+    fn agent_call_display_sets_the_untouched_default(cx: &mut gpui::TestAppContext) {
+        use crate::agent_call_display::AgentCallDisplay;
+
+        struct CallsView {
+            messages: Rc<RefCell<Vec<ChatMessage>>>,
+            state: TextSelectionState,
+            scroller: MessageScrollerState,
+            mode: AgentCallDisplay,
+            live: bool,
+            explicit_open: bool,
+            fold_open: bool,
+        }
+
+        impl gpui::Render for CallsView {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let mut view = test_view(
+                    self.state.clone(),
+                    self.messages.clone(),
+                    self.scroller.clone(),
+                );
+                view.agent_calls = self.mode;
+                if self.explicit_open {
+                    view.expanded_activities.borrow_mut().insert((0, 0), true);
+                }
+                if self.fold_open {
+                    view.expanded_turns.borrow_mut().insert(0);
+                }
+                if self.live {
+                    view.streaming.set(Some(0));
+                }
+                render_transcript(view, cx)
+            }
+        }
+
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+
+        // One turn that has worked but not yet spoken, so the group has work
+        // to fold. No answer text: that is what makes a group "live" — the
+        // run is still inside it.
+        let fixture = || {
+            let messages: Rc<RefCell<Vec<ChatMessage>>> =
+                Rc::new(RefCell::new(vec![ChatMessage {
+                    user: false,
+                    summary: None,
+                    steps: vec![Step {
+                        text: String::new(),
+                        tools: vec![ToolCall {
+                            name: "read_file".into(),
+                            summary: "src/main.rs".into(),
+                            path: Some("src/main.rs".into()),
+                            added: 0,
+                            removed: 0,
+                            id: None,
+                            args: Some(serde_json::json!({"path": "src/main.rs"})),
+                            output: Some("fn main() {}".into()),
+                            failed: false,
+                            facts: Default::default(),
+                        }],
+                        ..Step::default()
+                    }],
+                    images: Vec::new(),
+                    elapsed: None,
+                    finished_at: None,
+                    error: None,
+                    aborted: false,
+                }]));
+            let scroller = MessageScrollerState::new(1);
+            (messages, scroller)
+        };
+
+        // `true` means the activity group painted its body — the only way a
+        // tool card inside it exists at all. `fold_open` opens the settled
+        // turn fold, which is what makes pre-answer work visible once a run
+        // has finished.
+        let group_open = |cx: &mut gpui::VisualTestContext,
+                          mode: AgentCallDisplay,
+                          live: bool,
+                          fold_open: bool,
+                          explicit_open: bool| {
+            let (messages, scroller) = fixture();
+            let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+            let view = cx.update(|_, cx| {
+                cx.new(|_| CallsView {
+                    messages,
+                    state,
+                    scroller,
+                    mode,
+                    live,
+                    explicit_open,
+                    fold_open,
+                })
+            });
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(1200.)),
+                |_, _| view.clone(),
+            );
+            cx.debug_bounds("tool-card-0-0").is_some()
+        };
+
+        // FollowRun keeps the pre-#80 behavior: open while live, shut after.
+        assert!(
+            group_open(cx, AgentCallDisplay::FollowRun, true, false, false),
+            "follow_run opens a live group"
+        );
+        assert!(
+            !group_open(cx, AgentCallDisplay::FollowRun, false, true, false),
+            "follow_run closes a settled group inside an open fold"
+        );
+        // The fixed modes ignore the run state entirely.
+        assert!(
+            group_open(cx, AgentCallDisplay::Expanded, false, true, false),
+            "always expanded keeps a settled group open"
+        );
+        assert!(
+            !group_open(cx, AgentCallDisplay::Collapsed, true, false, false),
+            "always collapsed keeps even a live group closed"
+        );
+        // An explicit toggle wins over both fixed modes.
+        assert!(
+            group_open(cx, AgentCallDisplay::Collapsed, false, true, true),
+            "an explicitly opened group stays open under always collapsed"
         );
     }
 }

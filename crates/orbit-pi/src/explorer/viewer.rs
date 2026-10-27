@@ -30,7 +30,7 @@ use crate::app::{
 use crate::composer::ComposerInput;
 use crate::highlight::{self, Lang, Token};
 use crate::theme::tokens::RaisedExt;
-use crate::theme::tokens::{ButtonSize, DynamicSpacing, IconSize, Radius, TextSize};
+use crate::theme::tokens::{button, ButtonSize, DynamicSpacing, IconSize, Radius, TextSize};
 use crate::theme::{self, Theme, ThemeMode};
 
 /// Files above this are not previewed. Two megabytes is far past any source
@@ -808,7 +808,7 @@ impl FileViewer {
                         .flex()
                         .items_center()
                         .gap(DynamicSpacing::Base06.px(&theme))
-                        .rounded(Radius::Large.px(&theme))
+                        .rounded(button::RADIUS.px(&theme))
                         .cursor_pointer()
                         .text_size(TextSize::Small.px(&theme))
                         .when(active, |el| el.bg(theme.surface_active))

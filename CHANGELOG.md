@@ -7,6 +7,189 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mermaid flowcharts render in the transcript.** A `flowchart`/`graph` fence
+  (TD/TB, BT, LR, RL) now paints as a diagram — nodes, shapes, orthogonal edges,
+  arrowheads, and edge labels — drawn with GPUI paths and text, so there is no
+  webview, no JavaScript, and no network involved. The fence is still a code
+  block underneath: the copy button and a **Show source** disclosure keep the
+  exact Mermaid source selectable, and anything outside the supported subset
+  (sequence/gantt/pie/class diagrams) keeps the existing source block rather
+  than drawing a partial graph. `subgraph … end` groups render as titled frames,
+  and an edge that skips a rank routes around the boxes instead of through them.
+  Layout is cached per fence and interface font, so a streaming run re-renders
+  the same diagram for free.
+- Git page → commit bar → **model chip**: the **Generate** button now chooses its
+  own model instead of always borrowing the chat session's. Commit messages are a
+  short, cheap task, so a small local model is often enough, and a model with a
+  different context window changes how much of a large change set fits the prompt.
+  The chip opens a searchable catalog with each provider's mark, an
+  **Active session model** row that restores the default, and ↑/↓/Enter/Escape
+  navigation; the pick persists to `~/.orbit-pi/commit-model.json`, and the prompt
+  budget is sized from the picked model's own window. Issue and PR draft generation
+  keeps using the session model.
+- **Attachments in the composer** — images, non-image files, and collapsed long
+  pastes now share one tray above the input. Each item is a chip leading with the
+  same 20px slot — the image thumbnail, or the file type's devicons mark — then its
+  name, its size or line count, and its own remove button; the text sits in one
+  `line_height(1.)` box and the chip's insets are symmetric, so the mark and the label
+  share one centreline with balanced edges. The file mark is drawn bare, with no tinted
+  square behind it — a rounded square behind a glyph whose art is itself a box read as
+  an avatar monogram, not a file icon — and it is centred by its *ink* rather than its
+  line box, because glyph artwork is not centred inside its font cell. The type's short
+  label (`MD`, `PDF`, `ZIP`, …) on a tinted square fills the slot when no Nerd Font or
+  no glyph is available; two or more chips add a count header with **Clear**, and all three kinds
+  share one eight-item budget that the send button and the paste/drop paths read
+  through a single predicate. Attaching a file queues it as a chip instead of
+  splicing its path into the middle of the message; on send it folds into the
+  prompt as an `@path` mention (relative to the workspace, backticked when the
+  path has whitespace) so the agent opens it with its own tools. The sent user
+  message reads that block back out of its own text and renders it as the same
+  file chips under the bubble — the path stays selectable — so an attachment no
+  longer appears as a raw `@/Users/…` line, and a reloaded session shows the same
+  chips because the split is derived from the message, not from local state.
+  Re-attaching the same path is a no-op, and a file-only message is sendable.
+- Appearance → **Design system**, an opt-in switch between the existing **Classic**
+  design and the new **Operational** (Restrained Operational Minimalism) system.
+  Operational adds dark and light near-black/neutral palettes with a lime
+  interaction accent, a separate olive selected-row wash, tighter radii, 11px
+  captions, and flatter elevation. The choice is persisted alongside the existing
+  Light/Dark/System preference; switching back restores the previous Classic
+  palette, and every Classic palette and geometry stays unchanged.
+- Settings → Agent → **Agent call details** chooses whether a tool call or
+  activity group you have not opened yourself follows the run (the previous
+  behavior: open while streaming, closed once the turn settles), stays always
+  expanded, or stays always collapsed. Opening or closing one call yourself
+  still wins over the setting, which only moves the default. Persisted to
+  `~/.orbit-pi/agent-calls.json`.
+
+### Changed
+
+- Sidebar project names no longer look like the session titles under them. A
+  group header takes the palette's accent hue at body-ink brightness — a quiet
+  warm cast by default — or, when the project has a mark tint, that hue on its
+  name and not only on its icon. Session titles stay a step below at secondary
+  ink. The three sidebar levels now read as section label, project, session
+  instead of one wall of identically colored rows.
+- Standardized corner radii by component role: buttons and header chips use the
+  button token, text fields and composers use the input token, cards/panels/
+  popovers/dialogs use `panel::RADIUS`, list rows use `list_item::RADIUS`, and
+  badges/checkboxes use the small radius. Fixed the outliers (header controls,
+  the top-bar quota/usage chip, terminal and file-viewer tabs, the Worktrees
+  dismiss button, MCP row action, star-project banner, several alert/preview
+  cards, and the Git commit composer).
+  Operational now gives every standard field and composer one input radius;
+  Classic keeps its legacy composer silhouette.
+
+- The Usage page is now one continuous page instead of a Simple | Details
+  switch: the Daily-activity calendar leads, then the Summary board, Usage
+  over time, Breakdown, and Records read top to bottom in one scroll, with
+  each section's own selector (chart metric, breakdown dimension, records
+  table) inside its card. Summary figures are larger, and the metric the
+  trend is currently plotting is picked out in the accent color on the board,
+  so the click-through from a figure to its chart reads before it is made.
+
+### Removed
+
+- Usage: the trend's duplicate Buckets data table, the Signals notes card,
+  and the Token health panels are gone. Their headline figures live on: cache
+  hit rate is a Summary metric, every metric still plots on the trend chart,
+  and the day/week/month table remains under Records. The JSON export no
+  longer carries the `insights` block.
+
+### Fixed
+
+- The status bar no longer prints extension color codes as literal text. An
+  entry set with `ctx.ui.setStatus()` that styled itself via `ctx.ui.theme.fg()`
+  used to render the raw SGR escape (e.g. `[38;5;71m●[39m`), because the status
+  line drew its string verbatim. It now passes through the same ANSI parser the
+  extension-widget path already uses, so the codes are stripped and the entry
+  reads `● ADHD ON` as intended.
+- The Git page's **Generate** button now writes a commit message that describes
+  what the commit actually records, including long files. Four things were
+  wrong: the prompt always read the index (`git diff --cached`) even when
+  *Include unstaged changes* was on, so most of a worktree commit arrived
+  labelled "context only, not part of this commit" and untracked files arrived
+  as a bare path with no diff at all; ORIGINAL CODE was the first 48 KiB of the
+  HEAD file with no line numbers, so a change deep inside a long file had no
+  surrounding code to read; diffs were capped per file but never in total, so
+  a set of long files overflowed the model's context window and silently
+  became the filename-based fallback; and every body line was rewritten into a
+  `- ` bullet, mangling the headings and footers a long change produces. The
+  prompt now picks its diff source from what the commit will record
+  (synthesizing untracked files' diffs), windows a line-numbered ORIGINAL CODE
+  excerpt around each hunk, sizes the whole prompt from the selected model's
+  context window so a commit of a hundred-plus files still gets a diff for every
+  one of them (and keeps each long diff's first and last hunks), and passes the
+  model's fenced message through verbatim. Regenerating now tells the model
+  about the previous attempt, so it stops repeating the message you rejected,
+  and a fallback is reported in the failure banner instead of being passed off
+  as generated. Set `ORBIT_COMMIT_PROMPT_DUMP=/tmp/prompt.txt` to write the exact
+  prompt the model sees.
+
+- The Usage page's daily-activity calendar no longer lets its hover readout
+  paint over the shade key. Hovering a day in the middle of the grid pushed
+  the readout past the bottom of the calendar, where it covered the "Less /
+  More" legend and the text under it. The readout now sits beside the day
+  under the pointer and is clamped inside the calendar, so the hovered day
+  stays visible and the readout never reaches the legend or the section
+  below.
+
+- A failed command or shortcut no longer leaves Orbit stuck on a banner that
+  never clears and a session that answers nothing. A failed write to pi's stdin
+  used to kill the writer thread for good while the process kept running, so
+  the app still reported it alive and every later command and shortcut went
+  into a pipe nobody read. The dead transport is now reported as an exit, so
+  the reconnect action appears instead of a zombie session, and the app no
+  longer leaves a response waiter behind for a command that never landed.
+- An error banner now clears when the thing that raised it succeeds, decided by
+  the raising command rather than by matching the banner's text. Failures whose
+  wording never matched a command label — a failed write, or a banner raised
+  under one language and read under another — used to stay up indefinitely.
+- Stopping or restarting pi now drops that process's modal dialog, approval
+  bar, queued messages, and retry counter with it; the dialog could never be
+  answered, and its reply would have gone to the process that replaced it.
+- Extension UI left over a dead pi process is dropped with it. A `custom`
+  surface (what a command like `/review` opens) stayed on screen after the
+  process that owned it went away, swallowing keystrokes into a client that
+  could never answer it, and a compaction or title command in flight kept the
+  composer on Stop because `is_compacting` stayed set.
+- Commands pi runs itself no longer leave the app "working" forever. A slash
+  command pi hands to an extension (`/review`) answers `prompt` with
+  `disposition: "handled"` and starts no turn, but the composer had already
+  armed the live "Working for…" row at the send, so the row and the Stop button
+  stayed up with nothing that could ever clear them — cancelling the command's
+  custom UI could not help, because there was no run to settle. Only the
+  composer's own prompt is unwound this way: the title regenerator sends a
+  `prompt` too, and regenerating a title mid-run used to close the live row and
+  the checkpoint turn of the run that was still streaming.
+- Cancelling a run no longer reports it as a failure. pi answers a stopped
+  automatic retry with `auto_retry_end { success: false }`, which the app read as
+  a failed retry and left on screen as a banner; the request itself now decides,
+  so a stop is a stop and an exhausted retry still reports. That applies to the
+  Retry strip's Cancel button as well as to Escape.
+- A pi process that exits mid-session is respawned automatically, so the next
+  command or shortcut lands on a live process instead of a toast saying nothing
+  is running. The respawn is bounded (three consecutive tries, a budget a
+  healthy run refills) and yields to a Start or Stop in the meantime, so a pi
+  that is broken on startup shows the Reconnect banner instead of crash-looping.
+  It also comes back on the session that was open: a fresh launch opens a new
+  one, which would have left the transcript showing a conversation pi no longer
+  had and the next prompt reaching a model with none of it. Restart and
+  Reconnect do the same.
+- A pi process that dies at launch now says why. The banner carries pi's own
+  last stderr line (redacted, clipped to one line) instead of only "pi process
+  exited", which read as a connection problem even when the launcher never
+  connected to anything. The case it was hiding: a bundled `.app` starts with a
+  minimal `PATH`, and pi's `#!/usr/bin/env node` launcher exits with
+  `env: node: No such file or directory` when `node` lives under nvm, fnm,
+  volta, mise, or asdf. The child `PATH` now includes those install dirs (the
+  newest nvm/fnm version, and pi's own managed node), and every spawn that
+  needs node — the RPC session, `pi update`, the MCP probe, the RPC patcher —
+  resolves it from a `.app` launch. Settings → Runtime's stderr panel redacts
+  known MCP secret values before showing the child's lines.
+
 ## [0.2.12] - 2026-10-24
 
 ### Added

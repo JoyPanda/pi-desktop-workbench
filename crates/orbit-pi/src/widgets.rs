@@ -88,6 +88,19 @@ pub fn styled_line(line: &str, theme: &Theme, font: &Font) -> (String, Vec<TextR
     (display, runs)
 }
 
+/// Visible text of `line` with every ANSI sequence removed. Extension text
+/// arrives carrying the SGR `theme.fg` / `bold` codes pi emits; surfaces that
+/// render it as plain text (the status bar) use this so the codes never leak
+/// through as literal characters.
+pub fn strip_ansi(line: &str, theme: &Theme) -> String {
+    let segments = parse_line(line, theme);
+    let mut text = String::with_capacity(line.len());
+    for segment in &segments {
+        text.push_str(&segment.text);
+    }
+    text
+}
+
 impl StyledSegment {
     fn run(&self, theme: &Theme, font: &Font) -> TextRun {
         let mut fg = self.fg.unwrap_or(theme.code_text);
@@ -371,6 +384,20 @@ mod tests {
         assert_eq!(text, "visible");
         let (text, _) = runs("a\x1b_pi:c\x07b");
         assert_eq!(text, "ab");
+    }
+
+    #[test]
+    fn strip_ansi_removes_sgr_and_control_sequences() {
+        let theme = theme();
+        assert_eq!(strip_ansi("plain", &theme), "plain");
+        assert_eq!(
+            strip_ansi(
+                "\x1b[38;5;71m●\x1b[39m \x1b[38;5;75mADHD ON\x1b[39m",
+                &theme
+            ),
+            "● ADHD ON"
+        );
+        assert_eq!(strip_ansi("a\x1b]52;c;YWJj\x07b", &theme), "ab");
     }
 
     #[test]

@@ -26,7 +26,8 @@ use crate::mcp::{
     McpTransport, McpTransportKind,
 };
 use crate::theme::tokens::{
-    input, list_item, modal, ButtonSize, DynamicSpacing, IconSize, Radius, StyledExt, TextSize,
+    button, input, list_item, modal, panel, ButtonSize, DynamicSpacing, IconSize, Radius,
+    StyledExt, TextSize,
 };
 
 /// How long after a configuration change the probe is debounced, so several
@@ -1347,9 +1348,9 @@ impl OrbitApp {
             .flex()
             .items_start()
             .gap(DynamicSpacing::Base16.px(&theme))
-            .when(first, |row| row.rounded_t(Radius::XLarge.px(&theme)))
-            .when(last, |row| row.rounded_b(Radius::XLarge.px(&theme)))
-            .when(selected, |row| row.bg(theme.selection))
+            .when(first, |row| row.rounded_t(panel::RADIUS.px(&theme)))
+            .when(last, |row| row.rounded_b(panel::RADIUS.px(&theme)))
+            .when(selected, |row| row.bg(theme.surface_selected))
             .hover(|row| row.bg(theme.surface_hover))
             .on_mouse_up(MouseButton::Left, {
                 let this = this.clone();
@@ -1699,7 +1700,7 @@ impl OrbitApp {
             .w_full()
             .px(DynamicSpacing::Base16.px(&theme))
             .py(DynamicSpacing::Base12.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.error.opacity(0.35))
             .bg(theme.error.opacity(0.06))
@@ -1731,7 +1732,7 @@ impl OrbitApp {
             .w_full()
             .px(DynamicSpacing::Base16.px(&theme))
             .py(DynamicSpacing::Base12.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.border_strong)
             .bg(theme.surface_secondary)
@@ -1779,7 +1780,7 @@ impl OrbitApp {
             .w_full()
             .px(DynamicSpacing::Base16.px(&theme))
             .py(DynamicSpacing::Base12.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.accent.opacity(0.4))
             .bg(theme.accent.opacity(0.06))
@@ -2088,7 +2089,7 @@ impl OrbitApp {
                     .focus(|style| style.border_color(theme.focus_ring))
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .cursor_pointer()
-                    .when(selected, |row| row.bg(theme.selection))
+                    .when(selected, |row| row.bg(theme.surface_selected))
                     .hover(|row| row.bg(theme.surface_hover))
                     .on_key_down({
                         let this = this.clone();
@@ -2176,7 +2177,7 @@ impl OrbitApp {
                     .focus(|style| style.border_color(theme.focus_ring))
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
                     .cursor_pointer()
-                    .when(selected, |row| row.bg(theme.selection))
+                    .when(selected, |row| row.bg(theme.surface_selected))
                     .hover(|row| row.bg(theme.surface_hover))
                     .on_key_down({
                         let this = this.clone();
@@ -2303,7 +2304,7 @@ impl OrbitApp {
                 div()
                     .px(DynamicSpacing::Base08.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
-                    .rounded(Radius::Large.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .bg(theme.error.opacity(0.1))
                     .text_size(TextSize::Small.px(&theme))
                     .text_color(theme.error)
@@ -3047,7 +3048,7 @@ fn mcp_icon_action(
             .id(ElementId::Name(id.into()))
             .w(px(26.))
             .h(px(26.))
-            .rounded(Radius::Medium.px(&theme))
+            .rounded(button::RADIUS.px(&theme))
             .flex()
             .items_center()
             .justify_center()

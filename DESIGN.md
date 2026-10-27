@@ -125,31 +125,38 @@ components:
 
 Orbit is a workbench, not a website. Every surface is drawn by the GPU through GPUI,
 so the chrome stays flat, honest, and quiet while the data — transcripts, diffs,
-graphs, usage — carries the density. There is one accent (blue) and it is
-rationed: primary actions, selection, focus, the caret, the active series. Everything
-else is ink on canvas at four weights of emphasis.
+graphs, usage — carries the density. There is one accent per design system (blue in
+Classic, lime in Operational) and it is rationed: primary actions, selection, focus,
+the caret, the active series. Everything else is ink on canvas at four weights of
+emphasis.
 
 The system is monochrome-by-default with semantic color reserved for state, so a
-screenshot in any of the ten palettes still reads as Orbit. Depth is delivered by
+screenshot in any of the twelve palettes still reads as Orbit. Depth is delivered by
 hairlines and tonal steps rather than shadows; shadows exist only for surfaces that
 genuinely float above the page (composer, popovers, modals).
 
 **Key Characteristics:**
-- One accent, rationed: blue marks the active thing and nothing else.
+- One accent, rationed: blue (Classic) or lime (Operational) marks the active thing
+  and nothing else.
 - Hairlines over boxes: `border_1` at `theme.border` separates; cards are the exception.
 - Four ink weights: `text_primary` (primary), `text_secondary` (secondary),
   `text_muted` (tertiary/labels), and `text_disabled` (inactive controls).
 - Density with air: 28–34px controls, 6–10px padding, 44px page headers. The
   Appearance panel exposes this as UI, Terminal/Editor font sizes (px), and
   Spacing Density (a global multiplier through `theme.space`).
-- Ten palettes, one grammar: every color is read from `theme::get(cx)`, never
-  hardcoded. Appearance lists the five dark and five light palettes for the mode in
-  effect, so the common choice is never made inside a catalog-sized list.
+- Two design systems, one grammar: **Classic** is the existing blue/ember catalog;
+  **Operational** is an opt-in Restrained Operational Minimalism layer with near-black
+  neutral surfaces and a lime interaction accent. Every color, radius, caption size,
+  and elevation shadow is read from `theme::get(cx)`, never hardcoded.
+- Twelve palettes: Appearance lists only the palettes belonging to the chosen design
+  system and appearance mode, so the common choice is never made inside a
+  catalog-sized list.
 
 ## Colors
 
-A charcoal canvas with a single blue accent; light mode is warm-neutral off-white, not
-white. Alternate palettes keep their own signature hue inside the same grammar.
+Classic is a charcoal canvas with a single blue accent; light mode is warm-neutral
+off-white, not white. Operational is a near-black neutral canvas with a lime interaction
+accent. Alternate palettes keep their own signature hue inside the same grammar.
 
 ### Primary
 - **Accent** (#286CF0 both modes): primary actions, selection accents, focus, links, the
@@ -201,7 +208,7 @@ The composer paints two inline token roles. They are read as content — sibling
 - **`@file`** takes the accent's complement (`mention_file`), so a reference never reads as
   a command.
 
-Both are derived in `Theme`, so all ten palettes stay legible without per-palette tuning.
+Both are derived in `Theme`, so all twelve palettes stay legible without per-palette tuning.
 
 ## Typography
 
@@ -225,16 +232,76 @@ is Latin + punctuation + box-drawing + powerline), so a picked face never
 depends on the OS. The bundled IBM Plex Sans and Lilex faces stay in the list
 under their own names (their gpui aliases are `.ZedSans` / `.ZedMono`).
 
-**The Palette Catalog.** `ThemeId::ALL` ships ten palettes: Orbit's own family plus
-Flexoki. Five are dark (Orbit, Orbit Darker, Orbit Cobalt, Orbit Azure, Flexoki) and five
-are light (Orbit Light, Orbit Azure Light, Orbit Paper, Orbit Contrast, Flexoki Light).
-The blue design is **Orbit Azure** (dark) and **Orbit Azure Light**; the original ember
-palette is simply **Orbit** / **Orbit Light**. Settings → Appearance →
-**Theme** is a single control, not one row per appearance mode: it shows and edits the
-palette currently in effect, listing only the palettes of that mode. `themes_for(mode)`
-is the single ordering the dropdown paints and a click resolves, so a row index always
-maps to the palette it painted. Retired editor themes still load from a saved
-preference: dark keys fall back to Orbit, light keys to Orbit Light.
+**The Palette Catalog.** `ThemeId::ALL` ships twelve palettes: Orbit's own family plus
+Flexoki plus the two Operational palettes. The Classic system keeps five dark (Orbit,
+Orbit Darker, Orbit Cobalt, Orbit Azure, Flexoki) and five light (Orbit Light, Orbit
+Azure Light, Orbit Paper, Orbit Contrast, Flexoki Light) palettes. The blue design is
+**Orbit Azure** (dark) and **Orbit Azure Light**; the original ember palette is simply
+**Orbit** / **Orbit Light**. Settings → Appearance → **Theme** is a single control, not
+one row per appearance mode: it shows and edits the palette currently in effect, listing
+only the palettes of that mode and design system. `themes_for_system(mode, system)` is
+the single ordering the dropdown paints and a click resolves, so a row index always maps
+to the palette it painted. Retired editor themes still load from a saved preference:
+dark keys fall back to Orbit, light keys to Orbit Light.
+
+**The Design-System Switch.** Settings → Appearance → **Design system** chooses
+**Classic** (default) or **Operational**. The choice is persisted separately from each
+system's remembered palette, so switching to Operational and back restores the previous
+Classic palette. `AppearancePrefs::resolve` still honors Light/Dark/System; only the
+`ThemeId` pair changes. Both systems share every component and semantic role; no
+parallel widget tree exists.
+
+### Restrained Operational Minimalism
+
+| Token | Operational dark | Operational light |
+|---|---|---|
+| `background` | `#080A0B` | `#F4F4F1` |
+| `surface` | `#101112` | `#FFFFFF` |
+| `surface_secondary` | `#141618` | `#FAFAF8` |
+| `surface_elevated` | `#181A1D` | `#F7F7F2` |
+| `surface_hover` | `#1B1D20` | `#EEEEEA` |
+| `surface_active` | `#232629` | `#E4E5DF` |
+| `surface_selected` (rows) | `#1B2115` | `#EEF3DF` |
+| `selection` (text) | `#303A4B` | `#E1E9D1` |
+| `border` | `#25272A` | `#E1E2DC` |
+| `border_subtle` | `#1B1D20` | `#ECEDE7` |
+| `text_primary` | `#E6E7E8` | `#171916` |
+| `text_secondary` | `#A2A4A7` | `#50544D` |
+| `text_muted` | `#8A8C90` | `#6A6E66` |
+| `text_disabled` | `#5C5F63` | `#989B93` |
+| `accent` | `#C5F34A` | `#5C791C` |
+| `accent_hover` | `#D4FA6A` | `#4D6716` |
+| `accent_pressed` | `#ACD936` | `#405611` |
+| `accent_fg` | `#171A11` | `#FFFFFF` |
+| `accent_text` | `#C5F34A` | `#4D6716` |
+| `focus_ring` | `#C5F34A` | `#5C791C` |
+| `success` | `#36C979` | `#187847` |
+| `warning` | `#F5A623` | `#94600D` |
+| `error` | `#F0444E` | `#C4313D` |
+| `info` | `#65A4E8` | `#2864A8` |
+
+A few values are deliberately corrected from the first draft for contrast: dark
+`text_muted` is lightened to clear 4.5:1 on elevated panels and selected rows, dark
+`text_secondary` is lifted slightly to clear 4.5:1 on the text-selection wash, and light
+`text_muted` is darkened to clear 4.5:1 on the canvas and selected rows. Operational light's `surface_elevated` is a hair
+off white so the shared light toggle knob stays visible on its off track. The row wash
+is its own `surface_selected` role: Classic sets it equal to `selection`, so existing
+palettes are pixel-identical, while Operational gets the olive-tinted selected row.
+
+Operational also resolves a tighter fixed radius ramp (6px buttons/inputs, 8px
+cards/panels/popovers/dialogs), 11px captions (`TextSize::XSmall`), flat buttons, and one
+restrained shadow layer for popovers/modals. Classic keeps the existing rem-based Zed
+geometry and shadow stack, so the new system cannot drift the current UI.
+
+**Shape roles.** Corner values are chosen by component role, not by call site:
+`button::RADIUS` / `button::radius(size)` for buttons, segmented controls, tabs, and
+header chips; `input::RADIUS` for text fields; `panel::RADIUS` for cards, panels,
+popovers, menus, and dialogs; `list_item::RADIUS` for navigation/list rows; and
+`Radius::Small` for badges, chips, and checkboxes. Large multi-line composers keep
+Classic's 16px silhouette through `input::composer_radius`, but use the standard input
+radius in Operational. Fully round `Radius::Full` is reserved for genuinely circular or
+pill-shaped controls (send/stop actions, toggles, avatars, status dots, meters) and is not
+mixed into the rectangular card/field/button family.
 
 **The Primary-Action Role.** `accent` is a palette's *identity* hue — selection washes,
 focus, tints, and accent-colored text derive from it. A primary button's fill is
@@ -329,7 +396,7 @@ under one grammar — ordered dither, the same Bayer pass the photo setting uses
   vignette, so the screen runs edge to edge and its drift is visible to the frame. It is
   drawn in
   `text_3` at 55% (dark) / 62% (light), so it is paper texture, never a second content
-  layer, and it works in all ten palettes without a per-palette asset.
+  layer, and it works in all twelve palettes without a per-palette asset.
 - **The monogram is screened into that field.** Where the app mark sits — between the
   empty-state column and the composer — the same screen takes over its shape: a coverage
   mask sampled from the shipped `app-icon.png` (never redrawn by hand, so the backdrop
@@ -756,6 +823,23 @@ The composer is a primary work surface.
 - Advanced controls belong behind contextual disclosure when they are not needed. A
   control that disappears keeps a keyboard or palette path — add that path before hiding
   the control, not after.
+- Attachments sit in one tray above the input, one chip per item (image, file, or
+  collapsed paste) with its own always-visible remove button — a chip large enough to
+  read a file name is large enough to delete by accident. The tray names its count and
+  offers one **Clear** action only once it holds more than one chip; a single chip is its
+  own explanation. Every chip leads with the same 20px slot — the image thumbnail, or the
+  file type's devicons mark — so the three kinds line up and a file never reads as a bare or
+  undersized mark. The mark is drawn bare: no tinted square is painted behind it. The chip
+  is already the highlighted surface, and a second rounded square behind a glyph whose art
+  is itself a box reads as an avatar monogram rather than a file icon. Glyph artwork also
+  sits off-centre inside its font cell, so the mark is nudged by its *ink* (the text
+  system's typographic bounds) rather than centred by its line box. When no Nerd Font or no
+  glyph is available the slot carries the type's short label (`MD`, `PDF`, `ZIP`, …) on a
+  tinted square instead, stepped down for longer labels. Chip text sits in one line box at
+  `line_height(1.)`, the same box every button uses, and the chip's insets are symmetric, so
+  the mark and the path share one centreline with balanced edges. Chips are buttons by role (button radius, hairline, elevated surface),
+  never pills, and a chip's hover describes the item while its remove button names the
+  removal.
 
 ## Explorer and File UX
 
@@ -1018,7 +1102,7 @@ performance, and visual restraint make long agent sessions feel natural.
 
 ### Do:
 - **Do** read every color, size, and radius from `theme::get(cx)`; add a role to
-  `Palette` when a new semantic need appears so all ten palettes stay legible.
+  `Palette` when a new semantic need appears so all twelve palettes stay legible.
 - **Do** use hairlines and whitespace to separate sections; reserve rounded bordered
   surfaces for objects that are conceptually singular (composer, metric board, popover).
 - **Do** keep controls at 28px (compact) / 34px (primary) so a 900px-tall window shows

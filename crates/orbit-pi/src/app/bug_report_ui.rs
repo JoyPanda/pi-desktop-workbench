@@ -15,7 +15,7 @@ use super::helpers::*;
 use super::*;
 use crate::git_panel::widgets::action_button;
 use crate::issue_message::ReportKind;
-use crate::theme::tokens::{input, ButtonSize, DynamicSpacing, IconSize, Radius, TextSize};
+use crate::theme::tokens::{input, panel, ButtonSize, DynamicSpacing, IconSize, Radius, TextSize};
 use gpui::ClickEvent;
 
 /// The most screenshots one report may carry.
@@ -112,7 +112,7 @@ impl OrbitApp {
                     .w_full()
                     .px(DynamicSpacing::Base12.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
-                    .rounded(Radius::Large.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .bg(theme.error.opacity(0.10))
                     .text_size(TextSize::Small.px(&theme))
                     .text_color(theme.error)

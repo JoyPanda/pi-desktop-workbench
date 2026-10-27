@@ -1,23 +1,23 @@
 import { Shot } from "@/components/shot";
 import { Story } from "@/components/sections/story";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
-export function NewTask() {
+export async function NewTask({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.newTask");
+
   return (
     <Story
       id="new-task"
-      label="New task"
-      title="Pick a workspace. Describe the task."
-      copy="Choose Plan, Build, or Ask, point Orbit at a workspace, and say what you want. Model, thinking effort, and access mode sit right in the composer — press send and the run begins in a live session."
-      points={[
-        "Plan, Build, or Ask — one toggle before the run starts.",
-        "Workspace picked from your projects, remembered across sessions.",
-        "Access mode, model, and thinking level set beside the composer.",
-      ]}
+      label={t("label")}
+      title={t("title")}
+      copy={t("copy")}
+      points={t.raw("points") as string[]}
       visual={
         <Shot
           src="/screens/new-task.png"
           srcLight="/screens/new-task-light.png"
-          alt="Orbit's New Task page with Plan, Build, and Ask mode toggles, a workspace picker, and the composer below."
+          alt={t("shotAlt")}
           sizes="(max-width: 1024px) 100vw, 560px"
         />
       }

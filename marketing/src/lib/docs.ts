@@ -1,80 +1,45 @@
 /**
  * The docs table of contents. This is the single source of truth for the
- * sidebar, the prev/next pager, and the cards on the `/docs` index — add a
- * page here and link it from `DOCS_NAV`, and it appears everywhere.
+ * sidebar, the prev/next pager, and the cards on the `/docs` index — add a page
+ * here and link it from `DOCS_NAV`, and it appears everywhere.
+ *
+ * Only structure lives here. Every `id` is a key in the `docs.nav` messages
+ * (`<id>` for the label, `<id>Description` for the one-liner), so the sidebar is
+ * translated without duplicating the tree in ten dictionaries.
  */
 export type DocLink = {
-  label: string;
+  id: string;
   href: string;
-  /** One line shown on the docs index cards. */
-  description?: string;
 };
 
 export type DocGroup = {
-  title: string;
+  id: string;
   links: DocLink[];
 };
 
 export const DOCS_NAV: DocGroup[] = [
   {
-    title: "Get started",
+    id: "getStarted",
     links: [
-      {
-        label: "Overview",
-        href: "/docs",
-        description: "What Orbit is, how it works, and where your data lives.",
-      },
-      {
-        label: "Install",
-        href: "/docs/getting-started",
-        description:
-          "Download for your platform, clear the first-run checks, and send a first prompt.",
-      },
+      { id: "overview", href: "/docs" },
+      { id: "install", href: "/docs/getting-started" },
     ],
   },
   {
-    title: "Workbench",
+    id: "workbench",
     links: [
-      {
-        label: "Sessions",
-        href: "/docs/sessions",
-        description:
-          "Projects, sessions, navigation, workflow and access modes, and notifications.",
-      },
-      {
-        label: "Worktrees",
-        href: "/docs/worktrees",
-        description:
-          "Run parallel branches as first-class workspaces, with an optional setup script.",
-      },
-      {
-        label: "MCP servers",
-        href: "/docs/mcp",
-        description:
-          "Manage the Model Context Protocol servers the agent can call, with a local secret store.",
-      },
+      { id: "sessions", href: "/docs/sessions" },
+      { id: "worktrees", href: "/docs/worktrees" },
+      { id: "mcp", href: "/docs/mcp" },
     ],
   },
   {
-    title: "Safeguards",
-    links: [
-      {
-        label: "Access modes",
-        href: "/docs/access-modes",
-        description:
-          "Supervised, Auto-accept edits, and Full access: what runs without asking, and how approvals work.",
-      },
-    ],
+    id: "safeguards",
+    links: [{ id: "accessModes", href: "/docs/access-modes" }],
   },
   {
-    title: "Reference",
-    links: [
-      {
-        label: "Keyboard shortcuts",
-        href: "/docs/shortcuts",
-        description: "Every shortcut, grouped by the surface it works in.",
-      },
-    ],
+    id: "reference",
+    links: [{ id: "shortcuts", href: "/docs/shortcuts" }],
   },
 ];
 

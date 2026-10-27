@@ -43,13 +43,25 @@ than faking a pi-native mode. `--approve` is project trust (a separate concern).
 removed and is not a fallback.
 
 ### D2 — Mermaid diagrams
-**Choice:** code-block fallback first; no diagram rendering in the P0–P3 core. Later, evaluate
-(a) graphviz DOT for flowchart/sequence, or (b) a hidden native WKWebView used solely as a
-**rasterizer** (render → snapshot image → GPU image; the Waku `browser.rs` pattern), or
-(c) a custom GPUI renderer (only if we own enough of the diagram types).
-**Reason:** no good native Rust Mermaid exists; a full custom renderer is 2–3 weeks and still
-won't cover gantt/pie. This is the one accepted feature regression in the migration. Never
-present a diagram that isn't rendered — render a copyable code block instead.
+**Choice (revised):** a **native GPUI renderer for a Mermaid subset** — option (c) below — shipped
+for `flowchart`/`graph` (TD/TB, BT, LR, RL; common node shapes; chained and labelled edges;
+`subgraph` groups drawn as titled frames).
+Everything outside the subset keeps the code-block fallback. Fences are still parsed as ordinary
+code blocks, so the transcript's block model, copy path, and fold state are unchanged; the
+renderer upgrades a fence to a diagram at paint time and offers the source behind a disclosure.
+The original "code-block fallback only" choice and the two alternatives it weighed:
+(a) graphviz DOT for flowchart/sequence and (b) a hidden native WKWebView used solely as a
+**rasterizer** are both **rejected**: (b) reopens the no-webview rule for one feature, and (a)
+trades a large dependency plus a translation step for diagrams whose source the agent already
+wrote in Mermaid.
+**Reason:** no good native Rust Mermaid exists, so the renderer is ours; a full custom renderer is
+2–3 weeks and still won't cover gantt/pie — which is why the subset is explicit and the fallback is
+the default for anything outside it. **Never present a diagram that isn't rendered:** a fence the
+parser does not fully understand (another diagram type, an unparsable statement) falls back to the
+copyable source rather than drawing a partial graph. Layout is
+cached by source + interface font and needs no JS, no webview, and no network.
+**Cost of the subset:** sequence, class, state, gantt, pie, ER, and journey are not drawn yet; each
+is its own parser + layout in `src/mermaid/`.
 
 ### D3 — Rollout: full commit to GPUI (supersedes the original staged plan)
 **Choice (revised):** the web stack (React/Vite/Tauri/Node daemon) was **removed from the repo** and the GPUI app is the only app. The original plan kept both apps alive until chat parity; that was superseded when the web stack was deleted at the user's direction.
@@ -186,7 +198,9 @@ and modals read `DynamicSpacing` / `TextSize` / `Radius` / `ButtonSize`, and it 
 gpui spacing utility left; only bespoke geometry remains (avatar / dot / toggle sizes, fixed
 panel and modal widths). The Usage page and its `chart` / `heatmap` / `table` / `filters` /
 `tooltip` modules are likewise on the token scales for spacing, type, and radius; only their
-chart / table geometry is bespoke. Every single-line input box in the app routes through
+chart / table geometry is bespoke. The page itself is one continuous read — Daily activity
+(the trailing-year calendar), Summary, Usage over time, Breakdown, Records — with each
+section's selector inside its card rather than a page-level Simple | Details switch. Every single-line input box in the app routes through
 `input_field_frame` (or the `input::*` metrics directly, in the extension dialog) — the main
 composer, the file editor, and the inline tree rename are the deliberate exceptions, and each is
 its own component rather than an `InputField`. Every search box in the app shares one look — the
@@ -201,8 +215,10 @@ dialogs — every on-scale `p/px/py/pl/pr/pt/pb/m*/gap(px(N))` site in the app n
 `DynamicSpacing`. What stays px on purpose: 1–2px optical nudges (dot / badge insets), the
 legacy 6–10px rhythm values with no token equivalent (10/14/18/22 — folded into the scale or
 retired by design, pending), and bespoke geometry (widths, heights, icon and dot sizes).
-The palette set is ten: the blue design holds **Orbit Azure** / **Orbit Azure Light** and is the
-appearance default, while **Orbit** / **Orbit Light** carry the original ember identity. Primary
+The palette set is twelve: ten Classic palettes plus the opt-in Operational pair. The blue design
+holds **Orbit Azure** / **Orbit Azure Light** and is the appearance default, while **Orbit** /
+**Orbit Light** carry the original ember identity. **Operational** / **Operational Light** are
+selected by the Design-system control, not by a Classic palette choice. Primary
 buttons fill from a role separate from the identity accent — `action` / `action_hover` /
 `action_pressed` with `action_fg` ink — because the ember palettes key their buttons to a light
 neutral with dark ink while Azure keys them to its accent; `accent` / `accent_hover` /
@@ -275,6 +291,21 @@ Orbit compatible with Git's own metadata format across versions.
 A missing worktree surfaces a notice rather than silently re-pointing a session at the
 main repository.
 
+### D15 — Design systems are an opt-in theme layer, not a fork
+**Choice:** `DesignSystem` (`Classic` / `Operational`) is persisted beside the existing
+Light/Dark/System preference and the remembered Classic palettes. `AppearancePrefs::resolve`
+selects a `ThemeId` from the chosen system; every component continues to read the same
+`Theme` semantic roles and token resolvers. Operational supplies its own palette, a
+separate `surface_selected` row wash, a fixed tighter radius ramp, 11px captions, and flatter
+elevation. Classic keeps the existing palettes, geometry, and shadow stack.
+**Rationale:** a second widget tree or parallel CSS-like layer would duplicate every surface
+and drift. A design-system-aware layer behind the existing semantic tokens gives the new
+visual language app-wide reach while leaving the current design pixel-identical.
+**Consequence:** new visual rules go through `Theme` / `theme/tokens.rs` and must branch on
+`DesignSystem` only when Classic's values must remain unchanged. New palettes join
+`ThemeId::ALL` and the palette-invariant tests; the Appearance Theme dropdown filters the
+catalog with `themes_for_system`, and the Design-system control is the normal way to switch.
+
 ## The feature parity contract
 
 Everything below must behave identically in the GPUI app (against the pi CLI) as it does in the
@@ -285,19 +316,20 @@ legacy app today:
 3. Model catalog from pi's own list; thinking levels per model
 4. Tool activity (bash, edit, todo, plan, search, mcp, thinking, question) + approval dialogs
 5. Git diff panel + file-change blocks
-6. Workbench pages — usage (charts + activity heatmap), skills, plugins, models, providers
+6. Workbench pages — usage (activity calendar + KPI board + trend chart + breakdowns +
+   record tables), skills, plugins, models, providers
    (CRUD + OAuth/quota), settings; Explorer + Files editor, integrated terminal, Git/GitHub,
    and the in-app updater with Version History
 7. Markdown — GFM, syntax-highlighted code, copy-able code blocks, image lightbox
 8. Theming — dark/light palettes, accent, font, density, reduce-motion. Persisted to **Orbit's own store** (`~/.orbit-pi/{theme,ui.json,fonts.json}`), not pi's settings: theme/UI state is Orbit's, and writing it into pi's config would fork pi's own source of truth. (Revised from "persisted to pi's settings".)
-9. Attachments — images for prompts, compressed at ingest (1400 px longest edge, 512 KiB base64, JPEG quality 75; alpha images become lossless WebP) so a large screenshot never rides the session history at full size
+9. Attachments — images for prompts, compressed at ingest (1400 px longest edge, 512 KiB base64, JPEG quality 75; alpha images become lossless WebP) so a large screenshot never rides the session history at full size; non-image files ride as `@path` mentions the agent opens with its tools, held as chips in one tray beside the images and pastes
 10. macOS native expectations — traffic lights, a native menu bar (Orbit/File/Edit/View, rebuilt
     on language change), native dialogs, keyboard operability. Orbit's actions are also exposed
     as keyboard/mouse surfaces (⌘P palette, shortcuts), not only through menus.
 
 ### Implementation status (living)
 
-Done: streaming transcript + virtualization; markdown + highlighting; composer with steering, follow-ups, cancel, autocomplete, attachments; extension dialogs; diff/Review + Git page + GitHub issues/PRs (where `gh` is available); sessions (list/switch/new/delete/clone/cross-workspace) over an Orbit-owned project list (only folders the user added; removing one never touches pi) whose groups sort by activity, added date, name, or session count, with a **warm process pool** so re-opening a recent session is a resume, not a Node spawn; Git worktrees as first-class workspaces (`worktree.rs` + the Worktrees page: discovery, create from a new/existing branch, open/rename/move/lock/remove/prune/repair, configurable `.wt` root, optional async setup script with `ORBIT_ROOT_PATH`/`ORBIT_WORKTREE_PATH`, sessions rooted in and restored to the worktree — D14); Explorer project panel + editable Files surface; integrated terminal (⌘J); usage, skills, plugins, models, providers, settings pages; transcript find; image lightbox; theming (dark/light/system, ten palettes) + reduce-motion; localization (ten locales + System, D9); in-app signed updater + Version History; notifications; open-in-editor; signed/notarizable macOS packaging + best-effort Windows/Linux bundles (D5); CI; access modes (a guard, not a sandbox), workflow modes (Plan/Build/Ask per D8), and the auto-title / quota extension bridges (D10); Zed design tokens (D11) with context menus, the tooltip, the extension dialog, the floating modal cards (provider usage / API-key / editor, update dialog, custom UI), the sidebar session / workspace rows, the transcript's message / card chrome, the settings section / group / row chrome, UI type on `TextSize` across every surface, corner radii on `Radius`, and one-shot motion on `AnimationDuration` migrated onto them.
+Done: streaming transcript + virtualization; markdown + highlighting; composer with steering, follow-ups, cancel, autocomplete, attachments; extension dialogs; diff/Review + Git page + GitHub issues/PRs (where `gh` is available); sessions (list/switch/new/delete/clone/cross-workspace) over an Orbit-owned project list (only folders the user added; removing one never touches pi) whose groups sort by activity, added date, name, or session count, with a **warm process pool** so re-opening a recent session is a resume, not a Node spawn; Git worktrees as first-class workspaces (`worktree.rs` + the Worktrees page: discovery, create from a new/existing branch, open/rename/move/lock/remove/prune/repair, configurable `.wt` root, optional async setup script with `ORBIT_ROOT_PATH`/`ORBIT_WORKTREE_PATH`, sessions rooted in and restored to the worktree — D14); Explorer project panel + editable Files surface; integrated terminal (⌘J); usage, skills, plugins, models, providers, settings pages; transcript find; image lightbox; theming (dark/light/system, ten Classic palettes plus an opt-in Operational pair) + reduce-motion; localization (ten locales + System, D9); in-app signed updater + Version History; notifications; open-in-editor; signed/notarizable macOS packaging + best-effort Windows/Linux bundles (D5); CI; access modes (a guard, not a sandbox), workflow modes (Plan/Build/Ask per D8), and the auto-title / quota extension bridges (D10); Zed design tokens (D11) with context menus, the tooltip, the extension dialog, the floating modal cards (provider usage / API-key / editor, update dialog, custom UI), the sidebar session / workspace rows, the transcript's message / card chrome, the settings section / group / row chrome, UI type on `TextSize` across every surface, corner radii on `Radius`, and one-shot motion on `AnimationDuration` migrated onto them.
 
 Attached images are compressed when they are queued (`attachments.rs`): the
 longest edge is capped at 1400 px (never upscaled), opaque images are re-encoded
@@ -306,6 +338,24 @@ images with transparency become lossless WebP. Images already under both caps pa
 through untouched, and animated GIFs pass through so their frames survive. The
 composer chip and bug-report screenshots both read the compressed bytes, and the
 status line reports the before/after size when an image shrank.
+
+The composer holds every queued item in one attachment tray (`attachments_row` in
+`app/composer_ops.rs`): images, non-image files, and collapsed long pastes are the
+same chip — a leading 20px slot (image thumbnail, or the file type's devicons mark drawn
+bare, with no tinted square behind it, and centred by the glyph's ink because icon artwork
+is not centred in its font cell; the type's short label on a tinted square fills the slot
+when no Nerd Font is available), the name, one secondary fact (size or line count), and an
+always-visible remove button — and a tray of two or more grows a
+count header with a **Clear** action. Files do not ride the wire as bytes, because
+pi's `prompt` payload carries text and images only; they fold into the prompt text on
+send as `@path` mentions (`fold_attached_files` in `app/session.rs`), workspace-relative
+when possible and backticked when the path contains whitespace, so the agent opens
+them with its own tools. The sent user message reads that block back out of its own
+text (`split_attached_files`) and renders it as the same chips under the bubble, which
+is why a reloaded session shows the same thing as the live send — the presentation is
+derived from the message, not from local-only metadata. All three kinds share the
+eight-item `MAX_ATTACHMENTS` budget, which the composer's send button, the drain paths,
+and the pickers all read through one predicate.
 
 Session metadata is cached per file (`sessions.rs`) keyed on the file's
 `(mtime, length)`, so a turn settle or watcher reload re-reads only the session
@@ -335,6 +385,17 @@ for scanning — labels collapse to `+N`, every row ends in a fixed relative-tim
 the PR list drops its duplicated state pill — and the PR detail now shares the issue
 detail's reading-column + metadata-rail layout (review, checks, changes, branches,
 timeline).
+
+The commit bar's **Generate** button has its own model picker (`commit_model.rs` +
+the chip beside Generate). Commit messages are a short, cheap task, so they do not
+have to run on the session model; the chip opens a searchable catalog with each
+provider's mark, and its first row always restores **Active session model**. The pick
+persists to `~/.orbit-pi/commit-model.json` (Orbit-owned, like the auto-title slot) and
+the commit prompt is then sized from the picked model's own context window, so a small
+local model gets a smaller diff budget instead of an overflowing prompt. The provider
+and model id are passed straight to the one-shot `pi -p` call, so a custom provider
+that pi resolves through an extension still works even when its catalog entry has not
+arrived; issue/PR drafts keep using the session model.
 
 The in-app bug report (Settings → Report a bug) picks an issue type (bug /
 feature / other, which sets the GitHub label and the generated section
@@ -390,6 +451,25 @@ re-reads `get_messages` so the live chat adopts pi's compacted projection
 (summary + kept entries) instead of holding the pre-compaction history until
 the session is reopened.
 
+Agent call details — an activity group or a tool card the reader has not opened
+themselves — default to following the run: open while the turn streams, closed
+once it settles. Settings → Agent → Agent call details can pin them always
+expanded or always collapsed instead. The mode is a global Orbit UI preference
+(`~/.orbit-pi/agent-calls.json`, `agent_call_display.rs`), not a pi setting; an
+explicit per-group or per-call toggle always wins, so the setting only moves the
+default and never fights the reader.
+
+The sessions sidebar reads as three levels, not one: the "Projects" section
+label in muted 12px, a project group header in the accent's hue at body-ink
+brightness — or in the project's own mark tint, when the user picked one — and
+session titles a step below at secondary. Before this a header and the rows
+under it shared the same ink at the same size, so a long list of projects and
+sessions was a wall of identically colored lines. Project names keep the body
+ink's lightness and vary only in hue and saturation (`workspace_mark::label_ink`,
+`name_ink`): that is what keeps a tinted name above the AA floor in every
+palette, since several curated tints are fill/glyph colors too dark to read as
+text. A tint the palette collapsed onto body ink falls back to the default hue.
+
 The keyboard layer is command-registry driven (`commands.rs`, D13): every app
 command declares its chord once, and the command palette, Settings →
 Shortcuts, and tooltips all render from that table. The palette gained session
@@ -432,7 +512,7 @@ the product; the per-item detail lives in AGENT.md.
 | P2 | Data layer: serde models, sessions/catalog/workbench clients | ✅ Shipped |
 | P3 | Core chat: transcript, streaming, markdown, composer, tools, diff | ✅ Shipped (stream veil + explicit ≤8.3 Hz pipeline open) |
 | P4 | Workbench pages + settings persistence | ✅ Shipped (plus Explorer/Files, terminal, Git/GitHub, localization, updater) |
-| P5 | Mermaid fallback + a11y | ◐ Mermaid code-block fallback + reduce-motion shipped; app-wide focus rings + screen-reader labeling open |
+| P5 | Mermaid + a11y | ◐ Native flowchart rendering + code-block fallback for the rest + reduce-motion shipped; other diagram types, app-wide focus rings, screen-reader labeling open |
 | P6 | Tests, perf harness, packaging/notarization, CI | ◐ Unit/live tests, 10k perf test, signed `.app`/DMG, CI shipped; on-device scroll benchmark + streaming edge coverage open |
 
 Open backlog (detail in AGENT.md): conversation fork/rewind, on-device scroll-perf measurement,
@@ -448,7 +528,8 @@ per-tool renderers, Windows/Linux native polish.
 3. **Composer editor** — *resolved:* the multi-line `ComposerInput` (`EntityInputHandler`) has
    shipped, wrapping, auto-growing, and scrolling. Reuse it for new text controls rather than
    introducing another editor abstraction.
-4. **Mermaid regression** — accepted; D2 path chosen, fallback never fakes.
+4. **Mermaid coverage** — a native renderer covers flowcharts only; every other diagram type
+   keeps the honest code-block fallback (D2), so no fence ever draws a partial graph.
 5. **GPUI churn** — pinned 0.2.2 (D4); upgrade = its own task with the registry source as docs.
 6. **Velocity** — Rust UI iteration is 3–5× slower than React hot-reload; the estimates assume
    this, not hope.

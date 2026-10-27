@@ -1203,7 +1203,7 @@ fn scope_chip(
         })
         .raised(
             if active {
-                theme.selection
+                theme.surface_selected
             } else {
                 theme.surface_elevated
             },
@@ -1514,8 +1514,10 @@ fn render_row(
         })
         // Keyboard/hover cursor and the chosen option are separate
         // states: the cursor is a wash, the choice keeps the fill.
-        .when(highlighted, |row| row.bg(theme.selection))
-        .when(!highlighted && selected, |row| row.bg(theme.selection))
+        .when(highlighted, |row| row.bg(theme.surface_selected))
+        .when(!highlighted && selected, |row| {
+            row.bg(theme.surface_selected)
+        })
         .when(!highlighted && !selected, |row| {
             row.hover(|style| style.bg(theme.surface_hover))
         })

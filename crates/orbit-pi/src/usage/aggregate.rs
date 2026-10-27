@@ -544,15 +544,6 @@ pub struct CacheStats {
     pub requests_with_cache_data: u64,
 }
 
-impl CacheStats {
-    /// Whether the underlying data supports cache analytics at all. A provider
-    /// with no cache semantics reports zeros on every request; the page then
-    /// says so instead of computing a 0% hit rate.
-    pub fn is_available(&self) -> bool {
-        self.cache_read > 0 || self.cache_write > 0
-    }
-}
-
 #[derive(Clone, PartialEq, Debug)]
 pub struct ToolRow {
     pub tool: u16,
@@ -698,29 +689,12 @@ pub struct ErrorStats {
 
 /// The informative half of a workspace path: its parent directory, with the
 /// home directory shortened to `~`.
-fn parent_hint(path: &str) -> String {
+pub(super) fn parent_hint(path: &str) -> String {
     let parent = std::path::Path::new(path)
         .parent()
         .map(|parent| parent.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string());
     super::format::short_path(&parent)
-}
-
-// ── insights ───────────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Tone {
-    Neutral,
-    Positive,
-    Warning,
-}
-
-/// One derived sentence. Every insight cites a real measurement; none is
-/// generated when the finding is weak (§70/§71: no manufactured conclusions).
-#[derive(Clone, PartialEq, Debug)]
-pub struct Insight {
-    pub text: String,
-    pub tone: Tone,
 }
 
 // ── the snapshot ───────────────────────────────────────────────────────────
@@ -748,7 +722,6 @@ pub struct UsageSnapshot {
     pub tools: ToolStats,
     pub latency: LatencyStats,
     pub errors: ErrorStats,
-    pub insights: Vec<Insight>,
     /// Requests inside the date range before non-date filters apply — tells
     /// "no data yet" apart from "nothing matches these filters".
     pub requests_in_range: u64,
@@ -1122,12 +1095,10 @@ impl UsageSnapshot {
             },
             latency,
             errors,
-            insights: Vec::new(),
             requests_in_range,
         };
         snapshot.tools.calls = snapshot.summary.tool_runs;
         snapshot.tools.errors = snapshot.summary.tool_errors;
-        snapshot.insights = derive_insights(&snapshot, index);
         snapshot
     }
 
@@ -1219,198 +1190,4 @@ fn breakdown(
         .sort_by(|a, b| sorted_by_total(&a.totals, &b.totals, &a.label, &b.label, a.id, b.id));
     breakdown.finish();
     breakdown
-}
-
-// ── insights ───────────────────────────────────────────────────────────────
-
-/// Thresholds that keep the insight strip quiet: a finding has to be real
-/// before it is printed.
-const INSIGHT_MIN_PCT: f64 = 10.0;
-/// Below this much traffic, "X dominates" is noise rather than a finding.
-const INSIGHT_MIN_REQUESTS: u64 = 20;
-const INSIGHT_MIN_CACHE_POINTS: f64 = 3.0;
-const INSIGHT_MIN_SHARE: f64 = 20.0;
-const INSIGHT_ANOMALY_FACTOR: f64 = 2.0;
-
-fn derive_insights(snapshot: &UsageSnapshot, index: &UsageIndex) -> Vec<Insight> {
-    let mut out: Vec<Insight> = Vec::new();
-    if snapshot.summary.totals.requests == 0 {
-        return out;
-    }
-    let range_name = snapshot.filter.range.label();
-
-    // Volume change against the previous window.
-    if let Some(previous) = &snapshot.previous {
-        let current = snapshot.summary.totals.tokens.total as f64;
-        let before = previous.totals.tokens.total as f64;
-        let delta = MetricDelta::between(current, before);
-        if before > 0.0 {
-            if let Some(pct) = delta.pct {
-                if pct.abs() >= INSIGHT_MIN_PCT {
-                    let verb = if pct > 0.0 {
-                        tr!("usage.insight_up")
-                    } else {
-                        tr!("usage.insight_down")
-                    };
-                    out.push(Insight {
-                        text: tr!(
-                            "usage.insight_token_delta",
-                            verb = verb,
-                            pct = format!("{:.0}", pct.abs()),
-                            now = super::format::compact_tokens(current as u64),
-                            before = super::format::compact_tokens(before as u64),
-                        ),
-                        tone: Tone::Neutral,
-                    });
-                }
-            }
-        }
-    }
-
-    // Dominant model — only once there is enough traffic for the share to
-    // mean something, and only when more than one model was actually used.
-    if snapshot.summary.totals.requests >= INSIGHT_MIN_REQUESTS {
-        if let Some(top) = snapshot.models.rows.first() {
-            if snapshot.models.rows.len() > 1 && top.share * 100.0 >= INSIGHT_MIN_SHARE {
-                out.push(Insight {
-                    text: tr!(
-                        "usage.insight_top_model",
-                        model = top.label,
-                        share = format!("{:.0}", top.share * 100.0),
-                        tokens = super::format::compact_tokens(top.totals.tokens.total),
-                        requests = super::format::count(top.totals.requests),
-                    ),
-                    tone: Tone::Neutral,
-                });
-            }
-        }
-    }
-
-    // Cache movement, where the data supports it.
-    if snapshot.cache.is_available() {
-        if let Some(previous) = &snapshot.previous {
-            if let (Some(now), Some(before)) =
-                (snapshot.cache.hit_rate, previous.totals.cache_hit_rate())
-            {
-                let change = now - before;
-                if change.abs() >= INSIGHT_MIN_CACHE_POINTS {
-                    out.push(Insight {
-                        text: tr!(
-                            "usage.insight_cache_hit",
-                            verb = if change > 0.0 {
-                                tr!("usage.insight_improved")
-                            } else {
-                                tr!("usage.insight_fell")
-                            },
-                            before = format!("{:.0}", before),
-                            now = format!("{:.0}", now),
-                        ),
-                        tone: if change > 0.0 {
-                            Tone::Positive
-                        } else {
-                            Tone::Warning
-                        },
-                    });
-                }
-            }
-        }
-    }
-
-    // Heaviest workspace.
-    if let Some(top) = snapshot.workspaces.rows.first() {
-        if snapshot.workspaces.rows.len() > 1 && top.share * 100.0 >= INSIGHT_MIN_SHARE {
-            out.push(Insight {
-                text: tr!(
-                    "usage.insight_top_workspace",
-                    workspace = top.label,
-                    tokens = super::format::compact_tokens(top.totals.tokens.total),
-                    share = format!("{:.0}", top.share * 100.0)
-                ),
-                tone: Tone::Neutral,
-            });
-        }
-    }
-
-    // Busiest bucket, only when it is a genuine outlier.
-    let values: Vec<(i64, u64)> = snapshot
-        .buckets
-        .rows
-        .iter()
-        .filter(|row| row.totals.tokens.total > 0)
-        .map(|row| (row.start_ms, row.totals.tokens.total))
-        .collect();
-    if values.len() >= 5 {
-        let mean = values.iter().map(|(_, v)| *v as f64).sum::<f64>() / values.len() as f64;
-        if let Some((start, peak)) = values.iter().max_by_key(|(_, v)| *v) {
-            if mean > 0.0 && *peak as f64 >= mean * INSIGHT_ANOMALY_FACTOR {
-                out.push(Insight {
-                    text: tr!(
-                        "usage.insight_peak_bucket",
-                        bucket = bucket_label(*start, snapshot.buckets.granularity),
-                        factor = format!("{:.1}", *peak as f64 / mean),
-                        metric = snapshot.buckets.granularity.label()
-                    ),
-                    tone: Tone::Warning,
-                });
-            }
-        }
-    }
-
-    // Failures, when they are concentrated rather than incidental.
-    if snapshot.summary.totals.errors > 0 {
-        if let Some(rate) = snapshot.summary.totals.error_rate() {
-            if rate >= 1.0 {
-                out.push(Insight {
-                    text: tr!(
-                        "usage.insight_failures",
-                        failed = super::format::count(snapshot.summary.totals.errors),
-                        total = super::format::count(snapshot.summary.totals.requests),
-                        rate = format!("{:.1}", rate)
-                    ),
-                    tone: Tone::Warning,
-                });
-            }
-        }
-    }
-
-    // Latency movement, when the sample is big enough to mean something.
-    if snapshot.latency.has_percentiles() {
-        if let Some(previous) = &snapshot.previous {
-            if previous.totals.duration_samples >= LatencyStats::MIN_SAMPLES {
-                let now = snapshot.latency.avg_ms;
-                let before = previous.totals.avg_duration_ms().unwrap_or(0.0);
-                if before > 0.0 && (now - before).abs() / before * 100.0 >= INSIGHT_MIN_PCT {
-                    out.push(Insight {
-                        text: tr!(
-                            "usage.insight_latency",
-                            before = super::format::duration_ms(before),
-                            now = super::format::duration_ms(now),
-                            requests =
-                                super::format::count(snapshot.summary.totals.duration_samples)
-                        ),
-                        tone: Tone::Neutral,
-                    });
-                }
-            }
-        }
-    }
-
-    // How much of the store this window covers — orients the user when a
-    // narrow range is showing.
-    if let Some((_oldest, _newest)) = index.span() {
-        if range_name == RangePreset::All.as_str() && snapshot.summary.sessions > 0 {
-            out.push(Insight {
-                text: tr!(
-                    "usage.insight_all_time",
-                    sessions = super::format::count(snapshot.summary.sessions),
-                    requests = super::format::count(snapshot.summary.totals.requests)
-                ),
-                tone: Tone::Neutral,
-            });
-        }
-    }
-
-    // Keep the strip quiet: four lines at most.
-    out.truncate(4);
-    out
 }

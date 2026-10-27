@@ -32,7 +32,7 @@ use crate::git;
 use crate::platform;
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    context_menu, input, ButtonSize, DynamicSpacing, IconSize, Radius, StyledExt, TextSize,
+    context_menu, input, panel, ButtonSize, DynamicSpacing, IconSize, Radius, StyledExt, TextSize,
 };
 use crate::theme::{self, Theme, ThemeMode};
 
@@ -1096,7 +1096,7 @@ impl ProjectPanel {
                 .cursor_pointer()
                 // Selected (open in the viewer) wins; the keyboard cursor is a
                 // quieter wash; pointer hover is the lightest step.
-                .when(active, |el| el.bg(theme.selection))
+                .when(active, |el| el.bg(theme.surface_selected))
                 .when(!active && cursor, |el| el.bg(theme.overlay))
                 .when(!active && !cursor, |el| {
                     el.hover(|el| el.bg(theme.surface_hover))
@@ -1658,7 +1658,7 @@ impl Render for ProjectPanel {
                     .bg(theme.surface)
                     .border_1()
                     .border_color(theme.border)
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .overflow_hidden()
                     .flex()
                     .flex_col()

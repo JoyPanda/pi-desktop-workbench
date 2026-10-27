@@ -1,6 +1,26 @@
 import type { MetadataRoute } from "next";
+import { translatedLocales } from "@/i18n/messages";
+import { DEFAULT_LOCALE } from "@/i18n/config";
+import { localeHref } from "@/i18n/links";
 import { getChangelog } from "@/lib/changelog";
 import { SITE } from "@/lib/site";
+
+/** Every page, in every language, with the full `hreflang` set on each entry. */
+const PAGES = [
+  { path: "/", priority: 1, changeFrequency: "weekly" as const },
+  { path: "/changelog", priority: 0.8, changeFrequency: "daily" as const },
+  { path: "/docs", priority: 0.7, changeFrequency: "monthly" as const },
+  { path: "/docs/getting-started", priority: 0.6, changeFrequency: "monthly" as const },
+  { path: "/docs/sessions", priority: 0.6, changeFrequency: "monthly" as const },
+  { path: "/docs/worktrees", priority: 0.6, changeFrequency: "monthly" as const },
+  { path: "/docs/mcp", priority: 0.6, changeFrequency: "monthly" as const },
+  { path: "/docs/access-modes", priority: 0.6, changeFrequency: "monthly" as const },
+  { path: "/docs/shortcuts", priority: 0.6, changeFrequency: "monthly" as const },
+  { path: "/privacy", priority: 0.4, changeFrequency: "yearly" as const },
+  { path: "/terms", priority: 0.3, changeFrequency: "yearly" as const },
+  { path: "/security", priority: 0.4, changeFrequency: "yearly" as const },
+  { path: "/contact", priority: 0.4, changeFrequency: "yearly" as const },
+];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const releases = await getChangelog();
@@ -11,51 +31,35 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ? new Date(`${latestDate}T00:00:00Z`)
     : new Date();
 
-  return [
-    {
-      url: `${SITE.url}/`,
+  const pages = PAGES.flatMap((page) => {
+    // Every language of one page points at all the others, so a search engine
+    // indexes them as translations rather than near-duplicates.
+    const languages = Object.fromEntries([
+      ...translatedLocales.map((locale) => [
+        locale,
+        `${SITE.url}${localeHref(locale, page.path)}`,
+      ]),
+      ["x-default", `${SITE.url}${page.path}`],
+    ]);
+
+    return translatedLocales.map((locale) => ({
+      url: `${SITE.url}${localeHref(locale, page.path)}`,
       lastModified,
-      changeFrequency: "weekly",
-      priority: 1,
-    },
-    {
-      url: `${SITE.url}/changelog`,
-      lastModified,
-      changeFrequency: "daily",
-      priority: 0.8,
-    },
-    ...[
-      { path: "/docs", priority: 0.7 },
-      { path: "/docs/getting-started", priority: 0.6 },
-      { path: "/docs/sessions", priority: 0.6 },
-      { path: "/docs/worktrees", priority: 0.6 },
-      { path: "/docs/mcp", priority: 0.6 },
-      { path: "/docs/access-modes", priority: 0.6 },
-      { path: "/docs/shortcuts", priority: 0.6 },
-    ].map((page) => ({
-      url: `${SITE.url}${page.path}`,
-      lastModified,
-      changeFrequency: "monthly" as const,
-      priority: page.priority,
-    })),
-    ...[
-      { path: "/privacy", priority: 0.4 },
-      { path: "/terms", priority: 0.3 },
-      { path: "/security", priority: 0.4 },
-      { path: "/contact", priority: 0.4 },
-    ].map((page) => ({
-      url: `${SITE.url}${page.path}`,
-      lastModified,
-      changeFrequency: "yearly" as const,
-      priority: page.priority,
-    })),
-    ...releases.map((entry) => ({
-      url: `${SITE.url}/changelog/${entry.tag}`,
-      lastModified: entry.date
-        ? new Date(`${entry.date}T00:00:00Z`)
-        : lastModified,
-      changeFrequency: "monthly" as const,
-      priority: 0.6,
-    })),
-  ];
+      changeFrequency: page.changeFrequency,
+      priority:
+        locale === DEFAULT_LOCALE ? page.priority : page.priority * 0.9,
+      alternates: { languages },
+    }));
+  });
+
+  // Release notes are written in the repository, in English, and are the same
+  // document under every prefix — so they are listed once, unprefixed.
+  const releasePages = releases.map((entry) => ({
+    url: `${SITE.url}/changelog/${entry.tag}`,
+    lastModified: entry.date ? new Date(`${entry.date}T00:00:00Z`) : lastModified,
+    changeFrequency: "monthly" as const,
+    priority: 0.6,
+  }));
+
+  return [...pages, ...releasePages];
 }

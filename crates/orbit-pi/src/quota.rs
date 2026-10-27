@@ -33,7 +33,7 @@ pub enum QuotaSupport {
     Unsupported,
 }
 
-/// What the top-bar quota pill should show, resolved from the cached reports
+/// What the top-bar quota chip should show, resolved from the cached reports
 /// by [`QuotaManager::headline`].
 pub enum QuotaHeadline<'a> {
     /// A metered window: draw the rounded bar and its percentage.

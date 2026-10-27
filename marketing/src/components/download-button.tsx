@@ -22,6 +22,20 @@ import {
   type Platform,
 } from "@/lib/downloads";
 import { cn } from "@/lib/utils";
+import { fill } from "@/i18n/messages";
+
+/** English fallbacks for the copy; the landing page passes its dictionary. */
+export type DownloadLabels = {
+  download: string;
+  forPlatform: string;
+  otherPlatforms: string;
+};
+
+const DEFAULT_LABELS: DownloadLabels = {
+  download: "Download",
+  forPlatform: "Download for {platform}",
+  otherPlatforms: "Other platforms and formats",
+};
 
 const LABELS: Record<Platform, string> = {
   macos: "macOS",
@@ -102,6 +116,7 @@ export function OsDownloadButton({
   short = false,
   menu = true,
   className,
+  labels = DEFAULT_LABELS,
 }: {
   downloads: Downloads;
   fallback: string;
@@ -110,11 +125,14 @@ export function OsDownloadButton({
   /** Set false where a split control will not fit, e.g. the header. */
   menu?: boolean;
   className?: string;
+  labels?: DownloadLabels;
 }) {
   const platform = usePlatform();
   const primary = platform ? preferredDownload(downloads, platform) : undefined;
   const label =
-    platform && !short ? `Download for ${LABELS[platform]}` : "Download";
+    platform && !short
+      ? fill(labels.forPlatform, { platform: LABELS[platform] })
+      : labels.download;
 
   const groups = PLATFORMS.map((platform) => ({
     platform,
@@ -157,7 +175,7 @@ export function OsDownloadButton({
       </a>
       <DropdownMenu>
         <DropdownMenuTrigger
-          aria-label="Other platforms and formats"
+          aria-label={labels.otherPlatforms}
           className={buttonLinkClass(
             variant,
             // One visual control split in two: the menu half cancels the

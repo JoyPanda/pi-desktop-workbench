@@ -142,8 +142,8 @@ impl OrbitApp {
             .tip(tr!("open_in.open_in_app", app = preferred_label))
             .h_full()
             .rounded(px(0.))
-            .rounded_tl(px(HEADER_CTRL_R))
-            .rounded_bl(px(HEADER_CTRL_R))
+            .rounded_tl(header_ctrl_radius(&theme))
+            .rounded_bl(header_ctrl_radius(&theme))
             .cursor_pointer()
             .active(|s| s.bg(theme.surface_active).text_color(theme.text_primary))
             .child(
@@ -163,8 +163,8 @@ impl OrbitApp {
         .tip(tr!("open_in.choose_app"))
         .h_full()
         .rounded(px(0.))
-        .rounded_tr(px(HEADER_CTRL_R))
-        .rounded_br(px(HEADER_CTRL_R))
+        .rounded_tr(header_ctrl_radius(&theme))
+        .rounded_br(header_ctrl_radius(&theme))
         .cursor_pointer()
         .when(self.open_in_menu_open, |s| {
             s.bg(theme.surface_active).text_color(theme.text_primary)
@@ -184,7 +184,7 @@ impl OrbitApp {
             header_chip(
                 div()
                     .h(px(HEADER_CTRL_H))
-                    .rounded(px(HEADER_CTRL_R))
+                    .rounded(header_ctrl_radius(&theme))
                     .flex_none()
                     .flex()
                     .items_center(),
@@ -235,7 +235,7 @@ impl OrbitApp {
                     &theme,
                 )
                 .cursor_pointer()
-                .when(selected, |row| row.bg(theme.selection))
+                .when(selected, |row| row.bg(theme.surface_selected))
                 .hover(|style| style.bg(theme.surface_hover))
                 .child(
                     img(ImageSource::Image(app_icon))

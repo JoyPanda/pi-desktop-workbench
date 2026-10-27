@@ -57,7 +57,7 @@ verified provider reference. Providers without a usage surface report
 | `fireworks` | spend | `/v1/accounts/{id}/billing/summary` |
 | `baseten` | spend | `/v1/billing/usage_summary` |
 | `google`, `google-vertex` | unsupported | no account quota API (AI Studio only) |
-| `ollama` | subscription | `GET https://ollama.com/api/usage` (monthly credits) or the authenticated settings page (legacy session/weekly) |
+| `ollama` | subscription | `GET https://ollama.com/api/usage` (monthly credits) + `GET https://ollama.com/api/balance` (included/purchased balances), or the authenticated settings page (legacy session/weekly) |
 
 `google`/`google-vertex` are registered explicitly so a connected account gets a
 provider-specific explanation rather than the generic fallback. Gemini rate
@@ -73,24 +73,29 @@ handles both:
   tokens. `GET https://ollama.com/api/usage` with a real cloud API key returns a
   0..1 `limits.monthly.usage` fraction. The reset is on the plan's subscription
   anniversary, which the payload does not expose, so no countdown is shown.
+  `GET https://ollama.com/api/balance` adds the two remaining dollar figures, in
+  spend order: the included plan allowance (`Included`) and the purchased usage
+  credits (`Purchased`). The balance request is additive — if it fails the
+  meters are returned unchanged and no error is attached.
 - **Legacy (GPU time)** — 5-hour session + weekly windows, rendered server-side
-  on `https://ollama.com/settings`. These have no API, so the adapter fetches
-  that page with a user-supplied session cookie and parses it via
-  `OllamaCloudParser`.
+  on `https://ollama.com/settings`. These have no API, so the adapter can fetch
+  that page with a session cookie and parse it via `OllamaCloudParser`. Orbit
+  no longer collects that cookie in the app: the entry is only read when it is
+  already in `auth.json`.
 
 Credentials are **explicit and user-supplied**, stored in `auth.json` (0600).
-The session lives under its own key so it never shadows the `ollama` provider
-credential:
+A session entry lives under its own key so it never shadows the `ollama`
+provider credential:
 
 ```json
 "ollama":               {"type":"api_key","key":"<real ollama.com key>"}             // current model
-"ollama-cloud-session": {"type":"ollama_cloud_session","session":"__Secure-session=…"} // legacy page
+"ollama-cloud-session": {"type":"ollama_cloud_session","session":"__Secure-session=…"} // legacy page (read-only; hand-written)
 ```
 
 The adapter never reads browser cookies, never sends the local `models.json`
 placeholder (`api_key: "ollama"` pointing at `127.0.0.1`) to ollama.com, and
-never logs the session. Set either in **Settings → Providers → Ollama**
-(`Add API key` for the key, `Usage session` for the cookie header).
+never logs a session. The API key is set in **Settings → Providers → Ollama →
+`Add API key`**; there is no session-cookie input in the app.
 
 ## Notes
 

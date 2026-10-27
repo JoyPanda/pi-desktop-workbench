@@ -329,7 +329,9 @@ impl Render for BranchPicker {
                 .h(px(row_h(&theme)))
                 .flex_none()
                 .cursor_pointer()
-                .when(selected || highlighted, |row| row.bg(theme.selection))
+                .when(selected || highlighted, |row| {
+                    row.bg(theme.surface_selected)
+                })
                 .when(!selected && !highlighted, |row| {
                     row.hover(|s| s.bg(theme.surface_hover))
                 })

@@ -22,21 +22,28 @@ import {
 } from "@/lib/changelog";
 import { SITE } from "@/lib/site";
 import { cn } from "@/lib/utils";
+import { getT } from "@/i18n/t";
+import { localeHref } from "@/i18n/links";
+import type { Locale } from "@/i18n/config";
 
 function ReleaseHeader({
+  locale,
   entry,
   latest = false,
   featured = false,
 }: {
+  locale: Locale;
   entry: ChangelogEntry;
   latest?: boolean;
   featured?: boolean;
 }) {
+  const t = getT(locale, "changelog");
+
   return (
     <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2.5">
       <div className="flex min-w-0 flex-wrap items-center gap-2.5">
         <Link
-          href={`/changelog/${entry.tag}`}
+          href={localeHref(locale, `/changelog/${entry.tag}`)}
           className={cn(
             "font-mono tracking-[-0.01em] text-ink no-underline transition-colors hover:text-brand",
             featured ? "text-[17px]" : "text-[15px]",
@@ -45,14 +52,17 @@ function ReleaseHeader({
           {entry.tag}
         </Link>
         {latest ? (
-          <Badge className="bg-brand/12 text-brand">Latest</Badge>
+          <Badge className="bg-brand/12 text-brand">{t("latest")}</Badge>
         ) : null}
         {entry.prerelease ? (
           <Badge variant="outline" className="text-ink-3">
-            Pre-release
+            {t("prerelease")}
           </Badge>
         ) : null}
-        <CopyLinkButton path={`/changelog/${entry.tag}`} label={entry.tag} />
+        <CopyLinkButton
+          path={localeHref(locale, `/changelog/${entry.tag}`)}
+          label={t("copyLink", { tag: entry.tag })}
+        />
       </div>
       <time
         dateTime={entry.date}
@@ -69,7 +79,8 @@ function ReleaseHeader({
  * release as a featured panel, the rest as a dated timeline, with a
  * scroll-spy index beside them.
  */
-export async function ChangelogFeed() {
+export async function ChangelogFeed({ locale }: { locale: Locale }) {
+  const t = getT(locale, "changelog");
   const entries = await getChangelog();
 
   if (entries.length === 0) {
@@ -79,13 +90,15 @@ export async function ChangelogFeed() {
           <EmptyMedia variant="icon">
             <HugeiconsIcon icon={GithubIcon} className="size-4" />
           </EmptyMedia>
-          <EmptyTitle>Release notes are unavailable right now</EmptyTitle>
+          <EmptyTitle>{t("unavailableTitle")}</EmptyTitle>
           <EmptyDescription>
-            GitHub couldn&apos;t be reached. Read the latest on the{" "}
-            <a href={RELEASES_PAGE} target="_blank" rel="noreferrer">
-              releases page
-            </a>
-            .
+            {t.rich("unavailableBody", {
+              link: (chunks) => (
+                <a href={RELEASES_PAGE} target="_blank" rel="noreferrer">
+                  {chunks}
+                </a>
+              ),
+            })}
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -104,12 +117,12 @@ export async function ChangelogFeed() {
       <aside className="hidden lg:block">
         <div className="sticky top-24">
           <div className="mb-4 flex items-baseline justify-between gap-2 px-3">
-            <Eyebrow>Releases</Eyebrow>
+            <Eyebrow>{t("releases")}</Eyebrow>
             <span className="font-mono text-[10.5px] text-ink-3">
               {entries.length}
             </span>
           </div>
-          <VersionIndex entries={index} />
+          <VersionIndex entries={index} label={t("jumpToRelease")} />
 
           <div className="mt-5 border-t border-hair pt-4 pl-3 text-[12.5px]">
             <a
@@ -132,7 +145,7 @@ export async function ChangelogFeed() {
               aria-hidden
               className="absolute inset-x-0 top-0 h-px bg-linear-to-r from-transparent via-brand/45 to-transparent"
             />
-            <ReleaseHeader entry={latest} latest featured />
+            <ReleaseHeader locale={locale} entry={latest} latest featured />
             <ReleaseNotes groups={latest.groups} className="mt-6" />
           </div>
         </article>
@@ -144,7 +157,7 @@ export async function ChangelogFeed() {
               id={`v${entry.version}`}
               className="group scroll-mt-24 py-10 first:pt-0"
             >
-              <ReleaseHeader entry={entry} />
+              <ReleaseHeader locale={locale} entry={entry} />
               <ReleaseNotes groups={entry.groups} className="mt-6" />
             </article>
           ))}

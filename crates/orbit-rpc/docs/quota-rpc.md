@@ -136,7 +136,7 @@ approximated.
 | `fireworks` | spend | `/v1/accounts/{id}/billing/summary` |
 | `baseten` | spend | `/v1/billing/usage_summary` |
 | `google`, `google-vertex` | unsupported | no account quota API (AI Studio only) |
-| `ollama`, `ollama-cloud` | subscription | `/api/usage` (usage-credit or legacy windows) merged with authenticated `/settings` (reset times) |
+| `ollama`, `ollama-cloud` | subscription | `/api/usage` (usage-credit or legacy windows) merged with `/api/balance` (included + purchased balances) and authenticated `/settings` (reset times) |
 | everything else | unsupported | — |
 
 `google`/`google-vertex` are registered explicitly so a connected account gets a
@@ -155,29 +155,40 @@ buckets have flip-flopped: `session` + `weekly` through 2026-09-02, a single
 The monthly reset is the subscription anniversary, absent from the payload, so
 the server omits a countdown rather than guessing.
 
+Balances come from `GET https://ollama.com/api/balance`, which reports the two
+remaining dollar figures Ollama Cloud draws from, in spend order: the included
+plan allowance first, then the purchased usage credits. Both are reported as
+two `balances` rows labelled `Included` and `Purchased` (`{"label":"Included",\n"amount":12.5,"currency":"USD"}`). The balance request is additive: if
+it fails, the meters are returned unchanged and no `error` is attached, because
+a balance outage says nothing about usage. A bucket the payload omits is
+omitted from the report — a real `0` is kept, since "nothing purchased" is not
+the same as "not reported".
+
 The **legacy** model exposes a 5-hour session window, a weekly window, and reset
-timestamps only on the authenticated `https://ollama.com/settings` page; the
-server fetches that page with a user-supplied session cookie and parses it
-behind an isolated `OllamaCloudParser` (an unstable integration that returns a
-structured `error` instead of throwing when the markup changes).
+timestamps only on the authenticated `https://ollama.com/settings` page. The
+server can still read that page with an `ollama-cloud-session` entry found in
+`auth.json` and parses it behind an isolated `OllamaCloudParser` (an unstable
+integration that returns a structured `error` instead of throwing when the
+markup changes). **Orbit no longer collects that cookie:** the Providers page
+has no session input, so the entry only exists if a user writes it by hand or
+already has one from an older build. Nothing in the UI advertises it.
 
 `/api/usage` never exposes reset timestamps. When an account stores **both** a
-cloud key and a session cookie, the server queries both and merges: percentages
+cloud key and a session entry, the server queries both and merges: percentages
 come from the API (authoritative for the current account), and each matching
 window's `resetsAt` is copied from the settings page by window id. If either
 fetch fails, the usable report is returned unchanged rather than guessing. A
-key-only account therefore has no countdown; its report carries a `note`
-explaining that a session cookie is required, which the client renders beneath
-the meters when no window exposes a reset.
+key-only account — every account the app itself can configure — has no
+countdown, and its report carries a `note` saying the API does not expose reset
+times.
 
 The credential is explicit and comes from `auth.json` (never a browser cookie).
-The session lives under its own key so it can never shadow the `ollama` provider
-credential — pi treats any stored credential under a provider id as
+A session entry lives under its own key so it can never shadow the `ollama`
+provider credential — pi treats any stored credential under a provider id as
 authoritative, so an unknown type there would break the local endpoint. Both
 Ollama provider ids resolve the same account: the local endpoint's `ollama`
 and the `ollama-cloud` id registered by the third-party
-`pi-ollama-cloud-provider` package. The session is stored once and read for
-either id:
+`pi-ollama-cloud-provider` package:
 
 ```json
 "ollama":               {"type":"api_key","key":"<real ollama.com key>"}
@@ -187,7 +198,7 @@ either id:
 
 The server must never send the local `models.json` placeholder
 (`api_key: "ollama"`) to `ollama.com`, never auto-extract browser cookies, and
-never log the session value.
+never log a session value.
 
 Adapters must verify the response origin before sending a credential, reject
 redirects, and never follow a credential to a custom/proxy host.

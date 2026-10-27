@@ -2,6 +2,8 @@ import { GitCompareIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { Shot } from "@/components/shot";
 import { Story } from "@/components/sections/story";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
 function GitCard() {
   return (
@@ -19,25 +21,23 @@ function GitCard() {
   );
 }
 
-export function Git() {
+export async function Git({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.git");
+
   return (
     <Story
       id="git"
-      label="Git"
-      title="Read the diff before you switch apps."
-      copy="The agent edits files behind the transcript. Orbit keeps a live diff in a right-hand panel and a full Git page beside it — stage, review, and commit without leaving the window."
-      points={[
-        "A live git diff of the workspace, refreshed when a run settles.",
-        "Generate a commit message, stage what you want, and push in place.",
-        "History and graph views for the branch you are standing on.",
-      ]}
+      label={t("label")}
+      title={t("title")}
+      copy={t("copy")}
+      points={t.raw("points") as string[]}
       flip
       visual={
         <div className="relative">
           <Shot
             src="/screens/review.png"
             srcLight="/screens/review-light.png"
-            alt="The Orbit Review panel open beside a session, showing a selected file's inline diff on the left and the changed-file tree on the right."
+            alt={t("shotAlt")}
             sizes="(max-width: 1024px) 100vw, 560px"
           />
           <GitCard />

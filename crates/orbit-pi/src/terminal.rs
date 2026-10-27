@@ -58,7 +58,7 @@ use crate::app::{
     BUTTON_GROUP,
 };
 use crate::theme::tokens::RaisedExt;
-use crate::theme::tokens::{ButtonSize, DynamicSpacing, IconSize, Radius, TextSize};
+use crate::theme::tokens::{button, panel, ButtonSize, DynamicSpacing, IconSize, Radius, TextSize};
 use crate::theme::{self, Theme};
 
 /// Emulator grid bounds, clamped so a collapsing panel never asks the PTY for
@@ -1893,7 +1893,7 @@ impl TerminalPanel {
                 .flex()
                 .items_center()
                 .gap(DynamicSpacing::Base04.px(&theme))
-                .rounded(Radius::Medium.px(&theme))
+                .rounded(button::RADIUS.px(&theme))
                 .cursor_pointer()
                 .text_size(TextSize::Small.px(&theme))
                 .when(active, |el| el.bg(theme.surface_active))
@@ -2093,7 +2093,7 @@ impl TerminalPanel {
                         .gap(DynamicSpacing::Base08.px(&theme))
                         .px(DynamicSpacing::Base16.px(&theme))
                         .py(DynamicSpacing::Base12.px(&theme))
-                        .rounded(Radius::XLarge.px(&theme))
+                        .rounded(panel::RADIUS.px(&theme))
                         .bg(theme.surface_elevated)
                         .border_1()
                         .border_color(theme.border)

@@ -7,13 +7,11 @@
 //! math is tested without touching the disk.
 
 use super::aggregate::{
-    BucketRow, ChartMetric, Direction, LatencyMetric, LatencyStats, SeriesPoint, Totals,
-    UsageSnapshot,
+    BucketRow, ChartMetric, Direction, LatencyMetric, LatencyStats, Totals, UsageSnapshot,
 };
 use super::model::*;
 use super::page::{
-    query_buckets, query_failures, query_series, query_sessions, BucketSort, SeriesSort,
-    SessionQuery, SessionSort,
+    query_buckets, query_failures, query_sessions, BucketSort, SessionQuery, SessionSort,
 };
 use super::table::{FailureRow, FailureSort};
 
@@ -346,7 +344,6 @@ fn cache_math_matches_the_documented_formula() {
         (rate - 750.0 / 1_040.0 * 100.0).abs() < 1e-6,
         "750 / 1040, got {rate}"
     );
-    assert!(snapshot.cache.is_available());
 }
 
 #[test]
@@ -360,7 +357,6 @@ fn cache_is_unavailable_without_cache_tokens() {
 
     // A 0% hit rate would be a made-up number: no prompt tokens were cached-capable.
     assert!(snapshot.cache.hit_rate.is_none());
-    assert!(!snapshot.cache.is_available());
     assert_eq!(snapshot.cache.uncached_input, 500);
 }
 
@@ -742,7 +738,6 @@ fn empty_dataset_produces_an_empty_snapshot() {
     assert!(snapshot.errors.rows.is_empty());
     assert!(snapshot.cache.hit_rate.is_none());
     assert!(snapshot.latency.avg_ms.abs() < f64::EPSILON);
-    assert!(snapshot.insights.is_empty());
     assert!(snapshot
         .series
         .points
@@ -1104,49 +1099,72 @@ fn latency_metric_switches_between_average_and_percentiles() {
 }
 
 #[test]
-fn insights_only_appear_with_signal() {
-    let now = anchor();
-    let mut fixture = Fixture::default();
-    let session = fixture.session("/tmp/orbit", "quiet", now - 3_600_000, vec![]);
-    fixture.request(
-        session,
-        ("anthropic", "claude"),
-        now - 60_000,
-        100,
-        10,
-        0,
-        0,
-    );
-    let index = fixture.build();
-    let snapshot = scope(&index, DateRange::for_preset(RangePreset::Last7, now));
-    // A single tiny data point produces no headline.
-    assert!(snapshot.insights.is_empty(), "{:?}", snapshot.insights);
+fn bucket_query_filters_sorts_then_paginates() {
+    let row = |label: &str, start: i64, tokens: u64| BucketRow {
+        start_ms: start,
+        label: label.to_string(),
+        stamp: label.to_string(),
+        totals: Totals {
+            requests: 1,
+            tokens: TokenCounts {
+                total: tokens,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    };
+    let rows = [row("Mon", 1, 100), row("Tue", 2, 300), row("Wed", 3, 200)];
+    let query =
+        |page, search: &str| query_buckets(&rows, search, BucketSort::Tokens, true, page, 1);
 
-    // A dominant model does, once there is enough traffic to mean anything.
-    let mut fixture = Fixture::default();
-    let session = fixture.session("/tmp/orbit", "loud", now - 3_600_000, vec![]);
-    for ix in 0..30 {
-        fixture.request(
-            session,
-            ("anthropic", "claude"),
-            now - 300_000 + ix * 1_000,
-            10_000,
-            1_000,
-            0,
-            0,
-        );
-    }
-    fixture.request(session, ("openai", "gpt"), now - 200_000, 100, 10, 0, 0);
-    let index = fixture.build();
-    let snapshot = scope(&index, DateRange::for_preset(RangePreset::Last7, now));
-    assert!(
-        snapshot
-            .insights
-            .iter()
-            .any(|insight| insight.text.contains("claude") && insight.text.contains('%')),
-        "{:?}",
-        snapshot.insights
-    );
+    let first = query(1, "");
+    assert_eq!(first.total, 3);
+    assert_eq!(first.rows[0].label, "Tue");
+    assert_eq!(first.totals.tokens.total, 600);
+    let second = query(2, "");
+    assert_eq!(second.rows[0].label, "Wed");
+
+    let past = query(99, "");
+    assert_eq!(past.page, 3);
+    assert_eq!(past.rows[0].label, "Mon");
+
+    let searched = query(1, "wed");
+    assert_eq!(searched.total, 1);
+    assert_eq!(searched.rows[0].label, "Wed");
+    assert_eq!(searched.totals.tokens.total, 200);
+}
+
+#[test]
+fn failure_query_filters_sorts_then_paginates() {
+    let row = |title: &str, ts: i64, message: &str| FailureRow {
+        ts_ms: ts,
+        session: 0,
+        kind: ErrorKind::Provider,
+        model: "claude".into(),
+        session_title: title.to_string(),
+        message: message.to_string(),
+    };
+    let rows = [
+        row("alpha", 1, "timeout"),
+        row("beta", 2, "overloaded"),
+        row("gamma", 3, "rate limit"),
+    ];
+    let query =
+        |page, search: &str| query_failures(&rows, search, FailureSort::When, true, page, 1);
+
+    let first = query(1, "");
+    assert_eq!(first.total, 3);
+    assert_eq!(first.rows[0].session_title, "gamma");
+    let second = query(2, "");
+    assert_eq!(second.rows[0].session_title, "beta");
+
+    let past = query(99, "");
+    assert_eq!(past.page, 3);
+    assert_eq!(past.rows[0].session_title, "alpha");
+
+    let searched = query(1, "over");
+    assert_eq!(searched.total, 1);
+    assert_eq!(searched.rows[0].session_title, "beta");
 }
 
 #[test]
@@ -1317,123 +1335,4 @@ fn calendar_drops_records_older_than_a_year() {
     // The snapshot itself still counts both — the calendar is a calendar, not
     // the page's totals.
     assert_eq!(snapshot.summary.totals.requests, 2);
-}
-
-#[test]
-fn series_query_filters_sorts_then_paginates() {
-    let point = |stamp: &str, start: i64, tokens: u64| SeriesPoint {
-        start_ms: start,
-        label: stamp.to_string(),
-        stamp: stamp.to_string(),
-        totals: Totals {
-            requests: 1,
-            tokens: TokenCounts {
-                total: tokens,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        latency: LatencyStats::default(),
-    };
-    let points = [
-        point("Mon", 1, 100),
-        point("Tue", 2, 300),
-        point("Wed", 3, 200),
-    ];
-    let query = |page, search: &str| {
-        query_series(
-            &points,
-            search,
-            SeriesSort::Tokens,
-            true,
-            ChartMetric::Tokens,
-            LatencyMetric::Average,
-            page,
-            1,
-        )
-    };
-
-    let first = query(1, "");
-    assert_eq!(first.total, 3);
-    assert_eq!(first.rows[0].stamp, "Tue");
-    assert_eq!((first.first_row(), first.last_row()), (1, 1));
-    let second = query(2, "");
-    assert_eq!(second.rows[0].stamp, "Wed");
-
-    let past = query(99, "");
-    assert_eq!(past.page, 3);
-    assert_eq!(past.rows[0].stamp, "Mon");
-
-    let searched = query(1, "wed");
-    assert_eq!(searched.total, 1);
-    assert_eq!(searched.rows[0].stamp, "Wed");
-}
-
-#[test]
-fn bucket_query_filters_sorts_then_paginates() {
-    let row = |label: &str, start: i64, tokens: u64| BucketRow {
-        start_ms: start,
-        label: label.to_string(),
-        stamp: label.to_string(),
-        totals: Totals {
-            requests: 1,
-            tokens: TokenCounts {
-                total: tokens,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    };
-    let rows = [row("Mon", 1, 100), row("Tue", 2, 300), row("Wed", 3, 200)];
-    let query =
-        |page, search: &str| query_buckets(&rows, search, BucketSort::Tokens, true, page, 1);
-
-    let first = query(1, "");
-    assert_eq!(first.total, 3);
-    assert_eq!(first.rows[0].label, "Tue");
-    assert_eq!(first.totals.tokens.total, 600);
-    let second = query(2, "");
-    assert_eq!(second.rows[0].label, "Wed");
-
-    let past = query(99, "");
-    assert_eq!(past.page, 3);
-    assert_eq!(past.rows[0].label, "Mon");
-
-    let searched = query(1, "wed");
-    assert_eq!(searched.total, 1);
-    assert_eq!(searched.rows[0].label, "Wed");
-    assert_eq!(searched.totals.tokens.total, 200);
-}
-
-#[test]
-fn failure_query_filters_sorts_then_paginates() {
-    let row = |title: &str, ts: i64, message: &str| FailureRow {
-        ts_ms: ts,
-        session: 0,
-        kind: ErrorKind::Provider,
-        model: "claude".into(),
-        session_title: title.to_string(),
-        message: message.to_string(),
-    };
-    let rows = [
-        row("alpha", 1, "timeout"),
-        row("beta", 2, "overloaded"),
-        row("gamma", 3, "rate limit"),
-    ];
-    let query =
-        |page, search: &str| query_failures(&rows, search, FailureSort::When, true, page, 1);
-
-    let first = query(1, "");
-    assert_eq!(first.total, 3);
-    assert_eq!(first.rows[0].session_title, "gamma");
-    let second = query(2, "");
-    assert_eq!(second.rows[0].session_title, "beta");
-
-    let past = query(99, "");
-    assert_eq!(past.page, 3);
-    assert_eq!(past.rows[0].session_title, "alpha");
-
-    let searched = query(1, "over");
-    assert_eq!(searched.total, 1);
-    assert_eq!(searched.rows[0].session_title, "beta");
 }

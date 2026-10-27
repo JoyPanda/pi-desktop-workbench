@@ -1,18 +1,18 @@
 import { ApprovalMock } from "@/components/sections/mocks";
 import { MockFrame, Story } from "@/components/sections/story";
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 
-export function Native() {
+export async function Native({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.native");
+
   return (
     <Story
       id="native"
-      label="Native"
-      title="A real desktop app. You hold the keys."
-      copy="Orbit is a native macOS, Windows, and Linux app — Rust and GPUI, keyboard-first, no web views. And every mutating tool call passes through an access mode you set per task, so the agent never runs ahead of you."
-      points={[
-        "Supervised — asks before every edit and every command.",
-        "Auto-accept edits — applies file edits, still asks before commands.",
-        "Full access — runs without prompting, picked deliberately per task.",
-      ]}
+      label={t("label")}
+      title={t("title")}
+      copy={t("copy")}
+      points={t.raw("points") as string[]}
       visual={
         <MockFrame>
           <ApprovalMock />

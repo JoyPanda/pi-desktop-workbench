@@ -709,19 +709,22 @@ pub fn staged_patch(cwd: &Path) -> Result<String, String> {
     )
 }
 
-/// The unstaged patch text (for commit-message generation).
-pub fn unstaged_patch(cwd: &Path) -> Result<String, String> {
-    run_git(
-        cwd,
-        &[
-            "-c",
-            "core.quotePath=false",
-            "diff",
-            "--no-color",
-            "--no-renames",
-            "--",
-        ],
-    )
+/// The working tree against HEAD — staged and unstaged tracked changes
+/// together — for commit-message generation of everything the commit button
+/// records when *Include unstaged changes* is on.
+///
+/// Untracked files are absent by design: `git diff` never shows them, so
+/// `commit_message` synthesizes their diffs from the file contents.
+pub fn worktree_patch(cwd: &Path) -> Result<String, String> {
+    // An unborn branch has no HEAD to diff against; there is nothing staged
+    // either, so the untracked files are the whole change.
+    let against_head = run_git(cwd, &["rev-parse", "--verify", "--quiet", "HEAD"]).is_ok();
+    let mut args = vec!["-c", "core.quotePath=false", "diff"];
+    if against_head {
+        args.push("HEAD");
+    }
+    args.extend(["--no-color", "--no-renames", "--"]);
+    run_git(cwd, &args)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

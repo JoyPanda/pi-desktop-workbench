@@ -5,8 +5,21 @@
 //! the user's active session and no tool can run in the workspace. Extensions
 //! stay enabled so the user's custom providers resolve. If that fails (pi
 //! missing, no credentials, timeout), [`heuristic`] derives a plain message
-//! from the staged file statuses so the button always produces something
-//! editable.
+//! from the changed file statuses so the button always produces something
+//! editable; the caller reports *why* it fell back instead of passing the
+//! result off as generated.
+//!
+//! Two properties matter for the message to describe what is actually being
+//! committed:
+//!
+//! - [`Scope`] picks the diff source, so the prompt never describes the index
+//!   while the commit records the whole worktree — and an untracked file gets a
+//!   synthesized `/dev/null` diff instead of a bare path, since `git diff`
+//!   omits untracked files entirely.
+//! - [`prepare`] fits every file into one prompt budget. A single long file
+//!   otherwise spends the whole budget on the top of the file — usually the
+//!   part a large change leaves untouched — and the model never sees the hunks
+//!   that changed.
 
 use std::io::Read;
 use std::path::Path;
@@ -15,10 +28,102 @@ use std::time::{Duration, Instant};
 
 use crate::git::{self, StatusRow};
 
-const MAX_DIFF_BYTES: usize = 96 * 1024;
+/// Cap on one file's diff in the prompt.
+const MAX_FILE_DIFF_BYTES: usize = 64 * 1024;
+/// Every file keeps at least this much of its diff, however big the change
+/// set, so a commit of hundreds of files still describes each of them.
+const MIN_FILE_DIFF_BYTES: usize = 1024;
+/// Cap on one file's ORIGINAL CODE excerpt.
 const MAX_ORIGINAL_BYTES: usize = 48 * 1024;
-const MAX_TOTAL_ORIGINAL_BYTES: usize = 192 * 1024;
+/// A per-file source excerpt below this is not worth its bytes; the budget goes
+/// to the diffs instead.
+const MIN_ORIGINAL_BYTES: usize = 1024;
+/// Lines of context kept around each hunk in an ORIGINAL CODE excerpt.
+const ORIGINAL_CONTEXT_LINES: usize = 24;
+/// Untracked files are read from disk up to this size to build their diff.
+const MAX_UNTRACKED_BYTES: usize = 1024 * 1024;
+/// Room reserved inside a capped block for the "this was truncated" marker, so
+/// a truncated diff or excerpt never exceeds its budget.
+const TRUNCATION_MARKER_BYTES: usize = 64;
 const TIMEOUT: Duration = Duration::from_secs(180);
+
+/// How much diff and source text one prompt may carry, in bytes.
+///
+/// Sized from the selected model's context window when the catalog reports one:
+/// how many changed files fit is a property of the model, not of the commit. A
+/// 1M-token window can describe a few hundred files; a 32k window cannot, and
+/// the prompt has to shrink rather than overflow and fail.
+#[derive(Clone, Copy, Debug)]
+struct Budget {
+    diff: usize,
+    original: usize,
+}
+
+impl Budget {
+    /// Content budget when the model's window is unknown (no catalog entry yet,
+    /// or a provider that does not report one): room for a hundred-plus files,
+    /// while staying inside the smallest window any shipped provider uses.
+    const DEFAULT_TOTAL: usize = 256 * 1024;
+    /// Never claim less than this, however small the window: below it the
+    /// per-file floor alone would eat the budget.
+    const MIN_TOTAL: usize = 24 * 1024;
+    /// Ceiling, so one huge commit cannot turn into a multi-megabyte prompt.
+    const MAX_TOTAL: usize = 2 * 1024 * 1024;
+    /// Diff text and source code are punctuation-heavy: roughly three bytes per
+    /// token is a safe estimate for a byte budget.
+    const BYTES_PER_TOKEN: usize = 3;
+
+    /// `reserved` is what the prompt already spends outside the per-file
+    /// sections (the changed-file list and the commit-style samples).
+    fn for_context(context_tokens: Option<u64>, reserved: usize) -> Self {
+        let total = context_tokens
+            .map(|tokens| {
+                (tokens as usize)
+                    .saturating_mul(Self::BYTES_PER_TOKEN)
+                    // Half the window goes to change content; the rest carries
+                    // the system prompt, the file list, and the answer.
+                    .saturating_div(2)
+            })
+            .unwrap_or(Self::DEFAULT_TOTAL)
+            .clamp(Self::MIN_TOTAL, Self::MAX_TOTAL)
+            .saturating_sub(reserved)
+            .max(Self::MIN_TOTAL / 2);
+        Self {
+            diff: total / 2,
+            original: total * 3 / 10,
+        }
+    }
+}
+
+/// What the generated message has to describe: the same change set the commit
+/// will record.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope {
+    /// Only the index (`git diff --cached`) — the default when anything is
+    /// staged, and what a plain commit records.
+    Staged,
+    /// The whole working tree, untracked files included — what the commit
+    /// button records when *Include unstaged changes* is on.
+    Worktree,
+}
+
+impl Scope {
+    /// The patch `git` provides for this scope.
+    fn patch(self, cwd: &Path) -> Result<String, String> {
+        match self {
+            Self::Staged => git::staged_patch(cwd),
+            Self::Worktree => git::worktree_patch(cwd),
+        }
+    }
+
+    /// Whether a status row belongs to this scope's change set.
+    pub fn matches(self, row: &StatusRow) -> bool {
+        match self {
+            Self::Staged => row.staged(),
+            Self::Worktree => row.staged() || row.unstaged(),
+        }
+    }
+}
 
 /// Recent commit subjects sampled for style, kept separate so the prompt can
 /// prefer the author's own conventions over the repository's.
@@ -29,24 +134,64 @@ struct RecentCommits {
 }
 
 /// One changed file as the prompt sees it: its previous content (for context)
-/// and its staged diff (the source of truth).
+/// and its diff (the source of truth).
 struct Change {
     path: String,
-    original: Option<String>,
+    /// File content at HEAD, replaced by [`prepare`] with a line-numbered
+    /// excerpt. `None` when there is no previous version (a new or binary
+    /// file).
+    head: Option<String>,
     diff: String,
 }
 
-/// Generate a conventional commit message from the staged diff (and the
-/// unstaged diff as context). Blocking; call on the background executor.
+/// Everything a generation needs beyond the repository and its change set.
+pub struct Options<'a> {
+    pub provider: Option<&'a str>,
+    pub model: Option<&'a str>,
+    pub scope: Scope,
+    /// How many messages were generated for this change set already, and the
+    /// last one shown, so a regeneration can differ instead of repeating
+    /// itself.
+    pub attempt: usize,
+    pub previous: Option<&'a str>,
+    /// The selected model's context window in tokens, when the catalog reports
+    /// one. Decides how many changed files fit in the prompt.
+    pub context_window: Option<u64>,
+}
+
+impl Default for Options<'_> {
+    fn default() -> Self {
+        Self {
+            provider: None,
+            model: None,
+            scope: Scope::Staged,
+            attempt: 0,
+            previous: None,
+            context_window: None,
+        }
+    }
+}
+
+/// Bytes set aside for the commit-style samples before the diff budget is sized.
+const RECENT_COMMITS_RESERVE: usize = 8 * 1024;
+
+/// Generate a conventional commit message for `options.scope` at `cwd`.
+/// Blocking; call on the background executor.
 pub fn generate(
     cwd: &Path,
-    provider: Option<&str>,
-    model: Option<&str>,
-    staged: &str,
-    unstaged: &str,
+    options: &Options<'_>,
     rows: &[StatusRow],
 ) -> Result<String, String> {
-    let changes = collect_changes(cwd, staged, rows);
+    let patch = options.scope.patch(cwd)?;
+    let mut changes = collect_changes(cwd, &patch, rows, options.scope);
+    // The file list grows with the change set, so it is charged against the
+    // budget before the per-file sections get their share.
+    let rows_text = staged_summary(rows);
+    let budget = Budget::for_context(
+        options.context_window,
+        rows_text.len() + RECENT_COMMITS_RESERVE,
+    );
+    let dropped = prepare(&mut changes, budget);
     let recent = recent_commits(cwd);
     let repo_name = cwd
         .file_name()
@@ -57,14 +202,15 @@ pub fn generate(
     let prompt = user_prompt(
         &repo_name,
         branch.as_deref(),
-        rows,
+        &rows_text,
         &changes,
-        unstaged,
         &recent,
+        dropped,
+        options,
     );
-    let raw = run_pi(cwd, provider, model, &system, &prompt)?;
-    let message = process_response(&raw).ok_or_else(|| tr!("commit_message.no_message"))?;
-    Ok(normalize(&message))
+    dump_prompt(&system, &prompt);
+    let raw = run_pi(cwd, options.provider, options.model, &system, &prompt)?;
+    process_response(&raw).ok_or_else(|| tr!("commit_message.no_message"))
 }
 
 /// A no-model fallback: a Conventional Commit `type(scope): description` plus a
@@ -229,9 +375,9 @@ fn common_scope(rows: &[StatusRow]) -> Option<String> {
     (common >= 1).then(|| first[common - 1].to_string())
 }
 
-/// A compact, ordered list of the staged files with their change kind and line
-/// deltas. Gives the model the file-level map even when the raw diff is
-/// truncated, and pairs with the diff so the body can name what actually
+/// A compact, ordered list of the changed files with their change kind and
+/// line deltas. Gives the model the file-level map even when a diff is
+/// truncated, and pairs with the diffs so the body can name what actually
 /// changed.
 fn staged_summary(rows: &[StatusRow]) -> String {
     rows.iter()
@@ -262,10 +408,11 @@ fn system_prompt() -> String {
 fn user_prompt(
     repo_name: &str,
     branch: Option<&str>,
-    rows: &[StatusRow],
+    rows_text: &str,
     changes: &[Change],
-    unstaged: &str,
     recent: &RecentCommits,
+    dropped: usize,
+    options: &Options<'_>,
 ) -> String {
     let mut prompt = String::new();
     prompt.push_str("<repository-context>\n# REPOSITORY DETAILS:\n");
@@ -295,34 +442,58 @@ fn user_prompt(
         prompt.push_str("</recent-commits>\n\n");
     }
 
+    // A regeneration that returned the same message is worse than useless, so a
+    // second attempt is told what it already said.
+    if let Some(previous) = options
+        .previous
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        prompt.push_str(&format!(
+            "<previous-attempt>\n\
+             # PREVIOUS ATTEMPT (attempt {}; the user asked again, write a different message):\n\
+             ```text\n{previous}\n```\n\
+             </previous-attempt>\n\n",
+            options.attempt,
+        ));
+    }
+
     prompt.push_str("<changes>\n# CHANGED FILES (status and line counts):\n");
-    prompt.push_str(&staged_summary(rows));
-    let mut budget = MAX_TOTAL_ORIGINAL_BYTES;
+    if rows_text.is_empty() {
+        prompt.push_str("  (none)\n");
+    }
+    prompt.push_str(rows_text);
     for change in changes {
         prompt.push_str(&format!("\n<file path=\"{}\">\n", change.path));
         prompt.push_str("<original-code>\n# ORIGINAL CODE:\n");
-        match &change.original {
-            Some(original) if budget > 0 => {
-                let original = truncate(original, MAX_ORIGINAL_BYTES.min(budget));
-                budget = budget.saturating_sub(original.len());
+        match &change.head {
+            Some(head) => {
                 prompt.push_str(&format!("// File: {}\n", change.path));
-                prompt.push_str(&original);
-                prompt.push('\n');
+                prompt.push_str(head);
+                if !head.ends_with('\n') {
+                    prompt.push('\n');
+                }
             }
-            Some(_) => prompt.push_str("// (original code omitted: prompt budget exhausted)\n"),
             None => prompt.push_str(&format!(
                 "// File: {}\n// (new file — no previous version)\n",
                 change.path
             )),
         }
         prompt.push_str("</original-code>\n<code-changes>\n# CODE CHANGES:\n```diff\n");
-        prompt.push_str(&truncate(&change.diff, MAX_DIFF_BYTES));
-        prompt.push_str("\n```\n</code-changes>\n</file>\n");
+        if change.diff.is_empty() {
+            prompt.push_str("(no textual diff: binary or unchanged content)\n");
+        } else {
+            prompt.push_str(&change.diff);
+            if !change.diff.ends_with('\n') {
+                prompt.push('\n');
+            }
+        }
+        prompt.push_str("```\n</code-changes>\n</file>\n");
     }
-    if !unstaged.trim().is_empty() {
-        prompt.push_str("\n# UNSTAGED CHANGES (context only, not part of this commit):\n```diff\n");
-        prompt.push_str(&truncate(unstaged, MAX_DIFF_BYTES));
-        prompt.push_str("\n```\n");
+    if dropped > 0 {
+        prompt.push_str(&format!(
+            "\n# {dropped} changed file(s) above have no diff excerpt here: the prompt budget for this model is spent. The file list is complete.\n",
+        ));
     }
     prompt.push_str("</changes>\n\n");
 
@@ -360,27 +531,284 @@ fn recent_subjects(entries: Vec<git::CommitEntry>) -> Vec<String> {
         .collect()
 }
 
-/// Pair every changed file with its previous content and its staged diff.
-fn collect_changes(cwd: &Path, staged: &str, rows: &[StatusRow]) -> Vec<Change> {
-    let mut changes: Vec<Change> = split_diffs(staged)
+/// Pair every changed file with its previous content and its diff.
+fn collect_changes(cwd: &Path, patch: &str, rows: &[StatusRow], scope: Scope) -> Vec<Change> {
+    let mut changes: Vec<Change> = split_diffs(patch)
         .into_iter()
         .map(|(path, diff)| Change {
-            original: git::file_at_head(cwd, &path),
+            head: git::file_at_head(cwd, &path),
             path,
             diff,
         })
         .collect();
-    // Binary files and anything git omitted still appear, with an empty diff.
     for row in rows {
-        if !changes.iter().any(|change| change.path == row.path) {
-            changes.push(Change {
-                path: row.path.clone(),
-                original: git::file_at_head(cwd, &row.path),
-                diff: String::new(),
-            });
+        if changes.iter().any(|change| change.path == row.path) {
+            continue;
         }
+        // Binary files and anything git omitted still appear. An untracked file
+        // is real content the commit will record, so in the worktree scope it
+        // gets a synthesized diff instead of an empty one: `git diff` never
+        // shows untracked files, and a missing diff here means the model sees a
+        // path and nothing else.
+        let mut change = Change {
+            path: row.path.clone(),
+            head: None,
+            diff: String::new(),
+        };
+        if scope == Scope::Worktree && row.untracked() {
+            change.diff = untracked_diff(cwd, &row.path).unwrap_or_default();
+        } else {
+            change.head = git::file_at_head(cwd, &row.path);
+        }
+        changes.push(change);
     }
     changes
+}
+
+/// A `/dev/null` diff for an untracked file, built from its working-tree
+/// content. `None` for a binary, empty, or unreadable file.
+fn untracked_diff(cwd: &Path, path: &str) -> Option<String> {
+    let mut file = std::fs::File::open(cwd.join(path)).ok()?;
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(MAX_UNTRACKED_BYTES as u64)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let truncated = file
+        .metadata()
+        .map(|meta| meta.len() as usize > bytes.len())
+        .unwrap_or(false);
+    let text = String::from_utf8_lossy(&bytes);
+    // The same test `git` uses to call a file binary.
+    if text.is_empty() || text.contains('\u{0}') {
+        return None;
+    }
+    let count = text.lines().count();
+    let mut diff = format!(
+        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{count} @@\n"
+    );
+    for line in text.lines() {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    if truncated {
+        diff.push_str(&format!(
+            "+… [file truncated at {MAX_UNTRACKED_BYTES} bytes]\n"
+        ));
+    }
+    Some(diff)
+}
+
+/// Fit every change into the prompt budget: a fair share of the diff allowance
+/// per file, and a line-numbered ORIGINAL CODE excerpt windowed around the
+/// file's hunks (see [`original_excerpt`]).
+///
+/// Returns how many trailing files were left without a section because the
+/// budget could not even give them [`MIN_FILE_DIFF_BYTES`]. They are still named
+/// in the changed-file list; the caller says so in the prompt.
+fn prepare(changes: &mut Vec<Change>, budget: Budget) -> usize {
+    let count = changes.len().max(1);
+    let original_share = budget.original / count;
+    // A share smaller than a hunk window is not worth its bytes; the space goes
+    // to the diffs, which are what the message is written from.
+    let originals = original_share >= MIN_ORIGINAL_BYTES;
+    let diff_total = if originals {
+        budget.diff
+    } else {
+        budget.diff + budget.original
+    };
+    let share = (diff_total / count).clamp(MIN_FILE_DIFF_BYTES, MAX_FILE_DIFF_BYTES);
+    let mut diff_budget = diff_total;
+    let mut original_budget = budget.original;
+    let mut served = 0;
+    for change in changes.iter_mut() {
+        let allowance = share.min(diff_budget);
+        if allowance < MIN_FILE_DIFF_BYTES {
+            break;
+        }
+        let ranges = hunk_old_ranges(&change.diff);
+        if let Some(head) = change.head.take() {
+            let allowance = original_share.min(MAX_ORIGINAL_BYTES).min(original_budget);
+            if allowance < MIN_ORIGINAL_BYTES {
+                change.head =
+                    Some("// (original code omitted to stay inside the prompt budget)\n".to_string());
+            } else {
+                let excerpt = original_excerpt(&head, &ranges, allowance);
+                original_budget = original_budget.saturating_sub(excerpt.len());
+                change.head = Some(excerpt);
+            }
+        }
+        change.diff = truncate_diff(&change.diff, allowance);
+        diff_budget = diff_budget.saturating_sub(change.diff.len());
+        served += 1;
+    }
+    let dropped = changes.len() - served;
+    changes.truncate(served);
+    dropped
+}
+
+/// The old-side line ranges a unified diff touches: `@@ -a,b +c,d @@` yields
+/// the inclusive range `a..=a+b-1`. A pure addition (`b == 0`) keeps the line
+/// it is inserted after, so the excerpt still shows where it landed.
+fn hunk_old_ranges(diff: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    for line in diff.lines() {
+        let Some(rest) = line.strip_prefix("@@ -") else {
+            continue;
+        };
+        let Some((old, _)) = rest.split_once(" +") else {
+            continue;
+        };
+        let (start, count) = match old.split_once(',') {
+            Some((start, count)) => (start, count.parse::<usize>().unwrap_or(1)),
+            None => (old, 1usize),
+        };
+        let Ok(start) = start.parse::<usize>() else {
+            continue;
+        };
+        let first = start.max(1);
+        let last = (start + count.saturating_sub(1)).max(first);
+        ranges.push((first, last));
+    }
+    ranges
+}
+
+/// Inclusive line windows around the hunks, each padded by
+/// [`ORIGINAL_CONTEXT_LINES`] and merged when they meet.
+fn merge_windows(ranges: &[(usize, usize)], line_count: usize) -> Vec<(usize, usize)> {
+    let mut windows: Vec<(usize, usize)> = Vec::new();
+    for &(start, end) in ranges {
+        let from = start.saturating_sub(ORIGINAL_CONTEXT_LINES).max(1);
+        let to = (end + ORIGINAL_CONTEXT_LINES).min(line_count);
+        match windows.last_mut() {
+            Some(last) if from <= last.1 + 1 => last.1 = last.1.max(to),
+            _ => windows.push((from, to)),
+        }
+    }
+    windows
+}
+
+/// Keep at most the first and last few windows of a file with many hunks, so
+/// assembling the excerpt stays linear in the budget rather than in the diff.
+fn thin_windows(windows: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    const KEEP: usize = 4;
+    if windows.len() <= KEEP * 2 {
+        return windows;
+    }
+    let mut kept: Vec<(usize, usize)> = windows[..KEEP].to_vec();
+    kept.extend_from_slice(&windows[windows.len() - KEEP..]);
+    kept
+}
+
+/// ORIGINAL CODE for one file: line-numbered windows around the diff's hunks.
+///
+/// This is what makes a long file legible. The whole file rarely fits, and the
+/// head of the file is exactly the part a large change tends to leave alone;
+/// the system prompt also tells the model to map the diff's line numbers onto
+/// the original code, which needs the numbers to be there.
+fn original_excerpt(head: &str, ranges: &[(usize, usize)], max_bytes: usize) -> String {
+    let lines: Vec<&str> = head.lines().collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let windows = if ranges.is_empty() {
+        vec![(1, lines.len())]
+    } else {
+        thin_windows(merge_windows(ranges, lines.len()))
+    };
+    let width = windows
+        .last()
+        .map(|(_, end)| *end)
+        .unwrap_or(1)
+        .to_string()
+        .len();
+    let mut text = String::new();
+    for (index, (start, end)) in windows.iter().copied().enumerate() {
+        if index > 0 {
+            text.push_str("// …\n");
+        }
+        for number in start..=end.min(lines.len()) {
+            text.push_str(&format!(
+                "{number:>width$}: {}\n",
+                lines[number - 1],
+                width = width
+            ));
+        }
+    }
+    truncate_middle(&text, max_bytes)
+}
+
+/// Keep the head and the tail of `text`, dropping the middle: a change can sit
+/// at either end of the region being sent, so a head-only cut is the wrong
+/// shape.
+fn truncate_middle(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let budget = max.saturating_sub(TRUNCATION_MARKER_BYTES);
+    let half = budget / 2;
+    let mut head_end = half.min(text.len());
+    while head_end > 0 && !text.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+    let mut tail_start = text.len().saturating_sub(half);
+    while tail_start < text.len() && !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    let omitted = tail_start.saturating_sub(head_end);
+    format!(
+        "{}\n// … [{omitted} bytes omitted] …\n{}",
+        &text[..head_end],
+        &text[tail_start..]
+    )
+}
+
+/// Keep a long diff's file header plus its first and last hunks. Cutting at a
+/// fixed byte offset keeps only the top of the file — the part a big change
+/// usually leaves untouched — so the model would never read the change itself.
+fn truncate_diff(diff: &str, max: usize) -> String {
+    if diff.len() <= max {
+        return diff.to_string();
+    }
+    let mut header = String::new();
+    let mut hunks: Vec<String> = Vec::new();
+    for line in diff.split_inclusive('\n') {
+        if line.starts_with("@@ ") {
+            hunks.push(String::new());
+        }
+        match hunks.last_mut() {
+            Some(hunk) => hunk.push_str(line),
+            None => header.push_str(line),
+        }
+    }
+    let budget = max.saturating_sub(header.len() + TRUNCATION_MARKER_BYTES);
+    if hunks.len() < 2 || budget == 0 {
+        return truncate_middle(diff, max);
+    }
+    let half = budget / 2;
+    let mut head = String::new();
+    let mut front = 0;
+    while front < hunks.len() && head.len() + hunks[front].len() <= half {
+        head.push_str(&hunks[front]);
+        front += 1;
+    }
+    if front == 0 {
+        return truncate_middle(diff, max);
+    }
+    let mut tail = String::new();
+    let mut back = hunks.len();
+    while back > front && tail.len() + hunks[back - 1].len() <= budget - head.len() {
+        tail.insert_str(0, &hunks[back - 1]);
+        back -= 1;
+    }
+    let mut out = header;
+    out.push_str(&head);
+    if back > front {
+        out.push_str(&format!("\n… [{} hunk(s) omitted] …\n", back - front));
+    }
+    out.push_str(&tail);
+    out
 }
 
 /// Split a unified diff into `(path, chunk)` pairs at `diff --git` boundaries.
@@ -409,15 +837,23 @@ fn split_diffs(patch: &str) -> Vec<(String, String)> {
     diffs
 }
 
-fn truncate(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_string();
+/// `ORBIT_COMMIT_PROMPT_DUMP=/abs/path` writes the exact system and user
+/// messages the model sees, so a wrong commit message can be traced to its
+/// input instead of guessed at.
+fn dump_prompt(system: &str, prompt: &str) {
+    let Ok(path) = std::env::var("ORBIT_COMMIT_PROMPT_DUMP") else {
+        return;
+    };
+    let path = path.trim();
+    if path.is_empty() {
+        return;
     }
-    let mut end = max;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}\n… [diff truncated]", &text[..end])
+    let body = format!(
+        "=== system ({} bytes) ===\n{system}\n\n=== user ({} bytes) ===\n{prompt}\n",
+        system.len(),
+        prompt.len()
+    );
+    let _ = std::fs::write(path, body);
 }
 
 fn run_pi(
@@ -519,6 +955,11 @@ fn first_line(text: &str) -> String {
 /// match this tolerates a preamble or trailing prose around the fence, which
 /// models often add despite the instructions. Falls back to the raw text when
 /// no fence is present.
+///
+/// The body is returned **verbatim**: a long change makes a model write a
+/// structured message (headings, paragraphs, `BREAKING CHANGE:` footers) and
+/// rewriting that into normalized bullets mangles it. VS Code returns the same
+/// fenced body untouched.
 fn process_response(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     let fenced = extract_fence(trimmed, "```text").or_else(|| extract_fence(trimmed, "```"));
@@ -526,7 +967,8 @@ fn process_response(raw: &str) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// The body of the first fence opened with `marker` at the start of a line.
+/// The body of the first fence opened with `marker` at the start of a line. An
+/// unterminated fence still carries the message, so it is accepted.
 fn extract_fence(text: &str, marker: &str) -> Option<String> {
     let start = text.find(marker)?;
     if start != 0 && !text[..start].ends_with('\n') {
@@ -536,71 +978,30 @@ fn extract_fence(text: &str, marker: &str) -> Option<String> {
     let rest = rest
         .strip_prefix("\r\n")
         .or_else(|| rest.strip_prefix('\n'))?;
-    let end = rest.find("\n```")?;
-    let body = rest[..end].trim();
-    (!body.is_empty()).then(|| body.to_string())
-}
-
-/// Force the model output into the app's commit shape regardless of how closely
-/// it followed instructions: one subject line, a blank line, then past-tense
-/// body bullets that each start with `- ` and end with a period.
-fn normalize(message: &str) -> String {
-    let mut lines = message
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty());
-    let Some(subject) = lines.next() else {
-        return String::new();
+    let body = match rest.find("\n```") {
+        Some(end) => &rest[..end],
+        None => rest.trim_end_matches('`'),
     };
-    let subject = strip_bullet(subject).trim_end_matches('.').trim();
-    let mut body: Vec<String> = Vec::new();
-    for line in lines {
-        let line = strip_bullet(line).trim();
-        if line.is_empty() {
-            continue;
-        }
-        let mut sentence = capitalize(line);
-        if !sentence.ends_with(['.', '!', '?']) {
-            sentence.push('.');
-        }
-        body.push(format!("- {sentence}"));
-    }
-    if body.is_empty() {
-        subject.to_string()
-    } else {
-        format!("{subject}\n\n{}", body.join("\n"))
-    }
-}
-
-/// Remove a leading `- `, `* `, `• `, or `1.`/`1)` list marker.
-fn strip_bullet(line: &str) -> &str {
-    let trimmed = line
-        .trim_start_matches(['-', '*', '•', '–', '—'])
-        .trim_start();
-    let digits = trimmed.len()
-        - trimmed
-            .trim_start_matches(|c: char| c.is_ascii_digit())
-            .len();
-    if digits > 0 {
-        let rest = &trimmed[digits..];
-        if let Some(rest) = rest.strip_prefix('.').or_else(|| rest.strip_prefix(')')) {
-            return rest.trim_start();
-        }
-    }
-    trimmed
-}
-
-fn capitalize(line: &str) -> String {
-    let mut chars = line.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
+    let body = body.trim();
+    (!body.is_empty()).then(|| body.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(path: &str, index: char, worktree: char) -> StatusRow {
+        StatusRow {
+            path: path.into(),
+            orig_path: None,
+            index,
+            worktree,
+            staged_additions: 1,
+            staged_deletions: 0,
+            unstaged_additions: 0,
+            unstaged_deletions: 0,
+        }
+    }
 
     #[test]
     fn extracts_a_single_text_fence() {
@@ -624,6 +1025,23 @@ mod tests {
     }
 
     #[test]
+    fn an_unterminated_fence_still_yields_the_message() {
+        assert_eq!(
+            process_response("```text\nfix: guard input\n").as_deref(),
+            Some("fix: guard input")
+        );
+    }
+
+    /// A long change makes the model write a multi-paragraph body; rewriting it
+    /// into bullets and forcing periods mangles it, so the body is passed on as
+    /// written.
+    #[test]
+    fn keeps_the_generated_body_verbatim() {
+        let raw = "feat(git): read the worktree\n\n## Summary\nThe diff now comes from the worktree.\n\nBREAKING CHANGE: `generate` takes a scope.";
+        assert_eq!(process_response(raw).as_deref(), Some(raw));
+    }
+
+    #[test]
     fn splits_a_patch_into_per_file_chunks() {
         let patch = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@\n-old\n+new\n\
                      diff --git a/b.rs b/b.rs\n--- /dev/null\n+++ b/b.rs\n@@\n+new\n";
@@ -635,28 +1053,184 @@ mod tests {
     }
 
     #[test]
+    fn reads_the_old_line_ranges_of_a_hunk() {
+        let diff = "diff --git a/a.rs b/a.rs\n@@ -12,4 +12,5 @@\n-old\n+new\n@@ -40 +41,0 @@\n-gone\n";
+        assert_eq!(hunk_old_ranges(diff), vec![(12, 15), (40, 40)]);
+    }
+
+    #[test]
+    fn original_code_windows_around_a_deep_hunk_with_line_numbers() {
+        let head: String = (1..=400).map(|line| format!("line {line}\n")).collect();
+        let diff = "diff --git a/big.rs b/big.rs\n@@ -200,3 +200,3 @@\n-old\n+new\n";
+        let excerpt = original_excerpt(&head, &hunk_old_ranges(diff), MAX_ORIGINAL_BYTES);
+        assert!(excerpt.contains("200: line 200"), "{excerpt}");
+        assert!(excerpt.contains("176: line 176"), "context before: {excerpt}");
+        assert!(excerpt.contains("226: line 226"), "context after: {excerpt}");
+        assert!(
+            !excerpt.contains("1: line 1\n"),
+            "the file head is not the change: {excerpt}"
+        );
+        assert!(!excerpt.contains("400: line 400\n"), "{excerpt}");
+    }
+
+    #[test]
+    fn original_code_falls_back_to_the_whole_file_without_hunks() {
+        assert_eq!(
+            original_excerpt("alpha\nbeta\n", &[], MAX_ORIGINAL_BYTES),
+            "1: alpha\n2: beta\n"
+        );
+    }
+
+    #[test]
+    fn long_diffs_keep_the_first_and_last_hunks() {
+        let mut diff = String::from("diff --git a/big.rs b/big.rs\n");
+        for hunk in 0..40 {
+            diff.push_str(&format!("@@ -{hunk},1 +{hunk},1 @@\n-old {hunk}\n+new {hunk}\n"));
+        }
+        let shortened = truncate_diff(&diff, 400);
+        assert!(shortened.len() < diff.len());
+        assert!(shortened.contains("+new 0"), "{shortened}");
+        assert!(shortened.contains("+new 39"), "{shortened}");
+        assert!(shortened.contains("hunk(s) omitted"), "{shortened}");
+        assert!(!shortened.contains("+new 20"), "{shortened}");
+    }
+
+    #[test]
+    fn middle_truncation_keeps_both_ends() {
+        let cut = truncate_middle(&"a".repeat(1000), 200);
+        assert!(cut.starts_with("aaaa"), "{cut}");
+        assert!(cut.ends_with("aaaa"), "{cut}");
+        assert!(cut.contains("bytes omitted"), "{cut}");
+        assert!(!cut.contains(&"a".repeat(300)), "{cut}");
+    }
+
+    /// A long change set must not overflow the model's context window: one
+    /// budget is shared across the files instead of a per-file cap that adds
+    /// up without limit.
+    #[test]
+    fn one_diff_budget_is_shared_across_files() {
+        let budget = Budget::for_context(Some(128_000), 0);
+        let mut changes: Vec<Change> = (0..6)
+            .map(|file| Change {
+                path: format!("f{file}.rs"),
+                head: Some("1: x\n".repeat(20_000)),
+                diff: big_diff(2_000),
+            })
+            .collect();
+        let dropped = prepare(&mut changes, budget);
+        assert_eq!(dropped, 0, "a small set serves every file");
+        let diffs: usize = changes.iter().map(|change| change.diff.len()).sum();
+        let heads: usize = changes
+            .iter()
+            .map(|change| change.head.as_deref().map(str::len).unwrap_or(0))
+            .sum();
+        assert!(diffs <= budget.diff + 128, "{diffs} bytes of diff");
+        assert!(
+            heads <= budget.original + 128,
+            "{heads} bytes of original code"
+        );
+        for change in &changes {
+            assert!(
+                change.diff.len() <= MAX_FILE_DIFF_BYTES + 128,
+                "{}: {} bytes",
+                change.path,
+                change.diff.len()
+            );
+            // The last files still say something rather than vanishing.
+            assert!(!change.diff.is_empty(), "{}", change.path);
+        }
+    }
+
+    /// The point of sizing the budget from the context window: a commit of a
+    /// hundred-plus files still gets a description of every one of them.
+    #[test]
+    fn a_hundred_files_each_keep_a_diff() {
+        let budget = Budget::for_context(Some(1_000_000), 0);
+        let mut changes: Vec<Change> = (0..120)
+            .map(|file| Change {
+                path: format!("f{file}.rs"),
+                head: Some("1: x\n".repeat(20_000)),
+                diff: big_diff(200),
+            })
+            .collect();
+        let dropped = prepare(&mut changes, budget);
+        assert_eq!(dropped, 0, "120 files still fit a 1M-token window");
+        assert_eq!(changes.len(), 120);
+        for change in &changes {
+            assert!(change.diff.starts_with("diff --git"), "{}", change.path);
+            // A big diff keeps its first and last hunk, so the whole change is
+            // still visible even at a small share.
+            assert!(change.diff.contains("-old 0"), "{}", change.path);
+            assert!(change.diff.contains("+new 199\n"), "{}", change.path);
+        }
+    }
+
+    /// The same change set on a small window degrades instead of overflowing:
+    /// every file is still listed, and the budget is respected.
+    #[test]
+    fn a_small_window_is_still_respected() {
+        let budget = Budget::for_context(Some(32_000), 0);
+        let mut changes: Vec<Change> = (0..120)
+            .map(|file| Change {
+                path: format!("f{file}.rs"),
+                head: Some("1: x\n".repeat(20_000)),
+                diff: big_diff(200),
+            })
+            .collect();
+        let rows: Vec<StatusRow> = (0..120)
+            .map(|file| row(&format!("f{file}.rs"), 'M', ' '))
+            .collect();
+        let rows_text = staged_summary(&rows);
+        let dropped = prepare(&mut changes, budget);
+        assert!(dropped > 0, "a 32k window cannot carry 120 big diffs");
+        let sent: usize = changes.iter().map(|change| change.diff.len()).sum();
+        // No source excerpts at this size, so their budget went to the diffs.
+        assert!(
+            sent <= budget.diff + budget.original + 128,
+            "{sent} bytes of diff"
+        );
+
+        // Everything is still named, and the prompt says why the tail is short.
+        let prompt = user_prompt("orbit", Some("main"), &rows_text, &changes, &RecentCommits::default(), dropped, &Options::default());
+        for file in 0..120 {
+            assert!(prompt.contains(&format!("M f{file}.rs")), "f{file}.rs is listed");
+        }
+        assert!(
+            prompt.contains("have no diff excerpt here"),
+            "the omission is stated"
+        );
+    }
+
+    /// A diff with `hunks` one-line hunks, so truncation has hunks to drop.
+    fn big_diff(hunks: usize) -> String {
+        let mut diff = String::from("diff --git a/big.rs b/big.rs\n");
+        for line in 0..hunks {
+            diff.push_str(&format!("@@ -{line},1 +{line},1 @@\n-old {line}\n+new {line}\n"));
+        }
+        diff
+    }
+
+    #[test]
+    fn an_untracked_file_gets_a_real_diff() {
+        let root = std::env::temp_dir().join(format!("orbit-commit-msg-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("new.rs"), "fn main() {}\nsecond\n").unwrap();
+        let diff = untracked_diff(&root, "new.rs").expect("a text file has a diff");
+        assert!(diff.contains("--- /dev/null"), "{diff}");
+        assert!(diff.contains("@@ -0,0 +1,2 @@"), "{diff}");
+        assert!(diff.contains("+fn main() {}"), "{diff}");
+        assert!(diff.contains("+second"), "{diff}");
+        // A binary file has no textual diff to offer.
+        std::fs::write(root.join("blob.bin"), [0u8, 1, 2]).unwrap();
+        assert_eq!(untracked_diff(&root, "blob.bin"), None);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
     fn heuristic_names_the_shared_scope() {
         let rows = vec![
-            crate::git::StatusRow {
-                path: "crates/orbit-pi/src/a.rs".into(),
-                orig_path: None,
-                index: 'M',
-                worktree: ' ',
-                staged_additions: 1,
-                staged_deletions: 0,
-                unstaged_additions: 0,
-                unstaged_deletions: 0,
-            },
-            crate::git::StatusRow {
-                path: "crates/orbit-pi/src/b.rs".into(),
-                orig_path: None,
-                index: 'A',
-                worktree: ' ',
-                staged_additions: 3,
-                staged_deletions: 0,
-                unstaged_additions: 0,
-                unstaged_deletions: 0,
-            },
+            row("crates/orbit-pi/src/a.rs", 'M', ' '),
+            row("crates/orbit-pi/src/b.rs", 'A', ' '),
         ];
         let message = heuristic(&rows);
         assert!(message.starts_with("feat(src):"), "{message}");
@@ -665,26 +1239,8 @@ mod tests {
     #[test]
     fn heuristic_reads_as_a_conventional_description() {
         let rows = vec![
-            crate::git::StatusRow {
-                path: "crates/orbit-pi/src/git_panel.rs".into(),
-                orig_path: None,
-                index: 'M',
-                worktree: ' ',
-                staged_additions: 4,
-                staged_deletions: 1,
-                unstaged_additions: 0,
-                unstaged_deletions: 0,
-            },
-            crate::git::StatusRow {
-                path: "crates/orbit-pi/src/commit_message.rs".into(),
-                orig_path: None,
-                index: 'A',
-                worktree: ' ',
-                staged_additions: 3,
-                staged_deletions: 0,
-                unstaged_additions: 0,
-                unstaged_deletions: 0,
-            },
+            row("crates/orbit-pi/src/git_panel.rs", 'M', ' '),
+            row("crates/orbit-pi/src/commit_message.rs", 'A', ' '),
         ];
         let message = heuristic(&rows);
         // Conventional subject with a description, not a file count.
@@ -702,57 +1258,43 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_bullets_and_trailing_periods_into_the_commit_shape() {
-        let raw = "- feat: animate the sidebar\n\n* the sidebar now slides open\n1. the toggle floats above\nGit status no longer marks unstaged edits as staged.";
-        assert_eq!(
-            normalize(raw),
-            "feat: animate the sidebar\n\n\
-             - The sidebar now slides open.\n\
-             - The toggle floats above.\n\
-             - Git status no longer marks unstaged edits as staged."
-        );
-    }
-
-    #[test]
-    fn normalize_keeps_a_subject_only_message() {
-        assert_eq!(
-            normalize("fix: guard empty input."),
-            "fix: guard empty input"
-        );
-        assert_eq!(normalize("   \n "), "");
-    }
-
-    #[test]
     fn prompt_follows_the_vscode_structure() {
-        let rows = vec![crate::git::StatusRow {
-            path: "src/lib.rs".into(),
-            orig_path: None,
-            index: 'M',
-            worktree: ' ',
-            staged_additions: 2,
-            staged_deletions: 0,
-            unstaged_additions: 0,
-            unstaged_deletions: 0,
-        }];
+        let rows = vec![row("src/lib.rs", 'M', ' ')];
         let changes = vec![Change {
             path: "src/lib.rs".into(),
-            original: Some("fn old() {}\n".into()),
+            head: Some("1: fn old() {}\n".into()),
             diff: "diff --git a/src/lib.rs b/src/lib.rs\n".into(),
         }];
         let recent = RecentCommits {
             repository: vec!["feat: add the review pane".into()],
             user: vec!["fix: guard empty input".into()],
         };
-        let user = user_prompt("orbit", Some("main"), &rows, &changes, "", &recent);
+        let user = user_prompt(
+            "orbit",
+            Some("main"),
+            &staged_summary(&rows),
+            &changes,
+            &recent,
+            0,
+            &Options {
+                attempt: 1,
+                previous: Some("chore: update files"),
+                ..Options::default()
+            },
+        );
         assert!(user.contains("<repository-context>"), "{user}");
         assert!(user.contains("Repository name: orbit"), "{user}");
         assert!(user.contains("Branch name: main"), "{user}");
         assert!(user.contains("<user-commits>"), "{user}");
         assert!(user.contains("<recent-commits>"), "{user}");
         assert!(user.contains("feat: add the review pane"), "{user}");
-        assert!(user.contains("  M src/lib.rs (+2 -0)"), "{user}");
-        assert!(user.contains("<original-code>"), "{user}");
-        assert!(user.contains("fn old() {}"), "{user}");
+        assert!(user.contains("<previous-attempt>"), "{user}");
+        assert!(user.contains("chore: update files"), "{user}");
+        assert!(user.contains("  M src/lib.rs (+1 -0)"), "{user}");
+        assert!(
+            user.contains("<original-code>") && user.contains("1: fn old() {}"),
+            "{user}"
+        );
         assert!(user.contains("<code-changes>"), "{user}");
         assert!(user.contains("```diff"), "{user}");
         assert!(user.contains("<reminder>"), "{user}");
@@ -760,6 +1302,9 @@ mod tests {
             user.contains("ONLY return a single markdown code block"),
             "{user}"
         );
+        // The unstaged diff is no longer a "context only" afterthought: the
+        // scope decides what the commit records.
+        assert!(!user.contains("UNSTAGED CHANGES"), "{user}");
 
         let system = system_prompt();
         assert!(system.contains("think step-by-step"), "{system}");

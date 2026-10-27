@@ -689,13 +689,18 @@ async function orbitQuotaGoogle() {
 //                           object plus per-model request counts. The reset is
 //                           on the plan's subscription anniversary, which the
 //                           payload does NOT expose — we omit the countdown
-//                           rather than guess.
+//                           rather than guess. `GET https://ollama.com/api/balance`
+//                           adds the two remaining dollar figures: the included
+//                           plan allowance (drawn first) and the purchased
+//                           credit balance (drawn once included is spent).
 //   legacy (GPU-time)       a 5-hour session window, a weekly window, and the
 //                           plan's included allowance. These have no API: they
 //                           render server-side on the authenticated
 //                           `https://ollama.com/settings` page, so the only
 //                           honest source is that page's HTML with the user's
-//                           own session.
+//                           own session. Orbit no longer collects that cookie
+//                           in Settings; an entry already in auth.json is still
+//                           honored, but nothing in the UI advertises it.
 //
 // Credentials are user-supplied and explicit. We NEVER read browser cookies
 // and never touch pi's local models.json placeholder (the literal API key
@@ -715,6 +720,7 @@ async function orbitQuotaGoogle() {
 // only ever sent to https://ollama.com and never logged.
 
 const OLLAMA_USAGE_URL = "https://ollama.com/api/usage";
+const OLLAMA_BALANCE_URL = "https://ollama.com/api/balance";
 const OLLAMA_SETTINGS_URL = "https://ollama.com/settings";
 
 /** auth.json key holding the session cookie; never a provider id. */
@@ -740,6 +746,74 @@ function orbitOllamaCloudKey(entry) {
   if (/^https?:\/\//i.test(key)) return undefined;
   if (/^127\.0\.0\.1|^localhost/i.test(key)) return undefined;
   return key;
+}
+
+/**
+ * Reduce one `/api/balance` bucket to an amount plus currency. The endpoint is
+ * unversioned from our side, so a bucket may be a bare number or an object
+ * carrying the figure under an `amount`-style key and its own `currency`.
+ * Returns `undefined` for anything unrecognized, so an unreadable shape renders
+ * no balance rather than a fabricated $0.
+ */
+function orbitOllamaAmount(node, currency) {
+  if (node == null || typeof node === "string") return undefined;
+  if (typeof node === "number") {
+    const amount = orbitQuotaNumber(node);
+    return amount == null ? undefined : { amount, currency };
+  }
+  if (typeof node !== "object" || Array.isArray(node)) return undefined;
+  const own = typeof node.currency === "string" && node.currency ? node.currency : currency;
+  for (const field of ["amount", "remaining", "available", "balance", "value"]) {
+    const amount = orbitQuotaNumber(node[field]);
+    if (amount != null) return { amount, currency: own };
+  }
+  return undefined;
+}
+
+/**
+ * The two balances Ollama Cloud draws from, in spend order: the included plan
+ * allowance first, then the purchased usage credits. The pair has shipped both
+ * flat (`included` / `purchased`) and nested under `balance`, so the container
+ * is unwrapped before the fields are read. A bucket that is absent is omitted,
+ * never shown as zero; a real zero is kept, since "nothing purchased" is
+ * different from "this endpoint does not report it".
+ */
+function orbitOllamaBalances(body) {
+  const d = body || {};
+  const root =
+    d.balance && typeof d.balance === "object" && !Array.isArray(d.balance)
+      ? d.balance
+      : d;
+  const currency =
+    (typeof d.currency === "string" && d.currency) ||
+    (typeof root.currency === "string" && root.currency) ||
+    "USD";
+  const first = (fields) => {
+    for (const field of fields) {
+      const found = orbitOllamaAmount(root[field], currency);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  const included = first([
+    "included",
+    "includedBalance",
+    "included_balance",
+    "current",
+    "currentBalance",
+    "current_balance",
+  ]);
+  const purchased = first([
+    "purchased",
+    "purchasedBalance",
+    "purchased_balance",
+    "credits",
+    "credit",
+  ]);
+  const balances = [];
+  if (included) balances.push(orbitQuotaBalance("Included", included.amount, included.currency));
+  if (purchased) balances.push(orbitQuotaBalance("Purchased", purchased.amount, purchased.currency));
+  return balances;
 }
 
 /**
@@ -873,12 +947,20 @@ const OllamaCloudParser = {
   },
 };
 
-/** Current model: fetch the authoritative JSON usage endpoint. */
+/**
+ * Current model: the authoritative JSON usage and balance endpoints. Balances
+ * are additive — a failed balance request must never blank the meters, so it
+ * only ever contributes rows and never an error of its own.
+ */
 async function orbitOllamaCloudApi(key) {
-  const r = await orbitQuotaJson(OLLAMA_USAGE_URL, {
+  const headers = {
     Authorization: "Bearer " + key,
     Accept: "application/json",
-  });
+  };
+  const [r, b] = await Promise.all([
+    orbitQuotaJson(OLLAMA_USAGE_URL, headers),
+    orbitQuotaJson(OLLAMA_BALANCE_URL, headers),
+  ]);
   if (!r.ok) return { kind: "subscription", error: orbitQuotaHttpError(r.status) };
   const d = r.body || {};
   const limits = d.limits || {};
@@ -919,9 +1001,11 @@ async function orbitOllamaCloudApi(key) {
     }
   }
 
-  const balances = [];
+  const balances = b.ok ? orbitOllamaBalances(b.body) : [];
+  // Older payloads carried a single credit figure on the usage response; keep
+  // it as a fallback, but only when /api/balance reported nothing.
   const credits = d.credits || d.balance;
-  if (credits && typeof credits === "object") {
+  if (balances.length === 0 && credits && typeof credits === "object") {
     const remaining = orbitQuotaNumber(
       credits.remaining != null ? credits.remaining : credits.available,
     );
@@ -938,7 +1022,7 @@ async function orbitOllamaCloudApi(key) {
     note:
       windows.some((w) => w.id === "monthly")
         ? "Monthly usage credits reset on your plan's anniversary, which the API does not expose."
-        : "The API does not expose reset times; add a session cookie in Settings → Providers → Ollama to see when the 5-hour and weekly windows reset.",
+        : "The API does not expose reset times for the 5-hour and weekly windows.",
   };
 }
 
@@ -1042,7 +1126,7 @@ async function orbitQuotaOllama(id) {
   return {
     kind: "unsupported",
     note:
-      "Ollama Cloud needs an API key (current monthly usage) or a session cookie (legacy window usage) — add one in Settings → Providers → Ollama. Local-only Ollama reports nothing.",
+      "Ollama Cloud reports usage and balances with an API key — add one in Settings → Providers → Ollama. Local-only Ollama reports nothing.",
   };
 }
 
@@ -1167,6 +1251,7 @@ export {
   orbitQuotaAdapters as quotaAdapters,
   orbitQuotaReadAuth as quotaStoredAuth,
   orbitOllamaCloudKey as ollamaCloudKey,
+  orbitOllamaBalances as ollamaBalances,
   OllamaCloudParser,
   quotaReports,
   ORBIT_QUOTA_TTL_MS,

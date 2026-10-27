@@ -21,26 +21,28 @@ use gpui::{
     anchored, canvas, deferred, div, fill, hsla, img, point, prelude::*, px, size,
     AnchoredPositionMode, AnyElement, Background, Bounds, ClickEvent, Context, Corner, Entity,
     Focusable, FontWeight, Hsla, MouseDownEvent, ObjectFit, PathBuilder, Pixels, Render,
-    Subscription, Window,
+    ScrollHandle, Subscription, Window,
 };
 
 use crate::app::{
-    button_frame, context_menu_separator, icon, icon_button_frame, input_field_frame, menu_header,
-    nerd_font_family, picker_entry, picker_search_frame, picker_surface, press, refresh_glyph,
-    spinner, TipExt, BUTTON_GROUP,
+    button_frame, context_menu_separator, icon, icon_button_frame, icon_dyn, input_field_frame,
+    menu_header, nerd_font_family, picker_entry, picker_search_frame, picker_surface, press,
+    provider_mark_color, refresh_glyph, spinner, ModelEntry, TipExt, BUTTON_GROUP,
 };
 use crate::commands::{self, CommandId};
 use crate::commit_message;
+use crate::commit_model::{CommitModel, CommitModelConfig};
 use crate::gh;
 use crate::gh_templates::{self, RepoTemplate};
 use crate::git::{self, CommitEntry, StatusRow};
 use crate::git_ops::{self, InProgress};
 use crate::issue_message::{self, DraftKind};
+use crate::model_selector::provider_icon;
 use crate::sidepane::{FileActions, SectionActions, SidePane};
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    button, context_menu, input, picker, popover, ButtonSize, DynamicSpacing, IconSize, Radius,
-    StyledExt, TextSize,
+    button, context_menu, input, panel, picker, popover, ButtonSize, DynamicSpacing, IconSize,
+    Radius, StyledExt, TextSize,
 };
 use crate::theme::{self, Theme, ThemeMode};
 use crate::usage::tooltip::Tooltip;
@@ -77,6 +79,11 @@ const REFRESH_FEEDBACK: Duration = Duration::from_millis(650);
 
 /// Width of the branch / PR-base / ref pickers — one family, one width.
 const BRANCH_MENU_W: f32 = 320.;
+
+/// Width of the commit bar's model picker, and how tall its list grows before
+/// it scrolls (roughly eight rows).
+const COMMIT_MODEL_MENU_W: f32 = 340.;
+const COMMIT_MODEL_LIST_MAX_H: f32 = 300.;
 
 /// Width of the "…" action dropdowns (branch actions, file actions).
 const ACTION_MENU_W: f32 = 220.;
@@ -166,10 +173,36 @@ pub struct GitPanel {
     /// Provider/model used for one-shot commit-message generation.
     provider: String,
     model: String,
+    /// The selected model's context window, when the catalog reports one. Sizes
+    /// the commit-message prompt so a big change set still fits.
+    context_window: Option<u64>,
 
     // ── commit bar ──
     message: Entity<crate::composer::ComposerInput>,
+    /// The model the commit message is generated with: an explicit pick from
+    /// the commit bar's chip, or the session model. Persisted by
+    /// [`crate::commit_model`].
+    commit_model: CommitModelConfig,
+    /// pi's model catalog, for the chip's searchable list and the picked
+    /// model's context window.
+    models: Vec<ModelEntry>,
+    /// Whether the commit bar's model picker is open, its search field, the
+    /// highlighted row, and the list's scroll position.
+    commit_model_menu_open: bool,
+    commit_model_filter: Entity<crate::composer::ComposerInput>,
+    _commit_model_filter_sub: Subscription,
+    commit_model_needle: String,
+    commit_model_highlight: usize,
+    commit_model_scroll: ScrollHandle,
+    /// Set when an outside mouse-down closed the menu, so the chip's following
+    /// mouse-up does not toggle it back open.
+    commit_model_dismissed_at: Option<Instant>,
     include_unstaged: bool,
+    /// How many messages were generated for the current change set, and the
+    /// last one shown. A regeneration is told about both so it cannot quietly
+    /// repeat the message the user rejected.
+    generate_attempt: usize,
+    last_generated: Option<String>,
     pending: Option<GitAction>,
     generating: bool,
     /// A pending "stage unstaged changes first?" confirmation.
@@ -450,6 +483,24 @@ impl GitPanel {
                 .with_wrap(false)
         });
         let branch_filter_sub = cx.observe(&branch_filter, |_, _, cx| cx.notify());
+        let commit_model_filter = cx.new(|cx| {
+            crate::composer::ComposerInput::new(cx)
+                .with_placeholder_key("git_panel.search_models")
+                .with_key_context("Composer Picker")
+                .with_max_lines(1)
+                .with_wrap(false)
+        });
+        let commit_model_filter_sub = cx.observe(&commit_model_filter, |this, filter, cx| {
+            let needle = filter.read(cx).text().to_lowercase();
+            if needle != this.commit_model_needle {
+                // Filtering lands on the first *model*, not on the session
+                // row, so typing + Enter does not silently reset the choice.
+                let rows = commit_model_rows(&this.models, &needle);
+                this.commit_model_needle = needle;
+                this.commit_model_highlight = if rows.len() > 1 { 1 } else { 0 };
+                cx.notify();
+            }
+        });
         // The embedded review browser shares the Review pane's rendering, so
         // the Git page's Changes tab is exactly the Review UI.
         let review = cx.new(|cx| {
@@ -463,8 +514,20 @@ impl GitPanel {
             workspace: None,
             provider: String::new(),
             model: String::new(),
+            context_window: None,
             message,
+            commit_model: CommitModelConfig::load(),
+            models: Vec::new(),
+            commit_model_menu_open: false,
+            commit_model_filter,
+            _commit_model_filter_sub: commit_model_filter_sub,
+            commit_model_needle: String::new(),
+            commit_model_highlight: 0,
+            commit_model_scroll: ScrollHandle::new(),
+            commit_model_dismissed_at: None,
             include_unstaged: false,
+            generate_attempt: 0,
+            last_generated: None,
             pending: None,
             generating: false,
             stage_prompt: None,
@@ -580,6 +643,7 @@ impl GitPanel {
         self.review.update(cx, |pane, cx| pane.close(cx));
         self.branch_menu_open = false;
         self.branch_more_open = false;
+        self.commit_model_menu_open = false;
         cx.notify();
     }
 
@@ -599,6 +663,7 @@ impl GitPanel {
             self.tab = tab;
             self.branch_menu_open = false;
             self.branch_more_open = false;
+            self.commit_model_menu_open = false;
             self.ref_menu = None;
             self.refresh_all(cx);
         }
@@ -626,10 +691,13 @@ impl GitPanel {
         workspace: Option<PathBuf>,
         provider: String,
         model: String,
+        context_window: Option<u64>,
+        models: Vec<ModelEntry>,
         cx: &mut Context<Self>,
     ) {
         if workspace != self.workspace {
             self.workspace = workspace;
+            self.commit_model_menu_open = false;
             // The embedded review browser follows the workspace too, so its
             // diff reloads for the new repository.
             let review_workspace = self.workspace.clone();
@@ -671,6 +739,8 @@ impl GitPanel {
         }
         self.provider = provider;
         self.model = model;
+        self.context_window = context_window;
+        self.models = models;
     }
 
     /// Install the callback that opens a changed file's diff in Review.
@@ -963,9 +1033,19 @@ impl GitPanel {
                 panel.changes_loading = false;
                 match result {
                     Ok((rows, operation, conflicts)) => {
-                        panel.staged = rows.iter().filter(|row| row.staged()).cloned().collect();
-                        panel.unstaged =
+                        let staged: Vec<StatusRow> =
+                            rows.iter().filter(|row| row.staged()).cloned().collect();
+                        let unstaged: Vec<StatusRow> =
                             rows.iter().filter(|row| row.unstaged()).cloned().collect();
+                        // Only a changed change set retires the generated message:
+                        // the watcher refreshes on every save, and a regeneration
+                        // for the same diff must still see the rejected attempt.
+                        if staged != panel.staged || unstaged != panel.unstaged {
+                            panel.generate_attempt = 0;
+                            panel.last_generated = None;
+                        }
+                        panel.staged = staged;
+                        panel.unstaged = unstaged;
                         panel.git_operation = operation;
                         panel.conflicts = conflicts;
                         panel.install_review_actions(cx);
@@ -1705,7 +1785,8 @@ impl GitPanel {
                     picker_entry(div().id(id), &theme)
                         .cursor_pointer()
                         .when(selected, |row| {
-                            row.bg(theme.selection).text_color(theme.selection_fg)
+                            row.bg(theme.surface_selected)
+                                .text_color(theme.selection_fg)
                         })
                         .when(!selected, |row| {
                             row.text_color(theme.text_secondary)
@@ -2531,49 +2612,93 @@ impl GitPanel {
     fn generate_then(&mut self, action: Option<GitAction>, cx: &mut Context<Self>) {
         let Some(cwd) = self.cwd() else { return };
         self.generating = true;
+        self.commit_model_menu_open = false;
         self.set_status(tr!("git_panel.generating_commit_message"));
         cx.notify();
-        let provider = self.provider.clone();
-        let model = self.model.clone();
-        let staged_rows = self.staged.clone();
+        // The panel's own pick, else the session model (see
+        // [`CommitModelConfig::resolve`]). An empty pair lets pi use its own
+        // default rather than forcing a model the user never chose.
+        let picked = self.commit_model.resolve(&self.provider, &self.model);
+        let provider = picked
+            .as_ref()
+            .map(|model| model.provider.clone())
+            .unwrap_or_default();
+        let model = picked
+            .as_ref()
+            .map(|model| model.id.clone())
+            .unwrap_or_default();
+        let context_window = match &self.commit_model.model {
+            Some(model) => self
+                .models
+                .iter()
+                .find(|entry| entry.provider == model.provider && entry.id == model.id)
+                .and_then(|entry| entry.context_window),
+            None => self.context_window,
+        };
         let include_unstaged = self.include_unstaged;
+        let attempt = self.generate_attempt;
+        let previous = self.last_generated.clone();
         cx.spawn(async move |this, cx| {
-            let result: Result<String, String> = cx
+            let result: Result<(String, Option<String>), String> = cx
                 .background_executor()
                 .spawn(async move {
-                    let staged = git::staged_patch(&cwd)?;
-                    let unstaged = if include_unstaged {
-                        git::unstaged_patch(&cwd).unwrap_or_default()
+                    // Read the status here rather than trusting the cached rows:
+                    // a commit flow stages its changes just before calling this,
+                    // and the cached rows would still be the pre-stage set.
+                    let rows = git::status_rows(&cwd)?;
+                    // The scope decides which patch the prompt describes, so the
+                    // message always matches what the commit records.
+                    let scope = if include_unstaged {
+                        commit_message::Scope::Worktree
                     } else {
-                        String::new()
+                        commit_message::Scope::Staged
                     };
+                    let rows: Vec<_> = rows
+                        .into_iter()
+                        .filter(|row| scope.matches(row))
+                        .collect();
+                    if rows.is_empty() {
+                        return Err(tr!("git.no_staged_changes"));
+                    }
                     let provider = (!provider.is_empty()).then_some(provider.as_str());
                     let model = (!model.is_empty()).then_some(model.as_str());
-                    match commit_message::generate(
-                        &cwd,
+                    let options = commit_message::Options {
                         provider,
                         model,
-                        &staged,
-                        &unstaged,
-                        &staged_rows,
-                    ) {
-                        Ok(message) => Ok(message),
-                        Err(_) => Ok(commit_message::heuristic(&staged_rows)),
+                        scope,
+                        attempt,
+                        previous: previous.as_deref(),
+                        context_window,
+                    };
+                    match commit_message::generate(&cwd, &options, &rows) {
+                        Ok(message) => Ok((message, None)),
+                        // Keep the button useful without a model, but say why:
+                        // a filename-derived fallback passed off as a generated
+                        // message is what makes a wrong message look like a bug.
+                        Err(err) => Ok((commit_message::heuristic(&rows), Some(err))),
                     }
                 })
                 .await;
             let _ = this.update(cx, |panel, cx| {
                 panel.generating = false;
                 match result {
-                    Ok(message) => {
+                    Ok((message, warning)) => {
                         let len = panel.message.read(cx).text().len();
                         panel
                             .message
                             .update(cx, |input, cx| input.replace_range(0..len, &message, cx));
-                        panel.set_status(tr!("git_panel.commit_message_ready"));
+                        panel.last_generated = Some(message.clone());
+                        panel.generate_attempt += 1;
                         if let Some(action) = action {
                             panel.run_git_action(action, Some(message), cx);
                             return;
+                        }
+                        match warning {
+                            Some(err) => panel.set_failure(tr!(
+                                "git_panel.commit_message_fallback",
+                                error = err
+                            )),
+                            None => panel.set_status(tr!("git_panel.commit_message_ready")),
                         }
                     }
                     Err(err) => panel.set_failure(err),
@@ -2582,6 +2707,369 @@ impl GitPanel {
             });
         })
         .detach();
+    }
+
+    /// The commit bar's model chip: the model Generate will ask, with the
+    /// provider's mark and a caret. Clicking opens the picker; while a message
+    /// is being generated the chip is inert, since the in-flight call already
+    /// captured its model.
+    fn commit_model_controls(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.commit_model_menu_open;
+        let enabled = !self.generating;
+        let provider = match &self.commit_model.model {
+            Some(model) => model.provider.clone(),
+            None => self.provider.clone(),
+        };
+        div()
+            .relative()
+            .flex_none()
+            .children(self.commit_model_menu(theme, cx))
+            .child(
+                button_frame(div().id("git-commit-model"), &theme, ButtonSize::Medium)
+                    .border_1()
+                    .border_color(if open {
+                        theme.border_strong
+                    } else {
+                        theme.border
+                    })
+                    .when(open, |chip| chip.bg(theme.overlay))
+                    .when(!open, |chip| chip.raised(theme.surface_elevated, &theme))
+                    .when(enabled, |chip| {
+                        chip.cursor_pointer().hover(|s| {
+                            s.raised(theme.surface_hover, &theme)
+                                .border_color(theme.border_strong)
+                        })
+                    })
+                    .when(!enabled, |chip| chip.cursor_not_allowed())
+                    .text_color(if enabled {
+                        theme.text_secondary
+                    } else {
+                        theme.text_muted
+                    })
+                    .tip(tr!(
+                        "git_panel.commit_model_tip",
+                        name = self.commit_model_label()
+                    ))
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                        // The commit box's own mouse-up refocuses the message
+                        // editor; keep it from stealing the popup's search
+                        // field.
+                        cx.stop_propagation();
+                        if this.generating {
+                            return;
+                        }
+                        this.toggle_commit_model_menu(window, cx);
+                    }))
+                    .child(icon_dyn(
+                        provider_icon(&provider),
+                        ButtonSize::Medium.icon_size().px(&theme),
+                        provider_mark_color(&provider, &theme, theme.text_muted),
+                    ))
+                    .child(
+                        div()
+                            .max_w(px(150.))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .child(self.commit_model_label()),
+                    )
+                    .child(icon(
+                        "icons/chevron-down.svg",
+                        IconSize::XSmall.px(&theme),
+                        if open {
+                            theme.text_primary
+                        } else {
+                            theme.text_muted
+                        },
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// Catalog name for a provider/model pair, falling back to the raw id so an
+    /// override pi has not listed (a custom provider) still reads as something.
+    fn model_label(&self, provider: &str, id: &str) -> String {
+        self.models
+            .iter()
+            .find(|entry| entry.id == id && (provider.is_empty() || entry.provider == provider))
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| id.to_string())
+    }
+
+    /// The chip's label: the picked model, or the session model it follows.
+    fn commit_model_label(&self) -> String {
+        match &self.commit_model.model {
+            Some(model) => self.model_label(&model.provider, &model.id),
+            None if self.model.is_empty() => tr!("settings.active_session_model"),
+            None => self.model_label(&self.provider, &self.model),
+        }
+    }
+
+    /// The picker's selected row: 0 is "follow the session"; the rest index
+    /// the visible catalog rows. `None` when an override is set but the search
+    /// filtered its row out, so nothing is falsely marked as chosen.
+    fn commit_model_selected_row(&self, rows: &[Option<usize>]) -> Option<usize> {
+        let Some(picked) = self.commit_model.model.as_ref() else {
+            return Some(0);
+        };
+        rows.iter().position(|row| {
+            row.is_some_and(|ix| {
+                let entry = &self.models[ix];
+                entry.provider == picked.provider && entry.id == picked.id
+            })
+        })
+    }
+
+    fn toggle_commit_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // An outside mouse-down closed the menu on this same press; its
+        // following mouse-up is the dismissal, not a reopen (the branch chip's
+        // gesture guard).
+        let just_dismissed = self
+            .commit_model_dismissed_at
+            .take()
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(200));
+        if just_dismissed {
+            // The click that dismissed the menu was this chip: the editor held
+            // focus before the popup opened, so give it back instead of leaving
+            // it on the now-hidden search field.
+            self.message.read(cx).focus_handle(cx).focus(window);
+            return;
+        }
+        if self.commit_model_menu_open {
+            self.close_commit_model_menu(cx);
+            self.message.read(cx).focus_handle(cx).focus(window);
+            return;
+        }
+        self.commit_model_menu_open = true;
+        self.commit_model_filter
+            .update(cx, |input, cx| input.clear(cx));
+        self.commit_model_needle.clear();
+        let rows = commit_model_rows(&self.models, "");
+        self.commit_model_highlight = self.commit_model_selected_row(&rows).unwrap_or(0);
+        self.commit_model_scroll
+            .scroll_to_item(self.commit_model_highlight);
+        window.focus(&self.commit_model_filter.read(cx).focus_handle(cx));
+        cx.notify();
+    }
+
+    fn close_commit_model_menu(&mut self, cx: &mut Context<Self>) {
+        if self.commit_model_menu_open {
+            self.commit_model_menu_open = false;
+            cx.notify();
+        }
+    }
+
+    /// ↑/↓: move the highlight through the visible rows and keep it on screen.
+    fn move_commit_model_highlight(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let rows = commit_model_rows(&self.models, &self.commit_model_needle);
+        let last = rows.len().saturating_sub(1);
+        let current = self.commit_model_highlight.min(last);
+        self.commit_model_highlight = if delta < 0 {
+            current.saturating_sub(1)
+        } else {
+            (current + 1).min(last)
+        };
+        self.commit_model_scroll
+            .scroll_to_item(self.commit_model_highlight);
+        cx.notify();
+    }
+
+    /// Enter: activate the highlighted row.
+    fn confirm_commit_model(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rows = commit_model_rows(&self.models, &self.commit_model_needle);
+        let ix = self
+            .commit_model_highlight
+            .min(rows.len().saturating_sub(1));
+        if let Some(row) = rows.get(ix).copied() {
+            self.pick_commit_model(row, window, cx);
+        }
+    }
+
+    /// Persist a pick (`None` = follow the session model) and return focus to
+    /// the message editor so the next keystroke continues the commit message.
+    fn pick_commit_model(
+        &mut self,
+        row: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.commit_model.model = row
+            .and_then(|ix| self.models.get(ix))
+            .map(|entry| CommitModel {
+                provider: entry.provider.clone(),
+                id: entry.id.clone(),
+            });
+        self.commit_model.persist();
+        self.commit_model_menu_open = false;
+        self.message.read(cx).focus_handle(cx).focus(window);
+        cx.notify();
+    }
+
+    /// The commit-model popover, anchored above the chip. Its rows are the
+    /// session-model option followed by the filtered catalog, so the same
+    /// search box serves a one-provider list and a full catalog.
+    fn commit_model_menu(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.commit_model_menu_open {
+            return None;
+        }
+        let rows = commit_model_rows(&self.models, &self.commit_model_needle);
+        let selected = self.commit_model_selected_row(&rows);
+        let highlighted = self
+            .commit_model_highlight
+            .min(rows.len().saturating_sub(1));
+
+        let mut list = div()
+            .id("git-commit-model-scroll")
+            .w_full()
+            .max_h(px(COMMIT_MODEL_LIST_MAX_H))
+            .overflow_y_scroll()
+            .track_scroll(&self.commit_model_scroll)
+            .py(picker::list_padding_y(&theme))
+            .flex()
+            .flex_col();
+        for (ix, row) in rows.iter().enumerate() {
+            list = list.child(self.commit_model_row(
+                ix,
+                *row,
+                Some(ix) == selected,
+                ix == highlighted,
+                theme,
+                cx,
+            ));
+        }
+
+        let menu = picker_surface(div().id("git-commit-model-menu"), &theme)
+            .w(px(COMMIT_MODEL_MENU_W))
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .occlude()
+            // A click inside the popup is the popup's business: without this
+            // the commit box's mouse-up would refocus the message editor and
+            // take the caret out of the search field.
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_action(cx.listener(|this, _: &crate::PickerCancel, window, cx| {
+                this.close_commit_model_menu(cx);
+                this.message.read(cx).focus_handle(cx).focus(window);
+            }))
+            .on_action(cx.listener(|this, _: &crate::PickerConfirm, window, cx| {
+                this.confirm_commit_model(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::PickerSelectNext, _, cx| {
+                this.move_commit_model_highlight(1, cx)
+            }))
+            .on_action(cx.listener(|this, _: &crate::PickerSelectPrev, _, cx| {
+                this.move_commit_model_highlight(-1, cx)
+            }))
+            .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
+                this.commit_model_dismissed_at = Some(Instant::now());
+                this.close_commit_model_menu(cx);
+            }))
+            .child(
+                picker_search_frame(div(), &theme)
+                    .child(icon(
+                        "icons/search.svg",
+                        input::ICON.px(&theme),
+                        theme.text_muted,
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.commit_model_filter.clone()),
+                    ),
+            )
+            .child(list);
+
+        Some(
+            div()
+                .absolute()
+                .top_0()
+                .left_0()
+                .size(px(0.))
+                .child(
+                    anchored()
+                        .position_mode(AnchoredPositionMode::Local)
+                        .anchor(Corner::BottomLeft)
+                        .offset(point(px(0.), px(-6.)))
+                        .snap_to_window_with_margin(popover::WINDOW_MARGIN)
+                        .child(deferred(menu)),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// One picker row: the session-model option (`None`) or a catalog model.
+    /// Selection is a fill plus the trailing accent check; the keyboard cursor
+    /// uses the same fill, so the two never look like different states.
+    fn commit_model_row(
+        &self,
+        ix: usize,
+        row: Option<usize>,
+        selected: bool,
+        highlighted: bool,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (glyph, tint, primary, secondary) = match row {
+            Some(model_ix) => {
+                let model = &self.models[model_ix];
+                (
+                    provider_icon(&model.provider),
+                    provider_mark_color(&model.provider, &theme, theme.text_muted),
+                    model.name.clone(),
+                    crate::providers::provider_display_name(&model.provider),
+                )
+            }
+            None => (
+                provider_icon(&self.provider),
+                provider_mark_color(&self.provider, &theme, theme.text_muted),
+                tr!("settings.active_session_model"),
+                if self.model.is_empty() {
+                    String::new()
+                } else {
+                    self.model_label(&self.provider, &self.model)
+                },
+            ),
+        };
+        let id = gpui::ElementId::NamedInteger("git-commit-model-row".into(), ix as u64);
+        press(
+            picker_entry(div().id(id).group(BUTTON_GROUP), &theme)
+                .h(picker::entry_height(&theme))
+                .flex_none()
+                .cursor_pointer()
+                .when(selected || highlighted, |row| {
+                    row.bg(theme.surface_selected)
+                        .text_color(theme.text_primary)
+                })
+                .when(!selected && !highlighted, |row| {
+                    row.text_color(theme.text_secondary)
+                        .hover(|s| s.bg(theme.surface_hover).text_color(theme.text_primary))
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.pick_commit_model(row, window, cx);
+                })),
+        )
+        .child(icon_dyn(glyph, context_menu::ICON.px(&theme), tint))
+        .child(div().min_w_0().flex_1().truncate().child(primary))
+        .children((!secondary.is_empty()).then(|| {
+            div()
+                .flex_none()
+                .max_w(px(120.))
+                .truncate()
+                .text_size(TextSize::Small.px(&theme))
+                .text_color(theme.text_muted)
+                .child(secondary)
+        }))
+        .when(selected, |row| {
+            row.child(icon(
+                "icons/check.svg",
+                context_menu::ICON.px(&theme),
+                theme.accent_text,
+            ))
+        })
+        .into_any_element()
     }
 
     /// Run a commit-bar Git action off-thread. `message` is only used by the
@@ -3644,7 +4132,7 @@ impl GitPanel {
                 .bg(theme.error.opacity(0.1))
                 .border_1()
                 .border_color(theme.error.opacity(0.45))
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .px(DynamicSpacing::Base12.px(&theme))
                 .py(DynamicSpacing::Base08.px(&theme))
                 .flex()
@@ -3824,7 +4312,7 @@ impl GitPanel {
                 .bg(theme.warning.opacity(0.1))
                 .border_1()
                 .border_color(theme.warning.opacity(0.45))
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .px(DynamicSpacing::Base12.px(&theme))
                 .py(DynamicSpacing::Base08.px(&theme))
                 .flex()
@@ -3949,7 +4437,7 @@ impl GitPanel {
                     .px(DynamicSpacing::Base16.px(&theme))
                     .pt(DynamicSpacing::Base12.px(&theme))
                     .pb(DynamicSpacing::Base12.px(&theme))
-                    .rounded(Radius::XXLarge.px(&theme))
+                    .rounded(input::composer_radius(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.surface_secondary)
@@ -3991,7 +4479,7 @@ impl GitPanel {
                                     .h(ButtonSize::Medium.height(&theme))
                                     .px(DynamicSpacing::Base06.px(&theme))
                                     .ml(px(-6.))
-                                    .rounded(Radius::Large.px(&theme))
+                                    .rounded(button::RADIUS.px(&theme))
                                     .flex()
                                     .items_center()
                                     .gap(DynamicSpacing::Base08.px(&theme))
@@ -4029,53 +4517,67 @@ impl GitPanel {
                             }))
                             .child(div().flex_1())
                             .children(has_changes.then(|| {
-                                // Generate sits left of the commit actions on the
-                                // footer row, where it no longer competes with the
-                                // message field for horizontal space.
-                                button_frame(div().id("git-generate"), &theme, ButtonSize::Medium)
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .when(self.generating, |button| button.bg(theme.overlay))
-                                    .when(!self.generating, |button| {
-                                        button.raised(theme.surface_elevated, &theme)
-                                    })
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(if self.generating {
-                                        theme.text_muted
-                                    } else {
-                                        theme.text_primary
-                                    })
-                                    .when(!self.generating, |button| {
-                                        button
-                                            .cursor_pointer()
-                                            .hover(|s| {
-                                                s.raised(theme.surface_hover, &theme)
-                                                    .border_color(theme.border_strong)
-                                            })
-                                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                                this.generate(cx)
-                                            }))
-                                    })
-                                    .child(if self.generating {
-                                        spinner(
-                                            "git-generate-spinner",
-                                            ButtonSize::Medium.icon_size().px(&theme),
-                                            theme.accent_text,
-                                            theme,
+                                // The model chip and Generate sit left of the
+                                // commit actions on the footer row, where they
+                                // no longer compete with the message field for
+                                // horizontal space.
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(DynamicSpacing::Base08.px(&theme))
+                                    .child(self.commit_model_controls(theme, cx))
+                                    .child(
+                                        button_frame(
+                                            div().id("git-generate"),
+                                            &theme,
+                                            ButtonSize::Medium,
                                         )
-                                    } else {
-                                        icon(
-                                            "icons/magic-wand.svg",
-                                            ButtonSize::Medium.icon_size().px(&theme),
-                                            theme.text_secondary,
-                                        )
-                                        .into_any_element()
-                                    })
-                                    .child(if self.generating {
-                                        tr!("git_panel.generating_short")
-                                    } else {
-                                        tr!("git_panel.generate")
-                                    })
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .when(self.generating, |button| button.bg(theme.overlay))
+                                        .when(!self.generating, |button| {
+                                            button.raised(theme.surface_elevated, &theme)
+                                        })
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(if self.generating {
+                                            theme.text_muted
+                                        } else {
+                                            theme.text_primary
+                                        })
+                                        .when(!self.generating, |button| {
+                                            button
+                                                .cursor_pointer()
+                                                .hover(|s| {
+                                                    s.raised(theme.surface_hover, &theme)
+                                                        .border_color(theme.border_strong)
+                                                })
+                                                .on_click(cx.listener(
+                                                    |this, _: &ClickEvent, _, cx| this.generate(cx),
+                                                ))
+                                        })
+                                        .child(if self.generating {
+                                            spinner(
+                                                "git-generate-spinner",
+                                                ButtonSize::Medium.icon_size().px(&theme),
+                                                theme.accent_text,
+                                                theme,
+                                            )
+                                        } else {
+                                            icon(
+                                                "icons/magic-wand.svg",
+                                                ButtonSize::Medium.icon_size().px(&theme),
+                                                theme.text_secondary,
+                                            )
+                                            .into_any_element()
+                                        })
+                                        .child(
+                                            if self.generating {
+                                                tr!("git_panel.generating_short")
+                                            } else {
+                                                tr!("git_panel.generate")
+                                            },
+                                        ),
+                                    )
                             }))
                             .child(match actions {
                                 BarActions::Commit => div()
@@ -4505,7 +5007,7 @@ impl GitPanel {
             .mb(DynamicSpacing::Base06.px(&theme))
             .px(DynamicSpacing::Base12.px(&theme))
             .py(DynamicSpacing::Base08.px(&theme))
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .border_1()
             .border_color(theme.border)
             .bg(theme.surface_elevated)
@@ -5230,7 +5732,7 @@ impl GitPanel {
             main = main.child(
                 div()
                     .p(DynamicSpacing::Base12.px(&theme))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.surface_elevated)
@@ -5825,7 +6327,7 @@ impl GitPanel {
             content = content.child(
                 div()
                     .p(DynamicSpacing::Base12.px(&theme))
-                    .rounded(Radius::XLarge.px(&theme))
+                    .rounded(panel::RADIUS.px(&theme))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.surface_elevated)
@@ -5838,7 +6340,7 @@ impl GitPanel {
         // Checks.
         if !pull.checks.is_empty() {
             let mut checks = div()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -5901,7 +6403,7 @@ impl GitPanel {
         // Commits.
         if !pull.commits.is_empty() {
             let mut commits = div()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -5941,7 +6443,7 @@ impl GitPanel {
         // Changed files.
         if !pull.files.is_empty() {
             let mut files = div()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -6032,7 +6534,7 @@ impl GitPanel {
         // page sits in a card above the comment field, GitHub-style.
         if pull.is_open() {
             let merge_row = div()
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface_elevated)
@@ -6606,7 +7108,8 @@ impl GitPanel {
         let mut row = picker_entry(div().id(id).group("git-branch-row"), &theme)
             .cursor_pointer()
             .when(selected, |row| {
-                row.bg(theme.selection).text_color(theme.selection_fg)
+                row.bg(theme.surface_selected)
+                    .text_color(theme.selection_fg)
             })
             .when(!selected, |row| {
                 row.text_color(theme.text_secondary)
@@ -6721,7 +7224,7 @@ impl GitPanel {
                             button_frame(div().id(id), &theme, ButtonSize::Medium)
                                 .cursor_pointer()
                                 .when(selected, |s| {
-                                    s.bg(theme.selection).text_color(theme.selection_fg)
+                                    s.bg(theme.surface_selected).text_color(theme.selection_fg)
                                 })
                                 .when(!selected, |s| {
                                     s.text_color(theme.text_muted).hover(|s| {
@@ -7452,6 +7955,25 @@ fn dropdown_chip(
         .into_any_element()
 }
 
+/// The commit-model picker's rows: the follow-the-session option first, then
+/// every catalog model matching `needle` on its name, id, or provider. `None`
+/// is the session option; `Some` indexes the catalog.
+fn commit_model_rows(models: &[ModelEntry], needle: &str) -> Vec<Option<usize>> {
+    let mut rows = vec![None];
+    for (ix, model) in models.iter().enumerate() {
+        let provider = crate::providers::provider_display_name(&model.provider);
+        if needle.is_empty()
+            || model.name.to_lowercase().contains(needle)
+            || model.id.to_lowercase().contains(needle)
+            || model.provider.to_lowercase().contains(needle)
+            || provider.to_lowercase().contains(needle)
+        {
+            rows.push(Some(ix));
+        }
+    }
+    rows
+}
+
 /// A small placeholder shown inside an expanding commit row while its detail
 /// loads (or when it could not be loaded).
 fn detail_note(theme: Theme, label: &str) -> AnyElement {
@@ -7460,7 +7982,7 @@ fn detail_note(theme: Theme, label: &str) -> AnyElement {
         .mb(DynamicSpacing::Base06.px(&theme))
         .px(DynamicSpacing::Base12.px(&theme))
         .py(DynamicSpacing::Base08.px(&theme))
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.surface_elevated)
@@ -7774,7 +8296,7 @@ fn issue_comment_card(comment: &gh::GhComment, theme: Theme) -> AnyElement {
     // Same rule as the review card: no body, no header separator.
     let has_body = !comment.body.trim().is_empty();
     div()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.surface_elevated)
@@ -8032,7 +8554,7 @@ fn review_card(review: &gh::GhReview, theme: Theme) -> AnyElement {
     // separate a body from the header, so it is dropped when there is none.
     let has_body = !review.body.trim().is_empty();
     div()
-        .rounded(Radius::XLarge.px(&theme))
+        .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
         .bg(theme.surface_elevated)
@@ -8150,7 +8672,7 @@ fn graph_row(
         .gap(DynamicSpacing::Base08.px(&theme))
         .cursor_pointer()
         .hover(|s| s.bg(theme.surface_hover))
-        .when(selected, |s| s.bg(theme.selection))
+        .when(selected, |s| s.bg(theme.surface_selected))
         .on_click(listener)
         .child(graph_gutter(row, theme))
         .child(
@@ -8365,7 +8887,7 @@ fn commit_row(
         .gap(DynamicSpacing::Base08.px(&theme))
         .cursor_pointer()
         .hover(|s| s.bg(theme.surface_hover))
-        .when(selected, |row| row.bg(theme.selection))
+        .when(selected, |row| row.bg(theme.surface_selected))
         .on_click(listener)
         .child(history_marker(theme))
         .child(
@@ -8821,6 +9343,33 @@ mod tests {
         );
         // Empty repo (no commits, no upstream) is not a publish.
         assert_eq!(bar_actions(false, 0, false, false, 0), BarActions::UpToDate);
+    }
+
+    #[test]
+    fn commit_model_rows_pin_the_session_option_and_filter_the_catalog() {
+        let models = vec![
+            ModelEntry {
+                id: "qwen3-coder".into(),
+                name: "Qwen3 Coder".into(),
+                provider: "ollama".into(),
+                context_window: Some(128_000),
+                thinking_levels: Vec::new(),
+            },
+            ModelEntry {
+                id: "claude-sonnet-4-5".into(),
+                name: "Claude Sonnet 4.5".into(),
+                provider: "anthropic".into(),
+                context_window: Some(200_000),
+                thinking_levels: Vec::new(),
+            },
+        ];
+        // "Follow the session model" is always reachable, at row 0, so a
+        // search can never hide the way back to the session model.
+        assert_eq!(commit_model_rows(&models, ""), vec![None, Some(0), Some(1)]);
+        assert_eq!(commit_model_rows(&models, "ollama"), vec![None, Some(0)]);
+        assert_eq!(commit_model_rows(&models, "claude"), vec![None, Some(1)]);
+        assert_eq!(commit_model_rows(&models, "anthropic"), vec![None, Some(1)]);
+        assert_eq!(commit_model_rows(&models, "missing"), vec![None]);
     }
 
     #[test]

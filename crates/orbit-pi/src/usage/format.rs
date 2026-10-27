@@ -24,11 +24,6 @@ pub fn compact(n: u64) -> String {
     scaled(value / 1_000_000_000.0, 'B')
 }
 
-/// Same as [`compact`] — named for the places where the unit matters.
-pub fn compact_tokens(n: u64) -> String {
-    compact(n)
-}
-
 /// Three significant digits, trailing zeros trimmed: `1.28M`, `18.4M`, `842K`.
 fn scaled(value: f64, unit: char) -> String {
     let text = if value < 10.0 {

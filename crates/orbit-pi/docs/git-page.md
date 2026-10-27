@@ -36,8 +36,29 @@ The action cluster follows Git state: uncommitted changes → **Commit** /
 when there is no upstream); clean and behind → **Pull**; diverged → **Merge**;
 otherwise a quiet "Up to date". Push/pull never touch the message. A blank
 Commit message auto-generates through `commit_message.rs`
-(`pi -p --no-tools --no-session --no-extensions --no-skills --no-context-files`,
-falling back to a local `type(scope): …` heuristic).
+(`pi -p --no-tools --no-session --no-skills --no-context-files --no-approve`,
+falling back to a local `type(scope): …` heuristic that the failure banner
+reports).
+
+### Commit message context
+
+The generator describes *what the commit records*: with **Include unstaged
+changes** on it diffs the whole working tree against HEAD (and synthesizes a
+`/dev/null` diff for untracked files, which `git diff` never shows); otherwise
+it reads the index only. Each changed file is sent with an ORIGINAL CODE
+excerpt — line-numbered, windowed 24 lines around every hunk — plus its diff,
+and each regenerated attempt is told about the message you rejected so it does
+not repeat it.
+
+The prompt is sized from the selected model's context window (half the window,
+at ~3 bytes per token; 384 KiB when the provider reports none), split between
+diffs and source excerpts. Every changed file keeps at least 1 KiB of its diff,
+so a commit of a hundred-plus files still describes each one; a diff longer than
+its share keeps its first and last hunk. The model's fenced reply is used
+verbatim: no bullet or period normalization.
+
+`ORBIT_COMMIT_PROMPT_DUMP=/tmp/prompt.txt` writes the exact system and user
+messages the model sees, for comparing against another client's prompt.
 
 ## Issue and pull-request draft generation
 
@@ -144,6 +165,11 @@ is dirty or a merge/rebase is in progress.
 
 - Commit/PR changed-file lists render at most `MAX_FILE_ROWS` (300) rows and
   summarize the rest.
+- Commit-message generation sizes its prompt from the model's context window:
+  half the window at ~3 bytes per token (384 KiB when the provider reports
+  none), split between diffs and source excerpts, capped at 2 MiB. Every file
+  keeps at least 1 KiB of diff; a set too large for even that still lists every
+  changed file and says how many have no excerpt.
 - Issue and PR lists are bounded at `gh`'s 50-result page and are not yet
   virtualized.
 - Not yet wired: `git blame`, opening a file/diff at a specific revision (the

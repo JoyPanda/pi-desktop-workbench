@@ -527,7 +527,7 @@ impl Dialog {
                             });
                         }
                     })
-                    .when(highlighted, |row| row.bg(theme.selection))
+                    .when(highlighted, |row| row.bg(theme.surface_selected))
                     .child(
                         div()
                             .whitespace_normal()

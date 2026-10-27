@@ -21,8 +21,8 @@ use gpui::{AnyElement, MouseDownEvent, MouseUpEvent};
 use super::helpers::*;
 use super::*;
 use crate::theme::tokens::{
-    context_menu, input, modal, picker, popover, ButtonSize, DynamicSpacing, IconSize, Radius,
-    RaisedExt, TextSize,
+    context_menu, input, modal, panel, picker, popover, ButtonSize, DynamicSpacing, IconSize,
+    Radius, RaisedExt, TextSize,
 };
 use crate::worktree::{self, Worktree, WorktreeError, WorktreeManager};
 use crate::worktree_setup;
@@ -1316,7 +1316,7 @@ impl OrbitApp {
             .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .px(DynamicSpacing::Base16.px(&theme))
             .py(DynamicSpacing::Base12.px(&theme))
             .flex()
@@ -1466,7 +1466,7 @@ impl OrbitApp {
                 .bg(theme.error.opacity(0.08))
                 .border_1()
                 .border_color(theme.error.opacity(0.35))
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .px(DynamicSpacing::Base16.px(&theme))
                 .py(DynamicSpacing::Base12.px(&theme))
                 .flex()
@@ -1516,7 +1516,6 @@ impl OrbitApp {
             &theme,
             ButtonSize::Default,
         )
-        .rounded(Radius::Small.px(&theme))
         .cursor_pointer()
         .hover(|s| s.bg(theme.overlay_strong))
         .tip(tr!("common.dismiss"))
@@ -1540,7 +1539,7 @@ impl OrbitApp {
                 .bg(theme.surface_secondary)
                 .border_1()
                 .border_color(theme.border)
-                .rounded(Radius::XLarge.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .px(DynamicSpacing::Base16.px(&theme))
                 .py(DynamicSpacing::Base12.px(&theme))
                 .flex()
@@ -1633,7 +1632,7 @@ impl OrbitApp {
             .items_center()
             .gap(DynamicSpacing::Base12.px(&theme))
             .cursor_pointer()
-            .when(active, |row| row.bg(theme.selection))
+            .when(active, |row| row.bg(theme.surface_selected))
             .hover(|row| row.bg(theme.surface_hover))
             .on_mouse_down(MouseButton::Right, {
                 let this = this.clone();
@@ -1824,7 +1823,7 @@ impl OrbitApp {
             .bg(theme.surface_secondary)
             .border_1()
             .border_color(theme.border)
-            .rounded(Radius::XLarge.px(&theme))
+            .rounded(panel::RADIUS.px(&theme))
             .flex()
             .flex_col()
             .overflow_hidden()
@@ -1959,7 +1958,7 @@ impl OrbitApp {
                 .overflow_y_scroll()
                 .border_1()
                 .border_color(theme.border)
-                .rounded(Radius::Large.px(&theme))
+                .rounded(panel::RADIUS.px(&theme))
                 .flex()
                 .flex_col();
             for branch in &self.worktree_branches {
@@ -1976,7 +1975,7 @@ impl OrbitApp {
                         .items_center()
                         .gap(DynamicSpacing::Base08.px(&theme))
                         .cursor_pointer()
-                        .when(selected, |row| row.bg(theme.selection))
+                        .when(selected, |row| row.bg(theme.surface_selected))
                         .hover(|row| row.bg(theme.surface_hover))
                         .child(icon(
                             if selected {
@@ -2798,7 +2797,9 @@ impl OrbitApp {
             list = list.child(
                 picker_entry(entry, &theme)
                     .cursor_pointer()
-                    .when(selected || highlighted, |row| row.bg(theme.selection))
+                    .when(selected || highlighted, |row| {
+                        row.bg(theme.surface_selected)
+                    })
                     .when(!selected && !highlighted, |row| {
                         row.hover(|style| style.bg(theme.surface_hover))
                     })

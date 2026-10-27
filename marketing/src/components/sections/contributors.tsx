@@ -3,6 +3,9 @@ import { GithubIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 
 import { Band, ButtonLink, SectionLabel, Shell } from "@/components/ui";
+
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
 import { getContributors } from "@/lib/releases";
 import { SITE } from "@/lib/site";
 
@@ -16,7 +19,8 @@ const GRAPH_URL = `${SITE.github}/graphs/contributors`;
  * most active contributor sits first, and each one links to their profile.
  * Renders nothing if GitHub is unavailable.
  */
-export async function Contributors() {
+export async function Contributors({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.contributors");
   const contributors = await getContributors();
   if (contributors.length === 0) return null;
 
@@ -31,13 +35,12 @@ export async function Contributors() {
         className="scroll-mt-20 py-20 text-center sm:py-28"
       >
         <div className="flex flex-col items-center">
-          <SectionLabel>Contributors</SectionLabel>
+          <SectionLabel>{t("label")}</SectionLabel>
           <h2 className="mt-4 max-w-[22ch] text-balance text-[clamp(26px,2.8vw,34px)] font-semibold leading-[1.18] tracking-[-0.024em] text-ink">
-            Built in the open.
+            {t("heading")}
           </h2>
           <p className="mt-4 max-w-[46ch] text-[14.5px] leading-[1.75] text-ink-2">
-            Orbit is shaped by everyone who files an issue, sends a patch, or
-            reviews a release.
+            {t("body")}
           </p>
 
           <ul className="isolate mt-12 flex flex-wrap items-center justify-center">
@@ -71,7 +74,7 @@ export async function Contributors() {
                   href={GRAPH_URL}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label={`${extra} more contributors on GitHub`}
+                  aria-label={t("more", { count: extra })}
                   className="flex size-8 items-center justify-center rounded-full border border-edge-default bg-surface-2 font-mono text-[10px] text-ink-2 ring-2 ring-page no-underline transition-colors hover:text-ink"
                 >
                   +{extra}
@@ -87,7 +90,7 @@ export async function Contributors() {
             className="mt-12 min-h-11 px-5 text-[13px]"
           >
             <HugeiconsIcon icon={GithubIcon} data-icon="inline-start" />
-            View on GitHub
+            {t("github")}
           </ButtonLink>
         </div>
       </Band>

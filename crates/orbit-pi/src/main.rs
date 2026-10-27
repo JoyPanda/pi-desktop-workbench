@@ -37,6 +37,7 @@ macro_rules! tr_cow {
 }
 
 mod access;
+mod agent_call_display;
 mod app;
 mod app_icon;
 mod archive;
@@ -53,6 +54,7 @@ mod checkpoint;
 mod command_palette;
 mod commands;
 mod commit_message;
+mod commit_model;
 mod composer;
 mod composer_send;
 mod context_meter;
@@ -75,6 +77,7 @@ mod layout;
 mod main_window;
 mod mcp;
 mod mentions;
+mod mermaid;
 mod message_scroller;
 mod model_selector;
 mod model_selector_match;

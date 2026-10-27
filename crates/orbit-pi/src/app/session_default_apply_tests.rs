@@ -23,6 +23,7 @@ fn failed_default_model_push_disarms_the_default(cx: &mut gpui::TestAppContext) 
                 false,
                 None,
                 Some("No API key for provider/model"),
+                "test-command",
                 &mut refresh_sessions,
                 cx,
             );

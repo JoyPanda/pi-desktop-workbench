@@ -274,11 +274,13 @@ impl Render for WorkspacePicker {
                 .h(px(row_h(&theme)))
                 .flex_none()
                 .cursor_pointer()
-                .when(highlighted, |row| row.bg(theme.selection))
+                .when(highlighted, |row| row.bg(theme.surface_selected))
                 // The current folder keeps the `active` fill at rest (the
                 // same "chosen" register the model picker uses); the accent
                 // check alone is never the only signal.
-                .when(!highlighted && is_current, |row| row.bg(theme.selection))
+                .when(!highlighted && is_current, |row| {
+                    row.bg(theme.surface_selected)
+                })
                 .when(!highlighted && !is_current, |row| {
                     row.hover(|s| s.bg(theme.surface_hover))
                 })
@@ -461,7 +463,7 @@ impl Render for WorkspacePicker {
                         picker_entry(div().id("workspace-browse-row"), &theme)
                             .h(px(row_h(&theme)))
                             .cursor_pointer()
-                            .when(browse_highlighted, |row| row.bg(theme.selection))
+                            .when(browse_highlighted, |row| row.bg(theme.surface_selected))
                             .when(!browse_highlighted, |row| {
                                 row.hover(|s| s.bg(theme.surface_hover))
                             })

@@ -4,6 +4,9 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { UserAvatar } from "@/components/avatar";
 import { Band, SectionLabel, Shell } from "@/components/ui";
 
+import { getT } from "@/i18n/t";
+import type { Locale } from "@/i18n/config";
+
 const SUBREDDIT = "https://www.reddit.com/r/PiCodingAgent";
 const THREAD_LAUNCH = `${SUBREDDIT}/comments/1wjvoka/built_a_native_desktop_client_for_pi_agent/`;
 const THREAD_RELEASE = `${SUBREDDIT}/comments/1woela9/orbit_pi_v0015_is_out/`;
@@ -110,9 +113,14 @@ function snooAvatar(username: string): string {
 
 function ReviewCard({
   review,
+  read,
+  platformName,
   dupe = false,
 }: {
   review: Review;
+  /** `t("read", {...})` from the section — ICU needs the values, not a template. */
+  read: (handle: string, platform: string) => string;
+  platformName: string;
   dupe?: boolean;
 }) {
   const isReddit = review.platform === "reddit";
@@ -145,7 +153,7 @@ function ReviewCard({
             href={review.url}
             target="_blank"
             rel="noreferrer"
-            aria-label={`Read ${handle}'s review on ${isReddit ? "Reddit" : "X"}`}
+            aria-label={read(handle, platformName)}
             className="ml-auto inline-flex shrink-0 items-center text-ink-3 no-underline outline-none transition-colors hover:text-ink focus-visible:text-ink"
           >
             <HugeiconsIcon icon={Icon} className="size-4" strokeWidth={1.8} />
@@ -158,10 +166,14 @@ function ReviewCard({
 
 function ReviewColumn({
   reviews,
+  read,
+  platforms,
   down = false,
   className = "",
 }: {
   reviews: Review[];
+  read: (handle: string, platform: string) => string;
+  platforms: { reddit: string; x: string };
   down?: boolean;
   className?: string;
 }) {
@@ -173,6 +185,10 @@ function ReviewColumn({
             <ReviewCard
               key={`${copy}-${review.author}-${review.quote.slice(0, 16)}`}
               review={review}
+              read={read}
+              platformName={
+                review.platform === "reddit" ? platforms.reddit : platforms.x
+              }
               dupe={copy > 0}
             />
           )),
@@ -182,7 +198,11 @@ function ReviewColumn({
   );
 }
 
-export function Reviews() {
+export async function Reviews({ locale }: { locale: Locale }) {
+  const t = getT(locale, "sections.reviews");
+  const read = (handle: string, platform: string) =>
+    t("read", { handle, platform });
+  const platforms = { reddit: t("platforms.reddit"), x: t("platforms.x") };
   const columns = Array.from({ length: COLUMNS }, (_, column) =>
     REVIEWS.filter((_, index) => index % COLUMNS === column),
   );
@@ -191,28 +211,39 @@ export function Reviews() {
     <Shell>
       <Band id="reviews" dashed className="scroll-mt-20 py-20 sm:py-28">
         <div className="flex flex-col items-center text-center">
-          <SectionLabel>Reviews</SectionLabel>
+          <SectionLabel>{t("label")}</SectionLabel>
           <h2 className="mt-4 max-w-[24ch] text-balance text-[clamp(26px,2.8vw,34px)] font-semibold leading-[1.18] tracking-[-0.024em] text-ink">
-            What people are saying.
+            {t("heading")}
           </h2>
           <p className="mt-4 max-w-[48ch] text-[14.5px] leading-[1.75] text-ink-2">
-            Unedited comments from the r/PiCodingAgent launch threads.
+            {t("body")}
           </p>
         </div>
 
         <div
           className="reviews-scroller mt-12"
           role="region"
-          aria-label="Reviews"
+          aria-label={t("label")}
         >
           <div className="reviews-grid">
-            <ReviewColumn reviews={columns[0]} />
+            <ReviewColumn
+              reviews={columns[0]}
+              read={read}
+              platforms={platforms}
+            />
             <ReviewColumn
               reviews={columns[1]}
+              read={read}
+              platforms={platforms}
               down
               className="hidden sm:block"
             />
-            <ReviewColumn reviews={columns[2]} className="hidden lg:block" />
+            <ReviewColumn
+              reviews={columns[2]}
+              read={read}
+              platforms={platforms}
+              className="hidden lg:block"
+            />
           </div>
         </div>
 

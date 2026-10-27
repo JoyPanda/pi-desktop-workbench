@@ -44,6 +44,92 @@ const UNDO_BYTES: usize = 16 * 1024 * 1024;
 /// Edits within this window coalesce into one undo step (a typing run).
 const UNDO_COALESCE: Duration = Duration::from_millis(400);
 
+/// Sent-prompt recall for the composer (`up`/`down` walk it, terminal-style).
+/// The app records every submitted prompt; the composer previews entries,
+/// stashing the in-progress text on the first ↑ and restoring it when the
+/// user cycles back past the newest entry. Pure state — unit-tested below.
+pub struct PromptHistory {
+    entries: std::collections::VecDeque<String>,
+    /// Index previewed while cycling; `None` when not cycling.
+    nav: Option<usize>,
+    /// The composer's text before cycling started; restored past the newest.
+    stash: String,
+}
+
+impl PromptHistory {
+    const LIMIT: usize = 200;
+
+    fn new() -> Self {
+        Self {
+            entries: std::collections::VecDeque::new(),
+            nav: None,
+            stash: String::new(),
+        }
+    }
+
+    pub fn shared() -> SharedPromptHistory {
+        std::rc::Rc::new(std::cell::RefCell::new(Self::new()))
+    }
+
+    /// A submitted prompt joins the log (newest last); consecutive dupes
+    /// collapse, and any in-progress cycling ends.
+    pub fn record(&mut self, text: &str) {
+        let text = text.trim();
+        if text.is_empty() {
+            return;
+        }
+        self.reset();
+        if self.entries.back().is_some_and(|last| last == text) {
+            return;
+        }
+        self.entries.push_back(text.to_string());
+        while self.entries.len() > Self::LIMIT {
+            self.entries.pop_front();
+        }
+    }
+
+    /// The entry one step older than the preview (the newest on the first
+    /// step), stashing the composer's current text on the way in.
+    pub fn prev(&mut self, current: &str) -> Option<String> {
+        if self.entries.is_empty() {
+            return None;
+        }
+        let nav = match self.nav {
+            Some(nav) => nav.saturating_sub(1),
+            None => {
+                self.stash = current.to_string();
+                self.entries.len() - 1
+            }
+        };
+        self.nav = Some(nav);
+        self.entries.get(nav).cloned()
+    }
+
+    /// One step newer; past the newest the stash comes back and cycling ends.
+    pub fn next(&mut self) -> Option<String> {
+        let nav = self.nav?;
+        if nav + 1 < self.entries.len() {
+            self.nav = Some(nav + 1);
+            self.entries.get(nav + 1).cloned()
+        } else {
+            self.nav = None;
+            Some(std::mem::take(&mut self.stash))
+        }
+    }
+
+    /// True while ↑/↓ are cycling previews (an edit or caret move ends it).
+    pub fn is_navigating(&self) -> bool {
+        self.nav.is_some()
+    }
+
+    /// Stop cycling and drop the stash.
+    pub fn reset(&mut self) {
+        self.nav = None;
+    }
+}
+
+pub type SharedPromptHistory = std::rc::Rc<std::cell::RefCell<PromptHistory>>;
+
 /// One undo point: the buffer plus the caret/selection to restore.
 #[derive(Clone)]
 struct Snapshot {
@@ -108,9 +194,15 @@ pub struct ComposerInput {
     /// open, ↑/↓ move the highlight instead of the caret (Enter/Escape are
     /// intercepted by the app, which owns those actions).
     autocomplete: Option<SharedAutocomplete>,
+    /// Shared sent-prompt log: ↑ on the first row recalls the previous
+    /// prompt, ↓ moves newer (or restores the in-progress text).
+    prompt_history: Option<SharedPromptHistory>,
     /// Images pasted (or attached) since the app last drained them — the
     /// app turns these into message attachments.
     pub pasted_images: Vec<Image>,
+    /// Long pasted text since the app last drained it — the app turns these
+    /// into collapsible pills instead of flooding the box.
+    pub pasted_texts: Vec<String>,
     /// Caret blink: whether the caret paints this frame, the epoch that
     /// invalidates superseded timers, and the pending timer task (dropped
     /// when a newer wake replaces it, which cancels it).
@@ -173,6 +265,8 @@ impl ComposerInput {
             last_caret: 0,
             max_lines: MAX_LINES,
             autocomplete: None,
+            prompt_history: None,
+            pasted_texts: Vec::new(),
             pasted_images: Vec::new(),
             caret_visible: true,
             blink_active: false,
@@ -223,6 +317,28 @@ impl ComposerInput {
     ) -> Self {
         self.placeholder_vars.push((name.into(), value.into()));
         self
+    }
+
+    /// Switch the placeholder key at runtime — the chat composer names what
+    /// Enter will do (describe the task / queue a follow-up / steer the live
+    /// turn). `None` goes back to the shared default. A no-op when the key is
+    /// unchanged, so it is safe to call from the heartbeat every tick.
+    pub fn set_placeholder_key(&mut self, key: Option<&str>, cx: &mut Context<Self>) {
+        let unchanged = match key {
+            Some(key) => {
+                !self.placeholder_is_default
+                    && self.placeholder_key.as_ref().map(|k| k.as_ref()) == Some(key)
+            }
+            None => self.placeholder_is_default,
+        };
+        if unchanged {
+            return;
+        }
+        self.placeholder_key = key.map(|key| SharedString::from(key.to_string()));
+        self.placeholder = SharedString::default();
+        self.placeholder_vars.clear();
+        self.placeholder_is_default = key.is_none();
+        cx.notify();
     }
 
     /// The placeholder text to paint in the current locale. Default, keyed,
@@ -300,6 +416,12 @@ impl ComposerInput {
         self
     }
 
+    /// Attach the sent-prompt log ↑/↓ recall pages through (chat composer).
+    pub fn with_prompt_history(mut self, history: SharedPromptHistory) -> Self {
+        self.prompt_history = Some(history);
+        self
+    }
+
     pub fn text(&self) -> String {
         self.content.clone()
     }
@@ -327,8 +449,13 @@ impl ComposerInput {
         !self.pasted_images.is_empty()
     }
 
+    pub fn has_pasted_texts(&self) -> bool {
+        !self.pasted_texts.is_empty()
+    }
+
     /// Replace `range` with `text` (used by autocomplete commits).
     pub fn replace_range(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
+        self.reset_prompt_nav();
         self.record_undo();
         let start = range.start.min(self.content.len());
         let end = range.end.min(self.content.len()).max(start);
@@ -339,6 +466,7 @@ impl ComposerInput {
         cx.notify();
     }
     pub fn clear(&mut self, cx: &mut Context<Self>) {
+        self.reset_prompt_nav();
         self.content.clear();
         self.selected_range = 0..0;
         self.marked_range = None;
@@ -351,6 +479,7 @@ impl ComposerInput {
     /// Replace the whole content and place the caret at the end. Used to seed
     /// form fields from app state (session rename, restored queue text).
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.reset_prompt_nav();
         self.content = text.into();
         self.selected_range = self.content.len()..self.content.len();
         self.selection_reversed = false;
@@ -364,6 +493,7 @@ impl ComposerInput {
     /// Replace the whole content and place the caret at the start. The Explorer
     /// opens a file at the top, not scrolled to its last line.
     pub fn set_text_at_start(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.reset_prompt_nav();
         self.content = text.into();
         self.selected_range = 0..0;
         self.selection_reversed = false;
@@ -467,6 +597,9 @@ impl ComposerInput {
         if self.autocomplete_navigate(-1, cx) {
             return;
         }
+        if self.history_recall(-1, cx) {
+            return;
+        }
         self.move_vertically(-1., cx);
     }
 
@@ -474,7 +607,70 @@ impl ComposerInput {
         if self.autocomplete_navigate(1, cx) {
             return;
         }
+        if self.history_recall(1, cx) {
+            return;
+        }
         self.move_vertically(1., cx);
+    }
+
+    /// ↑ recalls older prompts (from the first visual row), ↓ steps newer and
+    /// finally restores the text the user was writing. Returns true when the
+    /// keystroke was consumed by history.
+    fn history_recall(&mut self, delta: i32, cx: &mut Context<Self>) -> bool {
+        let Some(history) = self.prompt_history.clone() else {
+            return false;
+        };
+        if !self.selected_range.is_empty() {
+            return false;
+        }
+        if history.borrow().is_navigating() {
+            // Cycling: ↑/↓ keep paging regardless of where the caret sits.
+        } else if delta > 0 {
+            // Not cycling: ↓ is an ordinary caret move.
+            return false;
+        } else if self.caret_row() != 0 {
+            return false;
+        }
+        let recalled = {
+            let mut history = history.borrow_mut();
+            if delta < 0 {
+                history.prev(&self.content)
+            } else {
+                history.next()
+            }
+        };
+        let Some(text) = recalled else {
+            return false;
+        };
+        // One undo step back to the pre-cycling text (coalescing merges the
+        // paging itself), caret at the end, without touching history's nav.
+        self.record_undo();
+        self.content = text;
+        self.selected_range = self.content.len()..self.content.len();
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.scroll_offset = px(0.);
+        self.revision = self.revision.wrapping_add(1);
+        cx.notify();
+        true
+    }
+
+    /// The caret's visual row (0-based) from the last layout; 0 before the
+    /// first layout, which is only ever the single-line case.
+    fn caret_row(&self) -> usize {
+        if self.last_lines.is_empty() {
+            return 0;
+        }
+        let y: f32 = self.position_for_offset(self.cursor_offset()).y.into();
+        let line_height: f32 = self.last_line_height.into();
+        (y / line_height.max(1.)) as usize
+    }
+
+    /// End any prompt-history cycling (every edit or deliberate caret move).
+    fn reset_prompt_nav(&mut self) {
+        if let Some(history) = &self.prompt_history {
+            history.borrow_mut().reset();
+        }
     }
 
     /// Move the autocomplete highlight when the menu is open. Returns true
@@ -774,7 +970,15 @@ impl ComposerInput {
             return;
         }
         if let Some(text) = item.as_ref().and_then(|item| item.text()) {
-            self.replace_text_in_range(None, &text, window, cx)
+            // A long paste collapses into a pill above the composer — pasting
+            // 200 lines of log must not turn the box into a scroll trap. The
+            // app drains `pasted_texts` and folds the text back in on send.
+            if should_pill_paste(&text) {
+                self.pasted_texts.push(text);
+                cx.notify();
+            } else {
+                self.replace_text_in_range(None, &text, window, cx)
+            }
         }
     }
 
@@ -798,6 +1002,7 @@ impl ComposerInput {
     // ── geometry ───────────────────────────────────────────────────────
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.reset_prompt_nav();
         self.selected_range = offset..offset;
         // A caret move ends the current undo run.
         self.last_edit = None;
@@ -1037,6 +1242,18 @@ fn cx_focus_handle(cx: &mut Context<ComposerInput>) -> FocusHandle {
     cx.focus_handle()
 }
 
+/// Longest source edge — no wait, the paste gate: at this many lines (or
+/// characters on one line) a paste collapses into a removable pill rather
+/// than landing inline in the composer.
+pub(crate) const PASTE_PILL_MIN_LINES: usize = 10;
+pub(crate) const PASTE_PILL_MIN_CHARS: usize = 1000;
+
+/// True when pasted `text` is long enough to become an attachment-style pill
+/// instead of flooding the box (see `paste` above).
+pub(crate) fn should_pill_paste(text: &str) -> bool {
+    text.lines().count() >= PASTE_PILL_MIN_LINES || text.chars().count() >= PASTE_PILL_MIN_CHARS
+}
+
 impl Focusable for ComposerInput {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -1098,6 +1315,7 @@ impl EntityInputHandler for ComposerInput {
         // gets replaced; otherwise the preedit text would be left behind and
         // the final text duplicated.
         let range = self.replacement_range(range_utf16);
+        self.reset_prompt_nav();
         self.record_undo();
         let inserted = self.splice(range, new_text);
         self.selected_range = inserted.end..inserted.end;
@@ -1115,6 +1333,7 @@ impl EntityInputHandler for ComposerInput {
         cx: &mut Context<Self>,
     ) {
         let range = self.replacement_range(range_utf16);
+        self.reset_prompt_nav();
         self.record_undo();
         let inserted = self.splice(range, new_text);
         if new_text.is_empty() {
@@ -1395,9 +1614,17 @@ fn mention_runs(text: &str, base: &TextRun, theme: &theme::Theme) -> Vec<TextRun
             MentionKind::Command => theme.mention_command(),
             MentionKind::File => theme.mention_file(),
         };
+        // A whisper of the token's own hue behind it: enough that a `/command`
+        // or `@file` reads as one object instead of loose colored words,
+        // quiet enough to stay text and not become a chip.
+        let tint = match span.kind {
+            MentionKind::Command => 0.10,
+            MentionKind::File => 0.07,
+        };
         runs.push(TextRun {
             len: span.range.end - span.range.start,
             color,
+            background_color: Some(color.opacity(tint)),
             ..base.clone()
         });
         cursor = span.range.end;
@@ -2006,10 +2233,74 @@ impl Render for ComposerInput {
 #[cfg(test)]
 mod tests {
     use super::{
-        horizontal_scroll, line_at_offset, line_range_at, resolve_placeholder,
-        scrollbar_thumb_height, word_range_at,
+        horizontal_scroll, line_at_offset, line_range_at, mention_runs, resolve_placeholder,
+        scrollbar_thumb_height, word_range_at, PromptHistory,
     };
-    use gpui::{px, SharedString};
+    use gpui::{px, SharedString, TextRun};
+
+    /// `/command` and `@file` tokens carry a whisper of their own hue behind
+    /// them, so each reads as one object rather than loose colored words —
+    /// and the base text between them stays untinted.
+    #[test]
+    fn mentions_carry_a_tint_and_plain_text_does_not() {
+        use crate::theme::{Theme, ThemeId};
+
+        let theme = Theme::for_id(ThemeId::Orbit);
+        let base = TextRun {
+            len: 0,
+            font: gpui::font("Test"),
+            color: theme.text_primary,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let text = "refactor @src/main.rs now";
+        let runs = mention_runs(text, &base, &theme);
+
+        // Runs cover the text byte-for-byte, so the shaped layout stays valid.
+        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
+
+        let tinted = runs
+            .iter()
+            .filter(|run| run.background_color.is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(tinted.len(), 1, "only the @file token is tinted");
+        assert_eq!(tinted[0].len, "@src/main.rs".len());
+
+        // A whisper: present, but never a solid chip behind the words.
+        let alpha = tinted[0].background_color.expect("tint").a;
+        assert!(alpha > 0. && alpha <= 0.10, "tint alpha {alpha} too loud");
+
+        // Plain prose keeps the base ink and no background.
+        assert!(runs[0].background_color.is_none());
+        assert_eq!(runs[0].len, "refactor ".len());
+    }
+
+    /// The placeholder names what Enter does: the shared default when idle, a
+    /// send-mode key while a turn is in flight.
+    #[test]
+    fn running_placeholders_name_the_send_mode() {
+        let idle = resolve_placeholder(true, None, "", &[], Some("en"));
+        let queue = resolve_placeholder(
+            false,
+            Some("composer.placeholder_follow_up"),
+            "",
+            &[],
+            Some("en"),
+        );
+        let steer = resolve_placeholder(
+            false,
+            Some("composer.placeholder_steer"),
+            "",
+            &[],
+            Some("en"),
+        );
+        assert_eq!(idle, "Describe the task…");
+        assert_eq!(queue, "Queue a follow-up…");
+        assert_eq!(steer, "Steer the current task…");
+        assert_ne!(idle, queue);
+        assert_ne!(queue, steer);
+    }
 
     /// A placeholder built from a translation key must follow the locale it is
     /// painted in, so switching the interface language updates search fields
@@ -2035,8 +2326,51 @@ mod tests {
         );
     }
 
-    /// `%{…}` values in a keyed placeholder are substituted at paint time, so
-    /// the branch picker's "Search <workspace> branches" stays translated.
+    /// Prompt history: ↑ pages older (stashing the draft), ↓ pages newer and
+    /// finally hands the draft back.
+    #[test]
+    fn prompt_history_recalls_and_restores_the_draft() {
+        let mut history = PromptHistory::new();
+        history.record("first");
+        history.record("second");
+        history.record("third");
+
+        // ↑ from a half-written draft: newest first, then older, then stuck
+        // at the oldest (like a terminal).
+        assert_eq!(history.prev("draft in progress"), Some("third".into()));
+        assert!(history.is_navigating());
+        assert_eq!(history.prev("third"), Some("second".into()));
+        assert_eq!(history.prev("second"), Some("first".into()));
+        assert_eq!(history.prev("first"), Some("first".into()));
+
+        // ↓ pages back and finally restores the stash, ending the cycle.
+        assert_eq!(history.next(), Some("second".into()));
+        assert_eq!(history.next(), Some("third".into()));
+        assert_eq!(history.next(), Some("draft in progress".into()));
+        assert!(!history.is_navigating());
+        assert_eq!(history.next(), None);
+    }
+
+    /// Recording ends any cycle and collapses consecutive duplicates.
+    #[test]
+    fn prompt_history_dedupes_and_caps() {
+        let mut history = PromptHistory::new();
+        history.record("same");
+        history.record("same");
+        history.record("");
+        assert_eq!(history.entries.len(), 1);
+        for ix in 0..(PromptHistory::LIMIT + 50) {
+            history.record(&format!("prompt {ix}"));
+        }
+        assert_eq!(history.entries.len(), PromptHistory::LIMIT);
+        // A mid-cycle send drops the cycle, not the log.
+        history.prev("x");
+        history.record("newest");
+        assert!(!history.is_navigating());
+        assert_eq!(history.prev("y"), Some("newest".into()));
+    }
+
+    /// `%{…}` values in a keyed placeholder are interpolated at paint time.
     #[test]
     fn keyed_placeholder_vars_are_interpolated() {
         let vars = [(SharedString::from("workspace"), SharedString::from("orbit"))];
