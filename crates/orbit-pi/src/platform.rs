@@ -1527,6 +1527,237 @@ pub fn titlebar_options() -> TitlebarOptions {
     }
 }
 
+/// PNG bytes of a picture on the system clipboard.
+///
+/// GPUI's clipboard read is what `ComposerInput::paste` tries first. It misses
+/// the formats screenshot tools actually publish: a `CF_DIB` bitmap on Windows,
+/// and a TIFF on macOS that never gets read once the pasteboard also holds a
+/// path or a caption. Both platforms come back as PNG so the composer can hand
+/// the bytes to the existing attachment path. Linux has no fallback.
+pub fn clipboard_image_png() -> Option<Vec<u8>> {
+    #[cfg(windows)]
+    {
+        return windows_clipboard_png();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return macos_clipboard_png();
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// Decode an already-encoded picture (PNG, JPEG, GIF, TIFF, BMP) and return
+/// PNG bytes. A buffer that is already a PNG is returned without its trailing
+/// padding: the clipboard reports the allocation size, which is larger than
+/// the file.
+pub(crate) fn raster_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+    if let Some(png) = png_without_padding(bytes) {
+        return Some(png);
+    }
+    let decoded = image::load_from_memory(bytes).ok()?;
+    let mut png = Vec::new();
+    decoded
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    Some(png)
+}
+
+/// The PNG file inside `bytes`, dropping anything after the `IEND` chunk.
+fn png_without_padding(bytes: &[u8]) -> Option<Vec<u8>> {
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    // Signature, then chunks of length + type + data + CRC.
+    let mut index = 8usize;
+    while index + 8 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes.get(index..index + 4)?.try_into().ok()?) as usize;
+        let kind = bytes.get(index + 4..index + 8)?;
+        let next = index.checked_add(12)?.checked_add(len)?;
+        if next > bytes.len() {
+            return None;
+        }
+        if kind == b"IEND" {
+            return Some(bytes[..next].to_vec());
+        }
+        index = next;
+    }
+    None
+}
+
+/// A device-independent bitmap (`CF_DIB` / `CF_DIBV5`, a BMP without its
+/// 14-byte file header) re-encoded as PNG.
+pub(crate) fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
+    raster_to_png(&dib_to_bmp(dib)?)
+}
+
+/// Prepend a `BITMAPFILEHEADER` so the `image` crate's BMP decoder can read a
+/// raw DIB. The pixel offset accounts for a palette and for the bitfield masks
+/// that follow a classic 40-byte header; V4/V5 headers already contain theirs.
+fn dib_to_bmp(dib: &[u8]) -> Option<Vec<u8>> {
+    if dib.len() < 40 {
+        return None;
+    }
+    let header_size = u32::from_le_bytes(dib.get(0..4)?.try_into().ok()?);
+    if header_size < 40 || dib.len() < header_size as usize {
+        return None;
+    }
+    let bit_count = u16::from_le_bytes(dib.get(14..16)?.try_into().ok()?);
+    let compression = u32::from_le_bytes(dib.get(16..20)?.try_into().ok()?);
+    // BI_RGB = 0, BI_BITFIELDS = 3, BI_ALPHABITFIELDS = 6. Only a 40-byte
+    // BITMAPINFOHEADER stores those masks after the header.
+    let mask_bytes = if header_size == 40 {
+        match compression {
+            3 => 12,
+            6 => 16,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    let palette_bytes = if bit_count <= 8 {
+        let colors_used = u32::from_le_bytes(dib.get(32..36)?.try_into().ok()?);
+        let colors = if colors_used == 0 {
+            1u32 << bit_count
+        } else {
+            colors_used
+        };
+        colors.saturating_mul(4)
+    } else {
+        0
+    };
+    let pixel_offset = 14u32
+        .saturating_add(header_size)
+        .saturating_add(mask_bytes)
+        .saturating_add(palette_bytes);
+    let file_size = u32::try_from(dib.len()).ok()?.checked_add(14)?;
+    let mut bmp = Vec::with_capacity(file_size as usize);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size.to_le_bytes());
+    bmp.extend_from_slice(&0u32.to_le_bytes());
+    bmp.extend_from_slice(&pixel_offset.to_le_bytes());
+    bmp.extend_from_slice(dib);
+    Some(bmp)
+}
+
+/// Copy one clipboard format out and close the clipboard before decoding, so a
+/// slow PNG encode does not keep the clipboard locked.
+#[cfg(windows)]
+fn windows_clipboard_png() -> Option<Vec<u8>> {
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, GetClipboardData, OpenClipboard, RegisterClipboardFormatW,
+    };
+    // `CF_DIB` / `CF_DIBV5` live in windows-sys's Ole module. That feature pulls
+    // in COM, which this read does not need; the format ids are stable.
+    const CF_DIB: u32 = 8;
+    const CF_DIBV5: u32 = 17;
+    use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
+
+    struct Guard;
+    impl Guard {
+        fn open() -> Option<Self> {
+            // SAFETY: a null owner attaches the clipboard to this thread.
+            // `HWND` is already `*mut c_void`, so the null is that pointer.
+            if unsafe { OpenClipboard(std::ptr::null_mut()) } == 0 {
+                return None;
+            }
+            Some(Self)
+        }
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            // SAFETY: `open` succeeded, so this thread owns the clipboard.
+            unsafe { CloseClipboard() };
+        }
+    }
+
+    // SAFETY: `format` is a clipboard format id, and the returned handle is
+    // only read while this thread still holds the clipboard open.
+    unsafe fn copy_format(format: u32) -> Option<Vec<u8>> {
+        let handle = unsafe { GetClipboardData(format) };
+        if handle.is_null() {
+            return None;
+        }
+        let ptr = unsafe { GlobalLock(handle) };
+        if ptr.is_null() {
+            return None;
+        }
+        let size = unsafe { GlobalSize(handle) };
+        let bytes = if size == 0 {
+            None
+        } else {
+            Some(unsafe { std::slice::from_raw_parts(ptr as *const u8, size) }.to_vec())
+        };
+        unsafe { GlobalUnlock(handle) };
+        bytes
+    }
+
+    fn named(name: &str) -> Option<Vec<u8>> {
+        let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `wide` is a null-terminated UTF-16 string. Registering a
+        // format only looks up its id; it does not write clipboard data.
+        let format = unsafe { RegisterClipboardFormatW(wide.as_ptr()) };
+        if format == 0 {
+            return None;
+        }
+        unsafe { copy_format(format) }
+    }
+
+    enum Raw {
+        Raster(Vec<u8>),
+        Dib(Vec<u8>),
+    }
+
+    let raw = {
+        let _guard = Guard::open()?;
+        if let Some(bytes) = named("PNG").or_else(|| named("image/png")) {
+            Raw::Raster(bytes)
+        } else if let Some(bytes) = named("JFIF").or_else(|| named("image/jpeg")) {
+            Raw::Raster(bytes)
+        } else if let Some(bytes) = named("GIF").or_else(|| named("image/gif")) {
+            Raw::Raster(bytes)
+        } else if let Some(bytes) = unsafe { copy_format(CF_DIBV5) }
+            .or_else(|| unsafe { copy_format(CF_DIB) })
+        {
+            Raw::Dib(bytes)
+        } else {
+            return None;
+        }
+    };
+    match raw {
+        Raw::Raster(bytes) => raster_to_png(&bytes),
+        Raw::Dib(bytes) => dib_to_png(&bytes),
+    }
+}
+
+/// Screenshot (⌘⌃⇧4) publishes TIFF. A copied picture is usually PNG, sometimes
+/// JPEG or GIF. The same picture is often offered as several of these; the
+/// first one that decodes wins.
+#[cfg(target_os = "macos")]
+fn macos_clipboard_png() -> Option<Vec<u8>> {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+
+    let pasteboard = NSPasteboard::generalPasteboard();
+    for uti in ["public.png", "public.jpeg", "public.gif", "public.tiff"] {
+        let kind = NSString::from_str(uti);
+        let Some(data) = pasteboard.dataForType(&kind) else {
+            continue;
+        };
+        // SAFETY: `data` is a live `NSData` returned by the pasteboard.
+        let bytes = unsafe { data.as_bytes_unchecked() };
+        if bytes.is_empty() {
+            continue;
+        }
+        if let Some(png) = raster_to_png(bytes) {
+            return Some(png);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1849,6 +2080,68 @@ mod tests {
             build: 17763,
         };
         assert!(unsupported_reason(floor).is_none());
+    }
+
+    /// A 32-bit screenshot is a DIB: a BMP with the 14-byte file header cut
+    /// off. Putting that header back must produce a PNG of the same size.
+    #[test]
+    fn dib_screenshot_bytes_become_a_png() {
+        let mut pixels = image::RgbaImage::new(2, 2);
+        pixels.put_pixel(0, 0, image::Rgba([10, 20, 30, 255]));
+        pixels.put_pixel(1, 1, image::Rgba([40, 50, 60, 255]));
+        let mut bmp = Vec::new();
+        image::DynamicImage::ImageRgba8(pixels)
+            .write_to(&mut std::io::Cursor::new(&mut bmp), image::ImageFormat::Bmp)
+            .expect("encode a bmp");
+        assert!(bmp.starts_with(b"BM"));
+        assert!(bmp.len() > 14);
+        let png = dib_to_png(&bmp[14..]).expect("a dib decodes");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        // Clipboard `GlobalSize` rounds past the bitmap. The extra bytes must
+        // not make the DIB undecodable.
+        let mut padded = bmp[14..].to_vec();
+        padded.extend_from_slice(&[0u8; 64]);
+        assert!(dib_to_png(&padded).is_some());
+        let decoded = image::load_from_memory(&png).expect("png decodes");
+        assert_eq!((decoded.width(), decoded.height()), (2, 2));
+        let sample = decoded.to_rgba8().get_pixel(0, 0).0;
+        assert_eq!(&sample[..3], &[10, 20, 30]);
+    }
+
+    /// macOS screenshots land on the pasteboard as TIFF. The same re-encode
+    /// the paste path uses must turn those bytes into a PNG.
+    #[test]
+    fn tiff_screenshot_bytes_become_a_png() {
+        let mut pixels = image::RgbImage::new(2, 2);
+        pixels.put_pixel(0, 0, image::Rgb([7, 8, 9]));
+        pixels.put_pixel(1, 0, image::Rgb([1, 2, 3]));
+        let mut tiff = Vec::new();
+        image::DynamicImage::ImageRgb8(pixels)
+            .write_to(
+                &mut std::io::Cursor::new(&mut tiff),
+                image::ImageFormat::Tiff,
+            )
+            .expect("encode a tiff");
+        let png = raster_to_png(&tiff).expect("a tiff decodes");
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let decoded = image::load_from_memory(&png).expect("png decodes");
+        assert_eq!((decoded.width(), decoded.height()), (2, 2));
+        assert_eq!(&decoded.to_rgb8().get_pixel(0, 0).0, &[7, 8, 9]);
+    }
+
+    /// An already-encoded PNG is not decoded and written again. Clipboard
+    /// allocations are larger than the file, so bytes after `IEND` are dropped.
+    #[test]
+    fn png_clipboard_bytes_pass_through() {
+        let image = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        assert_eq!(raster_to_png(&png).unwrap(), png);
+        let mut padded = png.clone();
+        padded.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(raster_to_png(&padded).unwrap(), png);
     }
 
     /// The probe answers with a real label on the machine running the tests.
