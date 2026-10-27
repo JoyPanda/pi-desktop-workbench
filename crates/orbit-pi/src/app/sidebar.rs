@@ -1155,8 +1155,7 @@ pub(crate) fn render_side_row(
                         app.input.read(cx).focus(window);
                     });
                 });
-            // Project and status sit above the task; the original prompt and
-            // branch remain available below it.
+            // Status sits beside the task; workspace and branch sit below it.
             let mut card = div()
                 .group("srow")
                 .relative()
@@ -1242,7 +1241,7 @@ pub(crate) fn render_side_row(
                         String::new()
                     }
                 }));
-            let mut status_details = Some(
+            let status_details = Some(
                 div()
                     .flex_none()
                     .flex()
@@ -1285,38 +1284,7 @@ pub(crate) fn render_side_row(
                     .flex_col()
                     .justify_center()
                     .gap(DynamicSpacing::Base04.px(&theme))
-                    // Only the flat list needs a project header on each row.
-                    .when(show_workspace, |col| {
-                        col.child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .gap(DynamicSpacing::Base06.px(&theme))
-                                .child(project_icon(
-                                    &mark,
-                                    workspace_logo,
-                                    workspace_icon,
-                                    IconSize::Small,
-                                    &theme,
-                                ))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(TextSize::Small.px(&theme))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(workspace_mark::label_ink(
-                                            &theme,
-                                            mark.tint.as_deref(),
-                                        ))
-                                        .child(workspace_label),
-                                )
-                                .children(status_details.take()),
-                        )
-                    })
-                    // Let the task title use the full row width.
+                    // Keep session indicators beside the title.
                     .child(
                         div()
                             .w_full()
@@ -1360,13 +1328,44 @@ pub(crate) fn render_side_row(
                             ),
                         )
                     })
-                    // Branch and divergence stay together on the metadata line.
+                    // In the flat list, the workspace precedes the branch.
                     .child(
                         div()
                             .w_full()
                             .flex()
                             .items_center()
                             .gap(DynamicSpacing::Base06.px(&theme))
+                            .when(show_workspace, |line| {
+                                line.child(
+                                    div()
+                                        .max_w(px(110.))
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_shrink()
+                                        .items_center()
+                                        .gap(DynamicSpacing::Base04.px(&theme))
+                                        .child(project_icon(
+                                            &mark,
+                                            workspace_logo,
+                                            workspace_icon,
+                                            IconSize::XSmall,
+                                            &theme,
+                                        ))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_size(TextSize::XSmall.px(&theme))
+                                                .text_color(workspace_mark::label_ink(
+                                                    &theme,
+                                                    mark.tint.as_deref(),
+                                                ))
+                                                .tip(workspace_label.clone())
+                                                .child(workspace_label),
+                                        ),
+                                )
+                            })
                             .when_some(branch, |line, branch| {
                                 let (ahead, behind) = divergence_labels(branch.ahead_behind);
                                 line.child(icon(
