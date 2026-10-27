@@ -376,6 +376,153 @@ pub fn list_workspace_files(root: &Path) -> Vec<String> {
     out
 }
 
+/// What `fd` did with an `@` query.
+pub(crate) enum FdSearch {
+    /// `fd` ran. An empty list is a real "nothing matched", not a failure.
+    Hits(Vec<String>),
+    /// No `fd` binary to run. The caller keeps the bounded directory walk.
+    Missing,
+}
+
+/// The regex `fd` should apply. A slash in the query searches the whole
+/// path; otherwise `fd` matches the file name. Same shape as pi's
+/// `buildFdPathQuery`.
+pub(crate) fn fd_pattern(query: &str) -> String {
+    let normalized = query.replace('\\', "/");
+    if !normalized.contains('/') {
+        return escape_regex(&normalized);
+    }
+    let trailing = normalized.ends_with('/');
+    let trimmed = normalized.trim_matches('/');
+    if trimmed.is_empty() {
+        return normalized;
+    }
+    let mut pattern = trimmed
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(escape_regex)
+        .collect::<Vec<_>>()
+        .join("[\\\\/]");
+    if trailing {
+        pattern.push_str("[\\\\/]");
+    }
+    pattern
+}
+
+fn escape_regex(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if matches!(
+            ch,
+            '.' | '*' | '+' | '?' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' | '\\'
+        ) {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// pi's filename score: exact, then prefix, then substring, then path.
+fn score_path(path: &str, query: &str, is_dir: bool) -> i32 {
+    if query.is_empty() {
+        return 1;
+    }
+    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let name = file_name.to_lowercase();
+    let query = query.to_lowercase();
+    let mut score = if name == query {
+        100
+    } else if name.starts_with(&query) {
+        80
+    } else if name.contains(&query) {
+        50
+    } else if path.to_lowercase().contains(&query) {
+        30
+    } else {
+        0
+    };
+    if is_dir && score > 0 {
+        score += 10;
+    }
+    score
+}
+
+fn path_depth(path: &str) -> usize {
+    path.split('/').filter(|segment| !segment.is_empty()).count()
+}
+
+/// Search `root` with `fd`, the same walker pi's TUI uses for `@`.
+///
+/// `fd` applies the pattern while it walks and skips ignored directories
+/// (Unity `Temp` / `Library`, `node_modules`, …), so a name match is not
+/// crowded out by the first few thousand generated files.
+pub(crate) fn search_fd(root: &Path, query: &str) -> FdSearch {
+    let Some(fd) = crate::onboarding::locate("fd") else {
+        return FdSearch::Missing;
+    };
+    let mut command = std::process::Command::new(&fd);
+    command
+        .current_dir(root)
+        .arg("--base-directory")
+        .arg(root)
+        .arg("--max-results")
+        .arg("100")
+        .arg("--type")
+        .arg("f")
+        .arg("--type")
+        .arg("d")
+        .arg("--follow")
+        .arg("--hidden")
+        .arg("--exclude")
+        .arg(".git")
+        .arg("--exclude")
+        .arg(".git/*")
+        .arg("--exclude")
+        .arg(".git/**")
+        .arg("--ignore-case")
+        .arg("--color")
+        .arg("never");
+    let normalized = query.replace('\\', "/");
+    if normalized.contains('/') {
+        command.arg("--full-path");
+    }
+    if !query.is_empty() {
+        command.arg(fd_pattern(query));
+    }
+    orbit_rpc::hide_console(&mut command);
+    let Ok(output) = command.output() else {
+        return FdSearch::Hits(Vec::new());
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut ranked: Vec<(i32, usize, usize, String)> = Vec::new();
+    for line in text.lines() {
+        let display = line.trim().replace('\\', "/");
+        if display.is_empty()
+            || display == ".git"
+            || display.starts_with(".git/")
+            || display.contains("/.git/")
+        {
+            continue;
+        }
+        let is_dir = display.ends_with('/');
+        let path = display.trim_end_matches('/').to_string();
+        let score = score_path(&path, query, is_dir);
+        if !query.is_empty() && score == 0 {
+            continue;
+        }
+        ranked.push((score, path_depth(&path), path.len(), path));
+    }
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then(a.1.cmp(&b.1))
+            .then(a.2.cmp(&b.2))
+            .then(a.3.cmp(&b.3))
+    });
+    let hits: Vec<String> = ranked.into_iter().map(|(_, _, _, path)| path).collect();
+    FdSearch::Hits(hits)
+}
+
 /// Shared keyboard-negotiation state between the composer (which owns
 /// ↑/↓) and the app (which owns Enter/Escape and renders the menu).
 #[derive(Debug, Default)]
@@ -677,6 +824,20 @@ mod tests {
         assert!(filter_entries("zzz", &files, &[], 10).is_empty());
         let many: Vec<String> = (0..50).map(|i| format!("f{i}.rs")).collect();
         assert_eq!(filter_entries("", &many, &[], 8).len(), 8);
+    }
+
+    #[test]
+    fn fd_pattern_matches_pi_file_and_path_queries() {
+        assert_eq!(fd_pattern("MetaData"), "MetaData");
+        assert_eq!(fd_pattern("a.b"), "a\\.b");
+        // A slash searches the path, with either separator.
+        assert_eq!(fd_pattern("src/lib"), "src[\\\\/]lib");
+        assert_eq!(fd_pattern("src/lib/"), "src[\\\\/]lib[\\\\/]");
+        // Filename substring outranks a path-only accident, and a name that
+        // does not contain the query scores nothing.
+        assert!(score_path("Assets/FooMetaData.cs", "MetaData", false) >= 50);
+        assert_eq!(score_path("Temp/Agent/_adhoc/RunDataRegenAll.cs", "MetaData", false), 0);
+        assert!(score_path("metadata.bytes", "MetaData", false) >= 50);
     }
 
     #[test]

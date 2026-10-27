@@ -649,9 +649,15 @@ pub struct OrbitApp {
     last_ac_trigger: Option<(TriggerKind, String)>,
     /// Slash commands reported by pi (`get_commands` — extensions + skills).
     slash_commands: Vec<SlashCommand>,
-    /// Workspace files for `@`-mentions (cached per workspace).
+    /// Workspace files for `@`-mentions when `fd` is not available.
     mention_files: Vec<String>,
     mention_files_workspace: Option<PathBuf>,
+    /// Last `@` query searched with `fd`. Redraws reuse this instead of
+    /// spawning `fd` on every frame.
+    mention_fd_key: Option<(PathBuf, String)>,
+    mention_fd_hits: Vec<String>,
+    /// `fd` could not be started; `@` stays on the bounded directory walk.
+    mention_fd_missing: bool,
     /// Images queued to ride along with the next prompt (pasted or picked).
     attachments: Vec<Attachment>,
     /// Non-image files queued for the next prompt. They travel to pi as
@@ -1526,19 +1532,30 @@ impl OrbitApp {
             cx.notify();
         });
 
-        // `cmd-c` with a live transcript selection copies that selection even
-        // while the composer holds focus — an interceptor is the only hook
-        // that runs before focus-path action dispatch, so the composer keeps
-        // its own copy whenever the transcript has nothing selected.
+        // Ctrl+C / Cmd+C with a live transcript selection copies that
+        // selection even while the composer holds focus. An interceptor is
+        // the only hook that runs before focus-path action dispatch, so the
+        // composer keeps its own copy whenever the transcript has nothing
+        // selected. `secondary` is Ctrl on Windows and Linux, Cmd on macOS;
+        // `platform` is the Win/Super key off macOS, so requiring it drops
+        // Ctrl+C.
         let copy_selection_sub = {
             let app = cx.entity().downgrade();
             cx.intercept_keystrokes(move |event, _window, cx| {
                 let keystroke = &event.keystroke;
+                let modifiers = keystroke.modifiers;
+                // The other modifier that is not this platform's copy key:
+                // Ctrl on macOS, the Win/Super key elsewhere.
+                let extra_modifier = if cfg!(target_os = "macos") {
+                    modifiers.control
+                } else {
+                    modifiers.platform
+                };
                 if keystroke.key != "c"
-                    || !keystroke.modifiers.platform
-                    || keystroke.modifiers.shift
-                    || keystroke.modifiers.alt
-                    || keystroke.modifiers.control
+                    || !modifiers.secondary()
+                    || modifiers.shift
+                    || modifiers.alt
+                    || extra_modifier
                 {
                     return;
                 }
@@ -1901,6 +1918,9 @@ impl OrbitApp {
             slash_commands: Vec::new(),
             mention_files: Vec::new(),
             mention_files_workspace: None,
+            mention_fd_key: None,
+            mention_fd_hits: Vec::new(),
+            mention_fd_missing: false,
             attachments: Vec::new(),
             files: Vec::new(),
             pasted_texts: Vec::new(),

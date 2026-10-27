@@ -34,16 +34,51 @@ impl OrbitApp {
                 &self.slash_commands,
                 AUTOCOMPLETE_LIMIT,
             ),
-            TriggerKind::At => {
-                self.ensure_mention_files();
-                mentions::filter_entries(
-                    &trigger.query,
-                    &self.mention_files,
-                    &[],
-                    AUTOCOMPLETE_LIMIT,
-                )
+            TriggerKind::At => self.at_entries(&trigger.query),
+        }
+    }
+
+    /// `@` file rows. `fd` searches the whole workspace by name and skips
+    /// ignored directories. Without `fd`, the bounded directory walk remains.
+    pub(super) fn at_entries(&mut self, query: &str) -> Vec<AcEntry> {
+        self.at_paths(query)
+            .into_iter()
+            .take(AUTOCOMPLETE_LIMIT)
+            .map(|path| AcEntry::File { path })
+            .collect()
+    }
+
+    fn at_paths(&mut self, query: &str) -> Vec<String> {
+        let Some(root) = self.current_workspace.clone() else {
+            return Vec::new();
+        };
+        if self
+            .mention_fd_key
+            .as_ref()
+            .is_some_and(|(cached_root, cached_query)| cached_root == &root && cached_query == query)
+        {
+            return self.mention_fd_hits.clone();
+        }
+        if !self.mention_fd_missing {
+            match mentions::search_fd(&root, query) {
+                mentions::FdSearch::Hits(hits) => {
+                    self.mention_fd_key = Some((root, query.to_string()));
+                    self.mention_fd_hits = hits.clone();
+                    return hits;
+                }
+                mentions::FdSearch::Missing => {
+                    self.mention_fd_missing = true;
+                }
             }
         }
+        self.ensure_mention_files();
+        mentions::filter_entries(query, &self.mention_files, &[], AUTOCOMPLETE_LIMIT)
+            .into_iter()
+            .filter_map(|entry| match entry {
+                AcEntry::File { path } => Some(path),
+                AcEntry::Command { .. } => None,
+            })
+            .collect()
     }
 
     // ── per-session drafts ────────────────────────────────────────────
@@ -137,15 +172,9 @@ impl OrbitApp {
                     .len(),
                     TriggerKind::At => {
                         drop(state);
-                        self.ensure_mention_files();
+                        let count = self.at_entries(&trigger.query).len();
                         state = self.autocomplete.borrow_mut();
-                        mentions::filter_entries(
-                            &trigger.query,
-                            &self.mention_files,
-                            &[],
-                            AUTOCOMPLETE_LIMIT,
-                        )
-                        .len()
+                        count
                     }
                 };
                 state.count = count;
