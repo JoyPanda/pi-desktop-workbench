@@ -742,26 +742,38 @@ impl ComposerInput {
     }
 
     fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = cx.read_from_clipboard() else {
-            return;
-        };
+        let item = cx.read_from_clipboard();
         // Pasted images become message attachments ("Show pasted
         // images as attachments") — the app drains `pasted_images` and
         // renders chips above the composer.
-        let images: Vec<Image> = item
-            .entries()
-            .iter()
-            .filter_map(|entry| match entry {
-                ClipboardEntry::Image(image) => Some(image.clone()),
-                ClipboardEntry::String(_) => None,
+        let mut images: Vec<Image> = item
+            .as_ref()
+            .map(|item| {
+                item.entries()
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        ClipboardEntry::Image(image) => Some(image.clone()),
+                        ClipboardEntry::String(_) => None,
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
+        // GPUI misses the formats screenshot tools actually write: a CF_DIB
+        // bitmap on Windows, and a TIFF that it never reaches on macOS once
+        // the pasteboard also carries a path or caption. Read that image
+        // before the text branch, or the shortcut pastes the caption and
+        // drops the picture.
+        if images.is_empty() {
+            if let Some(bytes) = crate::platform::clipboard_image_png() {
+                images.push(Image::from_bytes(gpui::ImageFormat::Png, bytes));
+            }
+        }
         if !images.is_empty() {
             self.pasted_images.extend(images);
             cx.notify();
             return;
         }
-        if let Some(text) = item.text() {
+        if let Some(text) = item.as_ref().and_then(|item| item.text()) {
             self.replace_text_in_range(None, &text, window, cx)
         }
     }

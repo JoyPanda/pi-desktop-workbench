@@ -108,6 +108,9 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSGraphicsContext",
     "NSImage",
     "NSImageRep",
+    # Clipboard screenshots (`platform::clipboard_image_png`). macOS puts a
+    # TIFF on the pasteboard, which GPUI skips once it has also found text.
+    "NSPasteboard",
     "NSSound",
     "NSWorkspace",
     "block2",
@@ -164,6 +167,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
