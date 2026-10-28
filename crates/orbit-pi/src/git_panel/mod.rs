@@ -753,8 +753,9 @@ impl GitPanel {
         self.on_open_path = Some(open);
     }
 
-    /// Keep the embedded review browser's session context in sync so its
-    /// `Last Turn` source can resolve.
+    /// Keep the embedded review browser's session id and turn number current.
+    /// The Git page does not render Last Turn; the pane stores the pair
+    /// without reloading its diff.
     pub fn set_review_turn_context(
         &mut self,
         session: Option<String>,

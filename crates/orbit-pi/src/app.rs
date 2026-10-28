@@ -178,6 +178,9 @@ struct ParkedSession {
     /// process is dropped when the session is next opened, so it reloads the
     /// current servers instead of running the old ones.
     mcp_stamp: u64,
+    /// Last Turn's clock, parked with the transcript so a warm resume does
+    /// not inherit the session that was active in between.
+    turns: crate::turn_review::TurnClock,
     /// Extension `setWidget` blocks live at park time, so switching back to a
     /// warm session restores them (a parked process never re-emits).
     widgets: Vec<ExtensionWidget>,
@@ -797,12 +800,10 @@ pub struct OrbitApp {
     hidden_quota_providers: crate::quota_hidden::HiddenProviders,
     /// The `sessionId` pi reports for the active session (its task id).
     session_id: Option<String>,
-    /// Current agent turn number for this session (0 = none yet).
-    turn_count: usize,
-    /// A turn's start checkpoint was captured and awaits its end.
-    turn_open: bool,
-    /// Latest turn with a captured end checkpoint (drives Review's Last Turn).
-    latest_turn: Option<usize>,
+    /// Which conversation turn Last Turn is showing. Independent of Git
+    /// checkpoint refs; those refs only keep the next capture from reusing a
+    /// number.
+    turns: crate::turn_review::TurnClock,
     /// Right side pane — Review (git diff).
     sidepane: Entity<SidePane>,
     /// Keeps the right pane's observer alive: the pane can change its own
@@ -1998,9 +1999,7 @@ impl OrbitApp {
             quota_hidden_open: false,
             hidden_quota_providers: crate::quota_hidden::HiddenProviders::load(),
             session_id: None,
-            turn_count: 0,
-            turn_open: false,
-            latest_turn: None,
+            turns: crate::turn_review::TurnClock::default(),
             sidepane,
             _sidepane_sub: sidepane_sub,
             project_panel,
@@ -2366,7 +2365,7 @@ impl OrbitApp {
         self.project_panel
             .update(cx, |panel, cx| panel.set_workspace(workspace.clone(), cx));
         let session = self.session_id.clone();
-        let turn = self.latest_turn;
+        let turn = self.turns.latest;
         self.sidepane.update(cx, |pane, cx| {
             pane.set_turn_context(session.clone(), turn, cx)
         });

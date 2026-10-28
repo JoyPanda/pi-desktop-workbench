@@ -272,7 +272,7 @@ impl OrbitApp {
         {
             self.add_workspace(cwd, cx);
         }
-        self.begin_turn(cx);
+        let opened = self.begin_turn(cx);
         // The composer's own prompt is the only one whose `handled` answer may
         // tear down the working row (see `prompt_in_flight`).
         self.prompt_in_flight = Some(id);
@@ -288,29 +288,38 @@ impl OrbitApp {
         // Show the prompt immediately — pi does not echo it back in RPC mode.
         // The decoded previews ride along so the chat window shows what was
         // attached (pi echoes/snapshots carry image blocks for reloads).
-        self.transcript.append_user_message(
+        let appended = self.transcript.append_user_message(
             &text,
             attachments
                 .iter()
                 .filter_map(|a| a.preview.clone())
                 .collect(),
         );
+        // The same prompt after an aborted turn is deduped onto the existing
+        // user row. Drop the turn we just opened so a reload does not invent
+        // an extra number for a row that was never stored.
+        if opened && !appended {
+            self.turns.cancel_begin();
+            self.push_turn_records(cx);
+        }
         self.input.update(cx, |input, cx| input.clear(cx));
         cx.notify();
     }
 
-    /// Start a new user turn: snapshot the workspace so Review's **Last Turn**
-    /// can diff exactly what the agent changes, then let the prompt run.
-    pub(super) fn begin_turn(&mut self, cx: &mut Context<Self>) {
-        if self.turn_open {
-            return;
+    /// Start a new user turn. Last Turn numbers the turn here, before the
+    /// user message is appended, and does not wait on a session id or a Git
+    /// checkpoint. The checkpoint spawn is skipped when there is nothing to
+    /// write it against.
+    pub(super) fn begin_turn(&mut self, cx: &mut Context<Self>) -> bool {
+        let index = self.transcript.message_count();
+        if !self.turns.begin(index) {
+            return false;
         }
+        self.push_turn_records(cx);
         let Some(session) = self.session_id.clone() else {
-            return;
+            return true;
         };
-        self.turn_count += 1;
-        self.turn_open = true;
-        let turn = self.turn_count;
+        let turn = self.turns.count;
         let cwd = self
             .current_workspace
             .clone()
@@ -323,64 +332,85 @@ impl OrbitApp {
                 .await;
         })
         .detach();
+        true
     }
 
-    /// A run settled: snapshot the workspace's end state so Review's **Last
-    /// Turn** has a complete range, then mark Review stale. Without an open
-    /// turn (e.g. a settled retry) it still refreshes Review.
+    /// A run settled. Last Turn updates on this call, before the optional
+    /// checkpoint capture; a missing repo or a failed capture does not hide
+    /// the turn's `edit` / `write` calls.
     pub(super) fn finish_turn(&mut self, cx: &mut Context<Self>) {
+        let capture = self.turns.open;
+        self.turns.finish();
+        self.push_turn_records(cx);
+        // Last Turn already reloaded from the records just pushed. Git
+        // sources still need a worktree refresh.
+        self.sidepane
+            .update(cx, |pane, cx| pane.mark_git_review_stale(cx));
+        self.git_panel
+            .update(cx, |panel, cx| panel.mark_review_stale(cx));
         let Some(session) = self.session_id.clone() else {
-            self.turn_open = false;
-            self.sidepane
-                .update(cx, |pane, cx| pane.mark_review_stale(cx));
-            self.git_panel
-                .update(cx, |panel, cx| panel.mark_review_stale(cx));
             return;
         };
-        if !self.turn_open {
-            self.sidepane
-                .update(cx, |pane, cx| pane.mark_review_stale(cx));
-            self.git_panel
-                .update(cx, |panel, cx| panel.mark_review_stale(cx));
+        if !capture {
             return;
         }
-        // Close the turn synchronously so a second settle event can't start a
-        // duplicate capture while this one is still running.
-        self.turn_open = false;
-        let turn = self.turn_count;
+        let turn = self.turns.count;
         let cwd = self
             .current_workspace
             .clone()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        cx.spawn(async move |this, cx| {
-            let result = cx
+        cx.spawn(async move |_this, cx| {
+            let _ = cx
                 .background_executor()
                 .spawn(async move { checkpoint::capture_turn(&cwd, &session, turn) })
                 .await;
-            let _ = this.update(cx, |app, cx| {
-                app.turn_open = false;
-                if result.is_ok() {
-                    app.latest_turn = Some(turn);
-                }
-                app.sync_review_context(cx);
-                app.sidepane
-                    .update(cx, |pane, cx| pane.mark_review_stale(cx));
-                app.git_panel
-                    .update(cx, |panel, cx| panel.mark_review_stale(cx));
-                cx.notify();
-            });
         })
         .detach();
     }
 
-    /// Forget turn checkpoints when the session or workspace changes.
-    pub(super) fn reset_turns(&mut self) {
-        self.turn_count = 0;
-        self.turn_open = false;
-        self.latest_turn = None;
+    /// Forget the active session's turn clock and clear Last Turn's records.
+    pub(super) fn reset_turns(&mut self, cx: &mut Context<Self>) {
+        self.turns = crate::turn_review::TurnClock::default();
         // The find hits belong to the previous session's transcript.
         self.transcript_search = None;
+        self.push_turn_records(cx);
+    }
+
+    /// Push each turn's `edit` / `write` calls, and the latest turn number,
+    /// to the docked Review pane. Records stay off the Git page; it only
+    /// receives the turn number so its stored context does not go stale.
+    pub(super) fn push_turn_records(&mut self, cx: &mut Context<Self>) {
+        let len = self.transcript.message_count();
+        let start = self.turns.ranges(len).last().map(|&(_, start, _)| start);
+        self.transcript
+            .set_review_card_scope(start, self.current_workspace.as_deref());
+        let records = self.turn_records();
+        let session = self.session_id.clone();
+        let latest = self.turns.latest;
+        self.sidepane.update(cx, |pane, cx| {
+            pane.set_turn_context(session.clone(), latest, cx);
+            pane.set_turn_records(records, cx);
+        });
+        self.git_panel.update(cx, |panel, cx| {
+            panel.set_review_turn_context(session, latest, cx);
+        });
+    }
+
+    fn turn_records(&self) -> crate::turn_review::TurnRecords {
+        let len = self.transcript.message_count();
+        let turns = self
+            .turns
+            .ranges(len)
+            .into_iter()
+            .map(|(turn, start, end)| (turn, self.transcript.recorded_calls(start, end)))
+            .collect();
+        crate::turn_review::TurnRecords { turns }
+    }
+
+    pub(super) fn rebuild_turn_clock(&mut self) {
+        let indices = self.transcript.user_message_indices();
+        self.turns.rebuild(&indices);
     }
 
     /// Forget the queued-message mirror — the queue belongs to the previous
@@ -417,6 +447,7 @@ impl OrbitApp {
             widgets,
             queue: self.queue.clone(),
             parked_at: Instant::now(),
+            turns: std::mem::take(&mut self.turns),
         };
         match self.current_session_path.take() {
             Some(path) => self.park(path, parked),
@@ -424,10 +455,9 @@ impl OrbitApp {
         }
     }
 
-    /// Recover the newest completed turn from the persisted checkpoint refs,
-    /// so Review's **Last Turn** is available immediately after a restart or
-    /// session switch. Orbit keeps the fact in `refs/orbit/…` and reads it
-    /// back here.
+    /// Keep the next checkpoint ref numbered past any ref already stored.
+    /// Last Turn itself comes from the conversation, so this does not write
+    /// `turns.latest` and does not refresh the Review pane.
     pub(super) fn recover_latest_turn(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.session_id.clone() else {
             return;
@@ -443,18 +473,15 @@ impl OrbitApp {
                 .background_executor()
                 .spawn(async move { checkpoint::latest_turn(&cwd, &lookup_session) })
                 .await;
-            let _ = this.update(cx, |app, cx| {
+            let _ = this.update(cx, |app, _cx| {
                 if app.session_id.as_deref() != Some(session.as_str()) {
                     return;
                 }
-                app.latest_turn = latest;
-                app.sync_review_context(cx);
                 if let Some(latest) = latest {
                     // Continue numbering after the recovered turn so new refs
                     // never clobber the persisted ones.
-                    app.turn_count = app.turn_count.max(latest);
+                    app.turns.note_checkpoint(latest);
                 }
-                cx.notify();
             });
         })
         .detach();
@@ -1061,7 +1088,7 @@ impl OrbitApp {
         self.added = 0;
         self.removed = 0;
         self.context = None;
-        self.reset_turns();
+        self.reset_turns(cx);
         self.reset_queue();
         // A brand-new task starts unscoped (Build) and waits for its own id:
         // clearing the id keeps a mode chosen on the New Task page pending
@@ -1182,6 +1209,11 @@ impl OrbitApp {
         self.added = 0;
         self.removed = 0;
         self.transcript = Transcript::new();
+        // No client means the clock was not parked with a process. Drop it
+        // either way so the outgoing session cannot leak into the next one;
+        // a warm resume puts its own clock back below.
+        self.turns = crate::turn_review::TurnClock::default();
+        self.push_turn_records(cx);
         // The queue belongs to the session we just left; the target's state
         // re-establishes it from `get_state`/`queue_update`.
         self.reset_queue();
@@ -1206,6 +1238,8 @@ impl OrbitApp {
             // the process channel streams in from the next tick on.
             self.adopt_client(parked.client);
             self.transcript = parked.transcript;
+            self.turns = parked.turns;
+            self.push_turn_records(cx);
             self.busy = parked.busy;
             self.added = parked.added;
             self.removed = parked.removed;
@@ -1279,6 +1313,10 @@ impl OrbitApp {
         // Opening a session keeps its folder in Orbit's own sidebar list.
         self.add_workspace(session.cwd.clone(), cx);
         self.set_current_workspace(session.cwd.clone(), cx);
+        // The warm resume above pushed the card while `current_workspace`
+        // still named the session being left. Push again so absolute tool
+        // paths normalize against the session that is now on screen.
+        self.push_turn_records(cx);
         self.current_session_path = Some(session.path.clone());
         // The incoming session's own draft (if any) lands in the composer —
         // never the previous session's half-written text.
@@ -1321,7 +1359,7 @@ impl OrbitApp {
                 if !still_active || !app.transcript.is_empty() {
                     return;
                 }
-                app.apply_messages_snapshot(&payload);
+                app.apply_messages_snapshot(&payload, cx);
                 cx.notify();
             });
         })
@@ -3051,10 +3089,16 @@ impl OrbitApp {
     pub(super) fn review_opener(&self, cx: &Context<Self>) -> crate::transcript_view::ReviewOpener {
         let pane = self.sidepane.clone();
         let app = cx.entity().downgrade();
-        let latest = self.latest_turn;
         Rc::new(move |_window, cx| {
-            // Opening Review replaces the Git page, which shares the window.
-            let _ = app.update(cx, |app, cx| app.close_git_for_review(cx));
+            // Opening Review replaces the Git page and the subagent dock.
+            // Slice the turn from the transcript at click time so a turn that
+            // is still streaming shows the tools that have already landed.
+            let mut latest = None;
+            let _ = app.update(cx, |app, cx| {
+                app.push_turn_records(cx);
+                app.close_git_for_review(cx);
+                latest = app.turns.latest;
+            });
             pane.update(cx, |pane, cx| pane.show_review_turn(latest, cx));
         })
     }

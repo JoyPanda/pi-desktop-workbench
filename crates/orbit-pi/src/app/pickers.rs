@@ -143,7 +143,7 @@ impl OrbitApp {
         self.removed = 0;
         self.context = None;
         self.session_usage = None;
-        self.reset_turns();
+        self.reset_turns(cx);
         self.reset_queue();
         match self.extensions.spawn(&folder, true, &self.mcp.secret_env()) {
             Ok(client) => {

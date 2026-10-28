@@ -807,26 +807,6 @@ pub(crate) fn diff_from_message(value: &Value) -> (u64, u64) {
     (added, removed)
 }
 
-/// Merge edit/write tools by path for the per-message changed-files card.
-pub(crate) fn changed_files(message: &ChatMessage) -> Vec<(String, u64, u64)> {
-    let mut files: Vec<(String, u64, u64)> = Vec::new();
-    for tool in message.tools() {
-        if tool.added == 0 && tool.removed == 0 {
-            continue;
-        }
-        let Some(path) = tool.path.as_deref() else {
-            continue;
-        };
-        if let Some(entry) = files.iter_mut().find(|(existing, _, _)| existing == path) {
-            entry.1 += tool.added;
-            entry.2 += tool.removed;
-        } else {
-            files.push((path.to_string(), tool.added, tool.removed));
-        }
-    }
-    files
-}
-
 type ExpandedActivities = Rc<RefCell<HashMap<(usize, usize), bool>>>;
 type ExpandedTools = Rc<RefCell<HashSet<(usize, usize)>>>;
 type CopiedSections = Rc<RefCell<HashMap<(usize, usize, u8), Instant>>>;
@@ -986,9 +966,16 @@ pub struct Transcript {
     seed_text: Rc<Cell<bool>>,
     seed_thinking: Rc<Cell<bool>>,
     /// Whether the list currently carries the end-of-task summary row (an
-    /// extra slot after the last message). Spliced in when a run settles
-    /// with file edits; removed when a new turn begins.
+    /// extra slot after the last message). Shown once the latest turn has
+    /// landed an `edit` / `write`; removed when that turn has none.
     tail_summary: Rc<Cell<bool>>,
+    /// Message index where the latest turn starts. `None` until the app's
+    /// turn clock says which turn the card should describe.
+    review_card_start: Option<usize>,
+    /// Workspace used to normalize the card's paths the same way Review does.
+    review_workspace: Option<PathBuf>,
+    /// Latest-turn file list. Same paths and counts as that turn's Review.
+    review_card_files: Vec<(String, u64, u64)>,
     /// A prompt is out and no assistant step has streamed yet. Drives the
     /// same tail slot as the summary card, showing the live "Working for…"
     /// row from the moment the user hits send instead of from the first
@@ -1002,6 +989,12 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    /// Hand a leftover wheel delta to the message list. `distance` is
+    /// positive toward the live edge, matching [`MessageScrollerState::scroll_by`].
+    pub(crate) fn scroll_transcript_by(&self, distance: Pixels) {
+        self.scroller.scroll_by(distance);
+    }
+
     pub fn new() -> Self {
         let messages = Rc::new(RefCell::new(Vec::new()));
         Self {
@@ -1037,6 +1030,9 @@ impl Transcript {
             seed_text: Rc::new(Cell::new(false)),
             seed_thinking: Rc::new(Cell::new(false)),
             tail_summary: Rc::new(Cell::new(false)),
+            review_card_start: None,
+            review_workspace: None,
+            review_card_files: Vec::new(),
             awaiting_reply: Rc::new(Cell::new(false)),
             user_turns: Rc::new(RefCell::new((0, Rc::new(Vec::new())))),
         }
@@ -1069,6 +1065,41 @@ impl Transcript {
     /// is not proof the cached indices are still valid).
     fn invalidate_user_turns(&self) {
         self.user_turns.borrow_mut().0 = usize::MAX;
+    }
+
+    /// Message indices of real user prompts, in order. Summary rows are not turns.
+    pub(crate) fn user_message_indices(&self) -> Vec<usize> {
+        self.messages
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| message.user)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// `edit` / `write` calls in `messages[start..end]` that Last Turn can show.
+    pub(crate) fn recorded_calls(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> Vec<crate::turn_review::RecordedCall> {
+        let messages = self.messages.borrow();
+        let end = end.min(messages.len());
+        let start = start.min(end);
+        let tools = messages[start..end].iter().flat_map(|message| {
+            let message_failed = message.aborted || message.error.is_some();
+            message
+                .tools()
+                .map(move |tool| crate::turn_review::ToolView {
+                    message_failed,
+                    failed: tool.failed,
+                    has_output: tool.output.is_some(),
+                    name: tool.name.as_str(),
+                    args: tool.args.as_ref(),
+                })
+        });
+        crate::turn_review::recorded_calls(tools)
     }
 
     /// The current transcript text selection, if any — the keyboard copy
@@ -1135,12 +1166,13 @@ impl Transcript {
         self.rail_autoscroll.set(None);
         self.step_mark.set(None);
         self.toolcall_args.borrow_mut().clear();
-        // Rebuild resets the list to the message count; re-add the summary
-        // row when the loaded session touched files.
-        self.tail_summary.set(false);
+        // The app rebuilds the turn clock after this and points the card at
+        // the latest turn. Until then the previous session's files must not
+        // stay on screen.
+        self.review_card_start = None;
+        self.review_card_files.clear();
         self.awaiting_reply.set(false);
-        let touched_files = !self.changed_files_summary().is_empty();
-        self.set_tail_row(touched_files);
+        self.set_tail_row(false);
     }
 
     /// Clear for a fresh session.
@@ -1173,6 +1205,9 @@ impl Transcript {
         self.rail_autoscroll.set(None);
         self.step_mark.set(None);
         self.toolcall_args.borrow_mut().clear();
+        self.review_card_start = None;
+        self.review_workspace = None;
+        self.review_card_files.clear();
         self.tail_summary.set(false);
         self.awaiting_reply.set(false);
     }
@@ -1180,12 +1215,32 @@ impl Transcript {
     /// Apply one protocol event; returns `true` if the transcript changed.
     pub fn apply_event(&mut self, event: &Event) -> bool {
         match event {
-            Event::MessageStart { value } => self.on_message_boundary(value),
-            Event::MessageUpdate { assistant, usage } => self.on_message_update(assistant, usage),
-            Event::MessageEnd { value } => self.on_message_end(value),
+            Event::MessageStart { value } => {
+                let changed = self.on_message_boundary(value);
+                // A steer user row hides the card on the way in. The latest
+                // turn's start did not move, so put that turn's files back.
+                self.refresh_review_card();
+                changed
+            }
+            Event::MessageUpdate { assistant, usage } => {
+                let changed = self.on_message_update(assistant, usage);
+                if matches!(assistant, Some(AssistantMessageEvent::ToolcallEnd { .. })) {
+                    self.refresh_review_card();
+                }
+                changed
+            }
+            Event::MessageEnd { value } => {
+                let changed = self.on_message_end(value);
+                self.refresh_review_card();
+                changed
+            }
             Event::ToolExecutionStart { value } => self.on_tool_execution(value, false),
             Event::ToolExecutionUpdate { value } => self.on_tool_execution_update(value),
-            Event::ToolExecutionEnd { value } => self.on_tool_execution(value, true),
+            Event::ToolExecutionEnd { value } => {
+                let changed = self.on_tool_execution(value, true);
+                self.refresh_review_card();
+                changed
+            }
             // The provider request began: start the clock the live rate
             // divides by, matching pi's settled `durationMs`.
             Event::TurnStart => {
@@ -2066,7 +2121,11 @@ impl Transcript {
     }
 
     fn insert_row(&self) {
-        self.scroller.append(1);
+        // The tail slot, when present, is the last list item. The new message
+        // was already pushed, so it belongs at that index and the card's
+        // measured height stays on the tail.
+        let at = self.messages.borrow().len().saturating_sub(1);
+        self.scroller.splice(at..at, 1);
         self.scroller.note_activity();
     }
 
@@ -2141,23 +2200,33 @@ impl Transcript {
         self.sync_tail_row();
     }
 
-    /// Every file the task changed, across all turns, merged by path with
-    /// summed +/− line counts — the end-of-task summary card's data.
+    /// Files the latest turn edited or wrote, with the same paths and +/−
+    /// counts Review shows for that turn. Empty until [`Self::set_review_card_scope`]
+    /// names the turn, and empty when that turn has no such calls.
     pub fn changed_files_summary(&self) -> Vec<(String, u64, u64)> {
-        let messages = self.messages.borrow();
-        let mut files: Vec<(String, u64, u64)> = Vec::new();
-        for message in messages.iter() {
-            for (path, added, removed) in changed_files(message) {
-                match files.iter_mut().find(|(existing, _, _)| *existing == path) {
-                    Some(entry) => {
-                        entry.1 += added;
-                        entry.2 += removed;
-                    }
-                    None => files.push((path, added, removed)),
-                }
-            }
-        }
-        files
+        self.review_card_files.clone()
+    }
+
+    /// Point the changed-files card at the latest turn. `start` is that
+    /// turn's first message index; `None` hides the card.
+    pub(crate) fn set_review_card_scope(&mut self, start: Option<usize>, workspace: Option<&Path>) {
+        self.review_card_start = start;
+        self.review_workspace = workspace.map(Path::to_path_buf);
+        self.refresh_review_card();
+    }
+
+    /// Rebuild the card from calls that have already landed in the latest turn.
+    fn refresh_review_card(&mut self) {
+        let Some(start) = self.review_card_start else {
+            self.review_card_files.clear();
+            self.set_tail_row(false);
+            return;
+        };
+        let calls = self.recorded_calls(start, self.message_count());
+        let files = crate::turn_review::file_counts(&calls, self.review_workspace.as_deref());
+        let show = !files.is_empty();
+        self.review_card_files = files;
+        self.set_tail_row(show);
     }
 
     /// Add or remove the end-of-task summary row (the extra list slot after
@@ -2229,7 +2298,10 @@ impl Transcript {
     /// The settled run's last message generation clock — pi's `durationMs`
     /// (prefill plus decode), or the client-measured fallback.
     pub fn last_message_duration(&self) -> Option<Duration> {
-        self.messages.borrow().last().and_then(ChatMessage::generation_time)
+        self.messages
+            .borrow()
+            .last()
+            .and_then(ChatMessage::generation_time)
     }
 
     /// Summarize the turn that just settled for a background notification:
@@ -2362,13 +2434,11 @@ impl Transcript {
         self.sync_tail_row();
     }
 
-    /// Turn end (or abort): drop live streaming state, then — once the run
-    /// has settled — pin the whole-task changed-files summary at the end of
-    /// the transcript (when the task touched files).
+    /// Turn end (or abort): drop live streaming state, then pin the latest
+    /// turn's changed-files card when that turn edited or wrote a file.
     fn end_live_run(&mut self) {
         self.clear_live_state();
-        let touched_files = !self.changed_files_summary().is_empty();
-        self.set_tail_row(touched_files);
+        self.refresh_review_card();
     }
 
     /// True while an assistant message is still streaming.
@@ -2743,7 +2813,11 @@ mod tests {
         }
         let cards: Vec<_> = messages
             .iter()
-            .filter(|m| !changed_files(m).is_empty())
+            .filter(|message| {
+                message
+                    .tools()
+                    .any(|tool| tool.path.is_some() && (tool.added > 0 || tool.removed > 0))
+            })
             .collect();
         assert!(
             !cards.is_empty(),
@@ -3786,67 +3860,13 @@ mod tests {
     }
 
     #[test]
-    fn changed_files_merges_same_path() {
-        let tools = vec![
-            ToolCall {
-                name: "edit".into(),
-                summary: String::new(),
-                path: Some("a.rs".into()),
-                added: 2,
-                removed: 1,
-                ..ToolCall::from_value("edit", None)
-            },
-            ToolCall {
-                name: "edit".into(),
-                summary: String::new(),
-                path: Some("a.rs".into()),
-                added: 3,
-                removed: 0,
-                ..ToolCall::from_value("edit", None)
-            },
-            ToolCall {
-                name: "write".into(),
-                summary: String::new(),
-                path: Some("b.rs".into()),
-                added: 4,
-                removed: 0,
-                ..ToolCall::from_value("write", None)
-            },
-            ToolCall {
-                name: "read".into(),
-                summary: String::new(),
-                path: Some("c.rs".into()),
-                added: 0,
-                removed: 0,
-                ..ToolCall::from_value("read", None)
-            },
-        ];
-        let message = ChatMessage {
-            user: false,
-            summary: None,
-            steps: vec![Step {
-                tools,
-                ..Step::default()
-            }],
-            images: Vec::new(),
-            elapsed: None,
-            finished_at: None,
-            error: None,
-            aborted: false,
-        };
-        assert_eq!(
-            changed_files(&message),
-            vec![("a.rs".into(), 5, 1), ("b.rs".into(), 4, 0)]
-        );
-    }
-
-    #[test]
     fn settled_run_pins_changed_files_summary() {
         let edit_args = json!({
             "path": "a.rs",
             "edits": [{ "oldText": "x", "newText": "y\nz" }]
         });
         let mut t = Transcript::new();
+        t.set_review_card_scope(Some(0), None);
         t.apply_event(&Event::MessageStart {
             value: json!({"role": "user", "content": "build it"}),
         });
@@ -3874,35 +3894,37 @@ mod tests {
                 ]
             }),
         });
-        assert_eq!(t.scroller.item_count(), 2);
-        // Settle: the whole-task summary pins itself after the last message.
-        t.apply_event(&Event::AgentSettled);
+        // The edit has landed, so the card is up before the run settles.
         assert!(t.tail_summary.get());
         assert_eq!(t.scroller.item_count(), 3);
         assert_eq!(t.changed_files_summary(), vec![("a.rs".into(), 2, 1)]);
-        // A new turn removes the summary slot again (prompt takes its place).
+        t.apply_event(&Event::AgentSettled);
+        assert!(t.tail_summary.get());
+        assert_eq!(t.changed_files_summary(), vec![("a.rs".into(), 2, 1)]);
+        // The next send opens a new turn before its user row is appended.
+        // That turn has no edit yet, so the previous turn leaves the card.
+        t.set_review_card_scope(Some(t.message_count()), None);
+        assert!(!t.tail_summary.get());
         t.apply_event(&Event::MessageStart {
             value: json!({"role": "user", "content": "more"}),
         });
         assert!(!t.tail_summary.get());
-        assert_eq!(t.scroller.item_count(), 3);
-        // Settling again re-pins the summary — it aggregates the whole
-        // task, which still includes the first turn's edit.
         t.apply_event(&Event::AgentSettled);
-        assert!(t.tail_summary.get());
-        assert_eq!(t.scroller.item_count(), 4);
+        assert!(!t.tail_summary.get());
+        assert_eq!(t.scroller.item_count(), 3);
     }
 
-    /// Screenshot regression: `agent_end` fires between loop iterations
-    /// while the run continues (steering/follow-up queued) — the changed-files
-    /// card must stay hidden until the run truly settles.
+    /// `agent_end` fires between loop iterations while steering is queued.
+    /// A file the turn already edited stays on the card; the loop boundary
+    /// does not clear it.
     #[test]
-    fn agent_end_mid_run_does_not_pin_summary() {
+    fn agent_end_mid_run_keeps_a_landed_edit_on_the_card() {
         let edit_args = json!({
             "path": "a.rs",
             "edits": [{ "oldText": "x", "newText": "y\nz" }]
         });
         let mut t = Transcript::new();
+        t.set_review_card_scope(Some(0), None);
         t.apply_event(&Event::MessageStart {
             value: json!({"role": "user", "content": "build it"}),
         });
@@ -3917,20 +3939,16 @@ mod tests {
                 ]
             }),
         });
-        // First loop iteration ends, but the run keeps working (steering
-        // queued) — edits exist yet no summary card may appear.
+        assert!(t.tail_summary.get());
         t.apply_event(&Event::AgentEnd { will_retry: false });
-        assert!(!t.tail_summary.get());
-        assert_eq!(t.scroller.item_count(), 2);
-        // Run continues: a follow-up assistant message streams in.
+        assert!(t.tail_summary.get());
+        assert_eq!(t.changed_files_summary(), vec![("a.rs".into(), 2, 1)]);
         t.apply_event(&Event::MessageStart {
             value: json!({"role": "assistant", "content": "continuing"}),
         });
         assert!(t.is_streaming());
-        // Only the real settle pins the summary.
-        t.apply_event(&Event::AgentSettled);
         assert!(t.tail_summary.get());
-        assert_eq!(t.scroller.item_count(), 3);
+        t.apply_event(&Event::AgentSettled);
         assert_eq!(t.changed_files_summary(), vec![("a.rs".into(), 2, 1)]);
     }
 
@@ -3947,9 +3965,70 @@ mod tests {
         });
         let mut t = Transcript::new();
         t.load_from(&payload);
+        assert!(!t.tail_summary.get());
+        t.set_review_card_scope(Some(0), None);
         assert!(t.tail_summary.get());
         assert_eq!(t.scroller.item_count(), 3, "2 messages + summary row");
         assert_eq!(t.changed_files_summary(), vec![("n.rs".into(), 3, 0)]);
+    }
+
+    #[test]
+    fn the_changed_files_card_lists_only_the_latest_turn() {
+        let payload = json!({
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": [
+                    {"type": "toolCall", "id": "c1", "name": "write",
+                     "arguments": {"path": "a.rs", "content": "a\n"}}
+                ]},
+                {"role": "user", "content": "second"},
+                {"role": "assistant", "content": [
+                    {"type": "toolCall", "id": "c2", "name": "write",
+                     "arguments": {"path": "b.rs", "content": "b\n"}}
+                ]}
+            ]
+        });
+        let mut t = Transcript::new();
+        t.load_from(&payload);
+        t.set_review_card_scope(Some(2), None);
+        assert_eq!(t.changed_files_summary(), vec![("b.rs".into(), 1, 0)]);
+    }
+
+    /// A steer user row sits inside the open turn, then the next assistant
+    /// row is inserted while the card already occupies the tail slot. The
+    /// card has to stay the last list item.
+    #[test]
+    fn a_steer_user_row_keeps_the_card_in_the_tail_slot() {
+        let edit_args = json!({
+            "path": "a.rs",
+            "edits": [{ "oldText": "x", "newText": "y" }]
+        });
+        let mut t = Transcript::new();
+        t.set_review_card_scope(Some(0), None);
+        t.apply_event(&Event::MessageStart {
+            value: json!({"role": "user", "content": "build it"}),
+        });
+        t.apply_event(&Event::MessageStart {
+            value: json!({"role": "assistant", "content": ""}),
+        });
+        t.apply_event(&Event::MessageEnd {
+            value: json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "c1", "name": "edit", "arguments": edit_args}
+                ]
+            }),
+        });
+        assert!(t.tail_summary.get());
+        t.apply_event(&Event::MessageStart {
+            value: json!({"role": "user", "content": "steer"}),
+        });
+        assert!(t.tail_summary.get());
+        t.apply_event(&Event::MessageStart {
+            value: json!({"role": "assistant", "content": "continuing"}),
+        });
+        assert!(t.tail_summary.get());
+        assert_eq!(t.scroller.item_count(), t.message_count() + 1);
     }
 
     #[test]

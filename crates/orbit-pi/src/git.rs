@@ -360,6 +360,9 @@ fn resolve_range(
         Source::Staged => (head, index_tree(cwd)?),
         Source::Committed => (branch_base(cwd), head_or_empty(cwd)),
         Source::Branch => (branch_base(cwd), checkpoint::capture_worktree_commit(cwd)?),
+        Source::AllChanges => {
+            bail!("all changes are read from the conversation, not Git")
+        }
     })
 }
 

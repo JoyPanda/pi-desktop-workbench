@@ -96,8 +96,10 @@ impl OrbitApp {
             .as_ref()
             .is_some_and(watch::WorkspaceWatcher::take_dirty);
         if workspace_dirty {
+            // Last Turn is the conversation's edit/write calls. A file save
+            // must not rebuild it or throw away the reader's scroll position.
             self.sidepane
-                .update(cx, |pane, cx| pane.mark_review_stale(cx));
+                .update(cx, |pane, cx| pane.mark_git_review_stale(cx));
             self.git_panel.update(cx, |panel, cx| panel.refresh(cx));
             self.project_panel
                 .update(cx, |panel, cx| panel.mark_stale(cx));
@@ -301,7 +303,8 @@ impl OrbitApp {
                     // read it now instead of waiting for the slow poll.
                     self.quota_entries_next_poll = Instant::now();
                     self.poll_quota_entries();
-                    // Capture the turn's end checkpoint.
+                    // Close the turn on this frame. The Git checkpoint is
+                    // best-effort and does not gate Last Turn's recorded edits.
                     self.finish_turn(cx);
                     // An MCP configuration change deferred during the run
                     // applies now, with the session preserved.
@@ -594,6 +597,9 @@ impl OrbitApp {
                 // follow-up / retry can continue past `agent_end`).
                 Event::AgentSettled => {
                     parked.busy = false;
+                    // The clock was parked open with this run. Close it here;
+                    // the active view's `finish_turn` does not see this process.
+                    parked.turns.finish();
                     // A settled run has no queued continuation left; clear
                     // the mirror even if the final `queue_update` was missed.
                     parked.queue = PendingQueue::default();
@@ -652,6 +658,7 @@ impl OrbitApp {
                             // parked one never saw that, so clear it here.
                             if command == "clone" || command == "fork" {
                                 parked.transcript = Transcript::new();
+                                parked.turns = crate::turn_review::TurnClock::default();
                                 changed = true;
                             }
                             match file {
@@ -683,7 +690,7 @@ impl OrbitApp {
     /// rebuild the top-bar diff counts from it. Shared by pi's authoritative
     /// `get_messages` response and the disk preview that paints a cold session
     /// before pi answers.
-    pub(super) fn apply_messages_snapshot(&mut self, data: &Value) {
+    pub(super) fn apply_messages_snapshot(&mut self, data: &Value, cx: &mut Context<Self>) {
         self.transcript.load_from(data);
         self.added = 0;
         self.removed = 0;
@@ -694,6 +701,10 @@ impl OrbitApp {
                 self.removed += r;
             }
         }
+        // Message indices moved. Rebuild the turn clock without letting the
+        // latest number step backwards, then refresh Last Turn.
+        self.rebuild_turn_clock();
+        self.push_turn_records(cx);
     }
 
     /// Apply a command response to the app. The arguments are the response's
@@ -843,9 +854,8 @@ impl OrbitApp {
                 if handled {
                     self.busy = false;
                     self.transcript.abandon_reply();
-                    // The checkpoint turn opened at the send never ran: close its
-                    // range now so the next prompt starts a fresh one instead of
-                    // inheriting this start in Review's **Last Turn**.
+                    // The turn opened at the send never ran: close it so the
+                    // next prompt starts a fresh one.
                     self.finish_turn(cx);
                 }
                 return;
@@ -986,7 +996,7 @@ impl OrbitApp {
                 self.apply_default_model(cx);
             }
             "get_messages" => {
-                self.apply_messages_snapshot(data);
+                self.apply_messages_snapshot(data, cx);
                 self.refresh_context_stats();
             }
             "get_available_models" => {
@@ -1084,7 +1094,7 @@ impl OrbitApp {
                 if success {
                     // A resumed session keeps the model in its file (D-D).
                     self.default_model_armed = false;
-                    self.reset_turns();
+                    self.reset_turns(cx);
                     self.reset_queue();
                     self.sync_review_context(cx);
                     // Load the session *before* the slower auth/quota probes,
@@ -1108,7 +1118,7 @@ impl OrbitApp {
                 self.session_usage = None;
                 // Widgets belong to the process that sent them.
                 self.extension_widgets.clear();
-                self.reset_turns();
+                self.reset_turns(cx);
                 self.reset_queue();
                 self.sync_review_context(cx);
                 *refresh_sessions = true;
@@ -1405,7 +1415,7 @@ impl OrbitApp {
         self.removed = 0;
         self.context = None;
         self.session_usage = None;
-        self.reset_turns();
+        self.reset_turns(cx);
         self.reset_queue();
         self.session_id = None;
         // A branch mirrors its source session; it is not put on the default model.

@@ -1182,6 +1182,11 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let nerd = nerd_font_family(cx);
     let list_el = list(view.scroller.list_state(), move |ix, _window, cx| {
         let live = streaming.get() == Some(ix);
+        // The card can appear while a turn is still streaming. Its Copy
+        // footer belongs to a settled answer, so a live turn keeps the
+        // message row's own footer.
+        let card_owns_footer =
+            summary_files.is_some() && streaming.get().is_none() && !awaiting_reply.get();
         // The rate's clock: prefer the turn's request start (`turn_start`),
         // the same basis as pi's `durationMs`; fall back to the stream start
         // when an older pi build never emitted one.
@@ -1310,7 +1315,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                         .flex()
                         .flex_col()
                         .child(card)
-                        .child(footer),
+                        .when(card_owns_footer, |column| column.child(footer)),
                 )
                 .into_any_element();
         }
@@ -1328,7 +1333,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 live_tps,
                 fold_open,
                 copied: copied_now,
-                suppress_footer: suppress_message_footer(summary_files.is_some(), ix, row_count),
+                suppress_footer: suppress_message_footer(card_owns_footer, ix, row_count),
                 expanded_turns: expanded_turns.clone(),
                 expanded_activities: expanded_activities.clone(),
                 copied_at: copied.clone(),
@@ -4173,46 +4178,16 @@ fn line_diff(old: &str, new: &str, lang: Option<highlight::Lang>) -> Vec<DiffRow
     let new_lines = split_diff_lines(new);
     let old_tokens = lang.map(|lang| highlight::tokenize(lang, old));
     let new_tokens = lang.map(|lang| highlight::tokenize(lang, new));
-    let (n, m) = (old_lines.len(), new_lines.len());
-    let mut ops: Vec<(DiffRowKind, Option<usize>, Option<usize>)> = Vec::new();
-    if n.saturating_mul(m) > 250_000 {
-        ops.extend((0..n).map(|i| (DiffRowKind::Deletion, Some(i), None)));
-        ops.extend((0..m).map(|j| (DiffRowKind::Addition, None, Some(j))));
-    } else {
-        let mut lcs = vec![vec![0u32; m + 1]; n + 1];
-        for i in (0..n).rev() {
-            for j in (0..m).rev() {
-                lcs[i][j] = if old_lines[i] == new_lines[j] {
-                    lcs[i + 1][j + 1] + 1
-                } else {
-                    lcs[i + 1][j].max(lcs[i][j + 1])
-                };
-            }
-        }
-        let (mut i, mut j) = (0usize, 0usize);
-        while i < n && j < m {
-            if old_lines[i] == new_lines[j] {
-                ops.push((DiffRowKind::Context, Some(i), Some(j)));
-                i += 1;
-                j += 1;
-            } else if lcs[i + 1][j] >= lcs[i][j + 1] {
-                ops.push((DiffRowKind::Deletion, Some(i), None));
-                i += 1;
-            } else {
-                ops.push((DiffRowKind::Addition, None, Some(j)));
-                j += 1;
-            }
-        }
-        while i < n {
-            ops.push((DiffRowKind::Deletion, Some(i), None));
-            i += 1;
-        }
-        while j < m {
-            ops.push((DiffRowKind::Addition, None, Some(j)));
-            j += 1;
-        }
-    }
+    let ops = crate::turn_review::diff_line_ops(&old_lines, &new_lines);
     ops.into_iter()
+        .map(|(kind, old_ix, new_ix)| {
+            let kind = match kind {
+                crate::turn_review::DiffLineKind::Context => DiffRowKind::Context,
+                crate::turn_review::DiffLineKind::Addition => DiffRowKind::Addition,
+                crate::turn_review::DiffLineKind::Deletion => DiffRowKind::Deletion,
+            };
+            (kind, old_ix, new_ix)
+        })
         .map(|(kind, old_ix, new_ix)| {
             let (text, tokens) = match kind {
                 DiffRowKind::Deletion => (

@@ -7,8 +7,8 @@
 //!
 //! Sources mirror the reference model: the working tree is compared via
 //! an isolated snapshot commit so untracked files and stage/unstage state are
-//! represented exactly, and `LastTurn` compares the turn's captured
-//! checkpoints rather than live Git state.
+//! represented exactly. `LastTurn` is not a Git range — the docked pane
+//! builds it from that turn's `edit` / `write` calls.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -21,15 +21,17 @@ const COLLAPSED_CONTEXT_THRESHOLD: usize = 1;
 pub const DEFAULT_EXPANSION_LINE_COUNT: usize = 100;
 /// A pathological generated patch must not turn one Review tab into an
 /// unbounded in-memory document.
-const MAX_RENDERED_DIFF_LINES: usize = 50_000;
+pub(crate) const MAX_RENDERED_DIFF_LINES: usize = 50_000;
 
 /// Which Git snapshot the Review panel is showing.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum Source {
-    /// Files a single agent turn touched, from its captured checkpoints.
+    /// Files a single agent turn edited or wrote, from the conversation.
     LastTurn {
         turn_count: usize,
     },
+    /// Every turn's `edit` / `write` calls in this session, folded in order.
+    AllChanges,
     #[default]
     Uncommitted,
     Unstaged,
