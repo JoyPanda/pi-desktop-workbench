@@ -2434,6 +2434,24 @@ impl Transcript {
         chars.div_ceil(4) as u64
     }
 
+    /// Whether row `ix` is a settled assistant turn the footer can fork from.
+    pub(crate) fn is_assistant_message(&self, ix: usize) -> bool {
+        self.messages
+            .borrow()
+            .get(ix)
+            .is_some_and(ChatMessage::is_assistant)
+    }
+
+    /// `true` for each user row, in transcript order. A fork point is the
+    /// next user message after the clicked assistant reply.
+    pub(crate) fn user_flags(&self) -> Vec<bool> {
+        self.messages
+            .borrow()
+            .iter()
+            .map(|message| message.user)
+            .collect()
+    }
+
     /// Drop stale Copy feedback. Returns true while any entry still needs a tick.
     pub fn prune_copy_feedback(&self) -> bool {
         let mut copied = self.copied.borrow_mut();
@@ -2451,6 +2469,7 @@ impl Transcript {
     /// workspace roots the changed-files Review git diff; the viewport
     /// height caps the rail, and the main-area width gates its visibility.
     /// `review_changes` wires the cards' Review buttons to the side pane.
+    /// `fork_session` wires the assistant footer's fork button.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -2460,6 +2479,7 @@ impl Transcript {
         agent_calls: crate::agent_call_display::AgentCallDisplay,
         review_changes: Option<crate::transcript_view::ReviewOpener>,
         image_opener: Option<crate::transcript_view::ImageOpener>,
+        fork_session: Option<crate::transcript_view::ForkOpener>,
         search_hits: Option<HashSet<usize>>,
         search_active: Option<usize>,
         cx: &gpui::App,
@@ -2520,6 +2540,7 @@ impl Transcript {
                 summary_usage,
                 review_changes,
                 image_opener,
+                fork_session,
                 search_hits: search_hits.map(|hits| Rc::new(RefCell::new(hits))),
                 search_active: search_active.map(|ix| Rc::new(Cell::new(Some(ix)))),
             },

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Fork a session from an assistant reply.** The button beside Copy starts a
+  new session that keeps history through that reply. After compaction the cut
+  follows the summary and the messages still on screen. The new session is
+  titled `(N) original title`. Command-palette Clone still copies the whole
+  session and does not rename. Rewind is unchanged.
 - **Mermaid flowcharts render in the transcript.** A `flowchart`/`graph` fence
   (TD/TB, BT, LR, RL) now paints as a diagram — nodes, shapes, orthogonal edges,
   arrowheads, and edge labels — drawn with GPUI paths and text, so there is no

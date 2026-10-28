@@ -9,9 +9,10 @@
 //!
 //! Timestamps render on the footer when pi provides one (snapshot
 //! `timestamp` fields, or a wall-clock stamp taken at `message_end`).
-//! Not painted (pi does not provide them): git Review, conversation fork,
-//! per-tool checkpoint diffs — an edit/write tool instead shows an inline
-//! diff built from its own `oldText`/`newText` arguments.
+//! A settled assistant footer also forks the conversation through that
+//! reply. Not painted (pi does not provide them): git Review and per-tool
+//! checkpoint diffs — an edit/write tool instead shows an inline diff
+//! built from its own `oldText`/`newText` arguments.
 
 use std::{
     cell::{Cell, RefCell},
@@ -66,6 +67,10 @@ pub(crate) type ReviewOpener = Rc<dyn Fn(&mut Window, &mut App)>;
 /// Opens one attachment image in the app's full-window lightbox. Handed down
 /// from the app so an image tile can open a surface it doesn't own.
 pub(crate) type ImageOpener = Rc<dyn Fn(Arc<Image>, &mut Window, &mut App)>;
+
+/// Forks the open session through the assistant message at this index.
+/// Handed down from the app; the footer does not own the session.
+pub(crate) type ForkOpener = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 /// The transcript content column's max width.
 /// Normal message content keeps this centered measure. Assistant tables
@@ -230,6 +235,9 @@ pub(crate) struct TranscriptView {
     /// Opens an attachment image in the full-window lightbox; `None` leaves
     /// the tiles non-interactive.
     pub image_opener: Option<ImageOpener>,
+    /// Forks through an assistant message; `None` hides the footer button
+    /// (tests, and any surface that renders a transcript without a session).
+    pub fork_session: Option<ForkOpener>,
     /// Message indices matching the open find query; `None` when find is
     /// closed. Rows get a quiet wash.
     pub search_hits: Option<Rc<RefCell<HashSet<usize>>>>,
@@ -1041,6 +1049,7 @@ struct RowPaint {
     thinking_detached: ThinkingDetached,
     hovered_usage: Rc<Cell<Option<usize>>>,
     image_opener: Option<ImageOpener>,
+    fork_session: Option<ForkOpener>,
     search_hit: bool,
     search_active: bool,
     /// Tables alone can extend beyond the centered message column.
@@ -1096,6 +1105,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let summary_usage = view.summary_usage.clone();
     let review_changes = view.review_changes.clone();
     let image_opener = view.image_opener.clone();
+    let fork_session = view.fork_session.clone();
     let search_hits = view.search_hits.clone();
     let search_active = view.search_active.clone();
 
@@ -1283,6 +1293,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                     theme,
                     copied.clone(),
                     hovered_usage.clone(),
+                    fork_session.clone(),
                 ));
             return div()
                 .id(ElementId::NamedInteger("transcript-row".into(), ix as u64))
@@ -1331,6 +1342,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 thinking_detached: thinking_detached.clone(),
                 hovered_usage: hovered_usage.clone(),
                 image_opener: image_opener.clone(),
+                fork_session: fork_session.clone(),
                 search_hit: search_hits
                     .as_ref()
                     .is_some_and(|hits| hits.borrow().contains(&ix)),
@@ -2054,6 +2066,7 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint, cx: &gpui::App) -
             theme,
             paint.copied_at.clone(),
             paint.hovered_usage.clone(),
+            None,
         ))
 }
 
@@ -2341,6 +2354,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
             theme,
             paint.copied_at.clone(),
             paint.hovered_usage.clone(),
+            paint.fork_session.clone(),
         ));
     }
 
@@ -4482,9 +4496,11 @@ fn footer_time_stamp(text: String, theme: Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// Message footer: persistent quiet copy button + timestamp stamp and, when
-/// pi reports usage, a compact `↑in ↓out · $cost` metric. Hovering the metric
-/// opens the full token/cache/cost breakdown.
+/// Message footer: persistent quiet copy button, and on an assistant turn a
+/// fork button, plus a timestamp stamp and, when pi reports usage, a compact
+/// `↑in ↓out · $cost` metric. Hovering the metric opens the full
+/// token/cache/cost breakdown. `fork` is ignored for a right-aligned user
+/// bubble — forking branches from an assistant reply.
 #[allow(clippy::too_many_arguments)]
 fn render_message_footer(
     copy_text: String,
@@ -4497,6 +4513,7 @@ fn render_message_footer(
     theme: Theme,
     copied_at: Rc<RefCell<HashMap<usize, Instant>>>,
     hovered_usage: Rc<Cell<Option<usize>>>,
+    fork: Option<ForkOpener>,
 ) -> impl IntoElement {
     let button = icon_button_frame(
         div().id(ElementId::NamedInteger("copy-response".into(), ix as u64)),
@@ -4538,6 +4555,9 @@ fn render_message_footer(
         footer = footer.child(button);
     } else {
         footer = footer.child(button);
+        if let Some(fork) = fork {
+            footer = footer.child(fork_session_button(ix, theme, fork));
+        }
         if let Some(stamp) = stamp {
             footer = footer.child(stamp);
         }
@@ -4546,6 +4566,27 @@ fn render_message_footer(
         footer = footer.child(metric);
     }
     footer
+}
+
+/// Fork the conversation through this assistant reply. Sits beside Copy on
+/// a settled assistant footer (and the tail summary that owns that footer).
+fn fork_session_button(ix: usize, theme: Theme, fork: ForkOpener) -> impl IntoElement {
+    icon_button_frame(
+        div().id(ElementId::NamedInteger("fork-session".into(), ix as u64)),
+        &theme,
+        FOOTER_BUTTON,
+    )
+    .tip(tr!("transcript.fork_session"))
+    .cursor_pointer()
+    .hover(|style| style.bg(theme.overlay_strong))
+    .child(glyph(
+        "icons/git-fork.svg",
+        FOOTER_BUTTON.icon_size().px(&theme),
+        theme.text_muted,
+    ))
+    .on_click(move |_, window, cx| {
+        fork(ix, window, cx);
+    })
 }
 
 /// Compact `↑in ↓out · $cost` footer metric with a hover breakdown card.
@@ -9540,6 +9581,7 @@ mod tests {
             summary_usage: None,
             review_changes: None,
             image_opener: None,
+            fork_session: None,
             search_hits: None,
             search_active: None,
         }

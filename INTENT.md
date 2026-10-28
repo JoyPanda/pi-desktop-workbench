@@ -490,7 +490,7 @@ bindings (Editor clipboard/undo/save, Files close, Git tabs), so Windows and
 Linux get the same shortcuts, and the dead ⌘. abort chord was fixed (gpui's key
 name is `.`, not `period`).
 
-Open: migrating the remaining surfaces (the settings page's toolbars / cards / controls, transcript inner content, the modal bodies' inner text, the remaining sub-10px / 17px+ type, and off-scale radii) onto the D11 tokens; drawn scrollbars (gpui 0.2.2 draws none); conversation **fork/rewind** (clone exists; rewind needs entry ids); on-device scroll-perf measurement; stream veil + an explicit ≤8.3 Hz streaming commit pipeline; screen-reader labeling (gpui 0.2.2 exposes no accessibility tree); richer per-tool renderers (bash/thinking are dedicated, the rest generic).
+Open: migrating the remaining surfaces (the settings page's toolbars / cards / controls, transcript inner content, the modal bodies' inner text, the remaining sub-10px / 17px+ type, and off-scale radii) onto the D11 tokens; drawn scrollbars (gpui 0.2.2 draws none); conversation **rewind** (fork from an assistant reply ships; rewind does not); on-device scroll-perf measurement; stream veil + an explicit ≤8.3 Hz streaming commit pipeline; screen-reader labeling (gpui 0.2.2 exposes no accessibility tree); richer per-tool renderers (bash/thinking are dedicated, the rest generic).
 
 ## Non-goals (explicitly out of scope)
 
@@ -515,7 +515,7 @@ the product; the per-item detail lives in AGENT.md.
 | P5 | Mermaid + a11y | ◐ Native flowchart rendering + code-block fallback for the rest + reduce-motion shipped; other diagram types, app-wide focus rings, screen-reader labeling open |
 | P6 | Tests, perf harness, packaging/notarization, CI | ◐ Unit/live tests, 10k perf test, signed `.app`/DMG, CI shipped; on-device scroll benchmark + streaming edge coverage open |
 
-Open backlog (detail in AGENT.md): conversation fork/rewind, on-device scroll-perf measurement,
+Open backlog (detail in AGENT.md): conversation rewind, on-device scroll-perf measurement,
 stream veil, explicit streaming commit pipeline, app-wide focus rings, screen-reader labeling, richer
 per-tool renderers, Windows/Linux native polish.
 

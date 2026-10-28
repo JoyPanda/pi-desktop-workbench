@@ -67,7 +67,7 @@ crates/orbit-pi/        GPUI app — window, shell, chat, settings
   src/app/open_in.rs    installed-editor/terminal detection and the "open in" menu
   src/app/worktrees.rs  Worktrees page + controller: list/create/open/rename/move/lock/remove, setup progress, settings rows
   src/app/pi_update_ui.rs launch-time pi self-update: background check, install, toasts
-  src/app/helpers.rs    shared UI primitives (icon/file glyphs, the loading spinner, the floating-surface chrome, the empty/error state) + small formatting helpers
+  src/app/helpers.rs    shared UI primitives (icon/file glyphs, the loading spinner, the floating-surface chrome, the empty/error state) + small formatting helpers, fork titles, and the compacted-branch cut
   src/auth.rs           non-sensitive provider-auth state machine for the auth.* RPC namespace (login/cancel/timeout/restart recovery)
   src/transcript.rs     virtualized messages (snapshot + stream)
   src/transcript_view.rs Waku-style transcript paint (rail, activity cards, copy); plain-GPUI message rows (no component library)
@@ -392,7 +392,7 @@ stack is gone; do not resurrect it.
 
 ### Known gaps
 
-- Rewind/fork UI is not shipped; clone is available.
+- Rewind is not shipped. Fork from an assistant reply is: the new session keeps history through that reply (after compaction, the branch still on screen) and is titled `(N) original`. Command-palette clone still copies the whole session and does not rename.
 - Full screen-reader/focus accessibility work remains incomplete.
 - GPUI API changes must be handled deliberately because the pinned version is
   pre-1.0.

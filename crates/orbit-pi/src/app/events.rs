@@ -1,6 +1,13 @@
 use super::*;
 use crate::toast::ToastKind;
 
+/// pi reports `cancelled: true` when an extension refused the fork or clone.
+fn response_cancelled(data: Option<&serde_json::Value>) -> bool {
+    data.and_then(|data| data.get("cancelled"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+}
+
 /// One tick's worth of results from draining a background session.
 struct ParkedDrain {
     /// An event changed the parked state — repaint.
@@ -172,23 +179,32 @@ impl OrbitApp {
                     // Generate title, or the rename field echoing back).
                     // `session_name` wins over `current_title` in the header,
                     // so both move together or a re-title would not show.
-                    match name {
-                        Some(name) => {
-                            self.current_title = Some(name.clone());
-                            // Seed the rename field from the new name, unless
-                            // the user is mid-edit; a manual generation owns
-                            // the field it asked to refresh.
-                            let seed = self.session_name.is_none() || self.title_generating;
-                            self.session_name = Some(name.clone());
-                            if seed {
-                                self.session_name_input
-                                    .update(cx, |input, cx| input.set_text(name, cx));
+                    // A footer fork holds its `(N)` title until `set_session_name`
+                    // answers. pi runs that command beside the `get_state`
+                    // queued first, so the echo can arrive before a report
+                    // that still carries the name copied from the source.
+                    if self.fork_hold_blocks() {
+                        self.title_generating = false;
+                        refresh_sessions = true;
+                    } else {
+                        match name {
+                            Some(name) => {
+                                self.current_title = Some(name.clone());
+                                // Seed the rename field from the new name, unless
+                                // the user is mid-edit; a manual generation owns
+                                // the field it asked to refresh.
+                                let seed = self.session_name.is_none() || self.title_generating;
+                                self.session_name = Some(name.clone());
+                                if seed {
+                                    self.session_name_input
+                                        .update(cx, |input, cx| input.set_text(name, cx));
+                                }
                             }
+                            None => self.session_name = None,
                         }
-                        None => self.session_name = None,
+                        self.title_generating = false;
+                        refresh_sessions = true;
                     }
-                    self.title_generating = false;
-                    refresh_sessions = true;
                 }
                 Event::Auth(event) => {
                     let effects = self.auth.on_event(event.clone());
@@ -324,6 +340,9 @@ impl OrbitApp {
                     self.refresh_context_stats();
                 }
                 Event::ProcessExited => {
+                    // The rename can no longer answer, and a held title would
+                    // ignore the next session's name reports.
+                    self.cancel_fork_followup();
                     self.busy = false;
                     self.retrying = false;
                     self.retry_detail = None;
@@ -462,11 +481,7 @@ impl OrbitApp {
         let Some(usage) = self.transcript.last_message_usage() else {
             return;
         };
-        let window = self
-            .context
-            .as_ref()
-            .map(|c| c.context_window)
-            .unwrap_or(0);
+        let window = self.context.as_ref().map(|c| c.context_window).unwrap_or(0);
         let cache_pct = usage
             .cache_read_percent()
             .map(|p| format!("{p:.1}%"))
@@ -631,11 +646,11 @@ impl OrbitApp {
                         .and_then(Value::as_str)
                         .map(PathBuf::from);
                     match command.as_str() {
-                        "new_session" | "clone" => {
-                            // A clone inherits the source transcript in the
-                            // active view, which clears it on the reply; the
+                        "new_session" | "clone" | "fork" => {
+                            // A clone or fork inherits the source transcript in
+                            // the active view, which clears it on the reply; the
                             // parked one never saw that, so clear it here.
-                            if command == "clone" {
+                            if command == "clone" || command == "fork" {
                                 parked.transcript = Transcript::new();
                                 changed = true;
                             }
@@ -715,6 +730,24 @@ impl OrbitApp {
         // responses merge them and must not surface a stale-cursor error as a
         // user-facing banner.
         if command == "get_entries" {
+            // A footer fork reads the whole tree to find the cut. That reply
+            // must not move the quota cursor or clear the poll's in-flight flag.
+            // A fork cancelled before this reply is the same full-tree dump.
+            if self.take_ignored_fork_entries(id) {
+                return;
+            }
+            if self.fork_entries_pending(id) {
+                if success {
+                    if let Some(data) = data {
+                        self.on_fork_entries(id, data, cx);
+                    } else {
+                        self.reject_fork_point(command, id);
+                    }
+                } else {
+                    self.reject_fork_point(command, id);
+                }
+                return;
+            }
             self.on_entries_response(success, data, error, cx);
             return;
         }
@@ -722,6 +755,7 @@ impl OrbitApp {
         // `error` string. Surface it, unwind command-specific optimistic
         // state, and stop — success paths below assume `data` is valid.
         if !success {
+            self.abandon_fork_command(command, id);
             self.on_command_failure(command, error, cx);
             match command {
                 "compact" => {
@@ -771,9 +805,16 @@ impl OrbitApp {
             | "set_auto_compaction"
             | "set_auto_retry"
             | "abort_retry"
-            | "set_session_name"
             | "steer"
             | "follow_up" => {
+                return;
+            }
+            // The rename has no payload. A footer fork keeps its title locked
+            // until this answer, then refreshes the sidebar from the file.
+            "set_session_name" => {
+                if self.complete_fork_rename(id, cx) {
+                    *refresh_sessions = true;
+                }
                 return;
             }
             // A prompt pi hands to an *extension command* never starts a run:
@@ -820,35 +861,45 @@ impl OrbitApp {
             }
             // `clone` duplicates the session and moves the process onto the
             // copy. Adopt the new file/id when pi reports them, then reload.
+            // A footer fork of the last turn uses the same command and then
+            // renames; a cancelled fork leaves the open session alone.
             "clone" => {
-                self.transcript.clear();
-                self.current_title = None;
-                self.reset_session_name(cx);
-                self.current_session_path = None;
-                self.added = 0;
-                self.removed = 0;
-                self.context = None;
-                self.session_usage = None;
-                self.reset_turns();
-                self.reset_queue();
-                self.session_id = None;
-                // A clone mirrors its source session; it is not put on the
-                // default model.
-                self.default_model_armed = false;
-                if let Some(data) = data.as_ref() {
-                    if let Some(file) = data.get("sessionFile").and_then(Value::as_str) {
-                        self.adopt_session_file(PathBuf::from(file));
-                    }
-                    if let Some(id) = data.get("sessionId").and_then(Value::as_str) {
-                        self.session_id = Some(id.to_string());
-                        self.reset_quota_entries();
+                let footer = self.footer_fork_switching(id);
+                if footer && response_cancelled(data) {
+                    self.fork_pending = None;
+                    self.toast_info(tr!("transcript.fork_cancelled"));
+                    return;
+                }
+                if !footer {
+                    // A palette clone is a different session. Drop a held
+                    // fork title so it cannot stick to this copy. An in-flight
+                    // footer fork (still resolving its cut) keeps its id.
+                    if matches!(self.fork_pending, Some(ForkPending::Holding { .. })) {
+                        self.fork_pending = None;
                     }
                 }
-                self.sync_review_context(cx);
-                *refresh_sessions = true;
-                self.send(CommandBody::GetMessages, "get_messages");
-                self.send(CommandBody::GetState, "get_state");
-                self.refresh_catalogs();
+                self.adopt_branched_session(data, refresh_sessions, cx);
+                if footer {
+                    self.begin_fork_rename(cx);
+                }
+                return;
+            }
+            // `fork` cuts before a user message and switches onto the new
+            // file, same as clone. The footer sends it for a reply that is
+            // not the last turn.
+            "fork" => {
+                if response_cancelled(data) {
+                    if self.footer_fork_switching(id) {
+                        self.fork_pending = None;
+                        self.toast_info(tr!("transcript.fork_cancelled"));
+                    }
+                    return;
+                }
+                let footer = self.footer_fork_switching(id);
+                self.adopt_branched_session(data, refresh_sessions, cx);
+                if footer {
+                    self.begin_fork_rename(cx);
+                }
                 return;
             }
             _ => {}
@@ -898,18 +949,24 @@ impl OrbitApp {
                 self.is_compacting = state.is_compacting;
                 self.follow_up_mode = state.follow_up_mode;
                 self.auto_compaction = state.auto_compaction_enabled;
-                match &state.session_name {
-                    Some(name) if self.session_name.as_deref() != Some(name.as_str()) => {
-                        self.session_name = Some(name.clone());
-                        let name = name.clone();
-                        self.session_name_input
-                            .update(cx, |input, cx| input.set_text(name, cx));
+                // A footer fork has already shown `(N) title`. This reply
+                // may be the `get_state` queued before `set_session_name`,
+                // still carrying the copied name. Leave the fork title
+                // alone until that rename answers.
+                if !self.fork_hold_blocks() {
+                    match &state.session_name {
+                        Some(name) if self.session_name.as_deref() != Some(name.as_str()) => {
+                            self.session_name = Some(name.clone());
+                            let name = name.clone();
+                            self.session_name_input
+                                .update(cx, |input, cx| input.set_text(name, cx));
+                        }
+                        None if self.session_name.is_some() => {
+                            self.session_name = None;
+                            self.seed_session_name_input(cx);
+                        }
+                        _ => {}
                     }
-                    None if self.session_name.is_some() => {
-                        self.session_name = None;
-                        self.seed_session_name_input(cx);
-                    }
-                    _ => {}
                 }
                 self.sync_model_selector(cx);
                 self.refresh_context_stats();
@@ -1040,6 +1097,7 @@ impl OrbitApp {
                 }
             }
             "new_session" => {
+                self.cancel_fork_followup();
                 self.transcript.clear();
                 self.current_title = None;
                 self.reset_session_name(cx);
@@ -1329,6 +1387,43 @@ impl OrbitApp {
         if prefs.sound {
             notifications::play_sound();
         }
+    }
+
+    /// pi moved onto a forked or cloned session. Clear the open transcript and
+    /// reload it from the new file. The caller renames a footer fork after this.
+    pub(super) fn adopt_branched_session(
+        &mut self,
+        data: Option<&serde_json::Value>,
+        refresh_sessions: &mut bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.transcript.clear();
+        self.current_title = None;
+        self.reset_session_name(cx);
+        self.current_session_path = None;
+        self.added = 0;
+        self.removed = 0;
+        self.context = None;
+        self.session_usage = None;
+        self.reset_turns();
+        self.reset_queue();
+        self.session_id = None;
+        // A branch mirrors its source session; it is not put on the default model.
+        self.default_model_armed = false;
+        if let Some(data) = data {
+            if let Some(file) = data.get("sessionFile").and_then(Value::as_str) {
+                self.adopt_session_file(PathBuf::from(file));
+            }
+            if let Some(id) = data.get("sessionId").and_then(Value::as_str) {
+                self.session_id = Some(id.to_string());
+                self.reset_quota_entries();
+            }
+        }
+        self.sync_review_context(cx);
+        *refresh_sessions = true;
+        self.send(CommandBody::GetMessages, "get_messages");
+        self.send(CommandBody::GetState, "get_state");
+        self.refresh_catalogs();
     }
 
     /// Re-point the workspace watcher when the active workspace moves.

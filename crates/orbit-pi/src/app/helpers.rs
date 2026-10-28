@@ -1203,6 +1203,200 @@ pub(crate) fn session_display_title(
         .unwrap_or_else(|| tr!("settings.new_task"))
 }
 
+/// One leading `(N) ` peeled off. `(2) fix login` is `fix login`. A title
+/// that is not already a fork keeps its text, so the first fork is `(1)`.
+pub(crate) fn fork_title_base(title: &str) -> &str {
+    let trimmed = title.trim();
+    split_fork_prefix(trimmed)
+        .map(|(_, after)| after)
+        .unwrap_or(trimmed)
+}
+
+/// `(digits, rest)` when `title` starts with one `(digits) ` prefix.
+fn split_fork_prefix(title: &str) -> Option<(&str, &str)> {
+    let rest = title.trim().strip_prefix('(')?;
+    let (digits, after) = rest.split_once(") ")?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) || after.is_empty() {
+        return None;
+    }
+    Some((digits, after))
+}
+
+/// `(N) {base}` for a forked session. `N` is one past the highest sibling
+/// that already wears that base; gaps are left alone. `source` contributes
+/// its own number when it is already `(k) base`, even if that title is not
+/// in `existing` yet.
+pub(crate) fn fork_session_title<'a>(
+    source: &str,
+    existing: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let base = fork_title_base(source);
+    let mut max_n = fork_title_number(source, base).unwrap_or(0);
+    for title in existing {
+        if let Some(n) = fork_title_number(title, base) {
+            max_n = max_n.max(n);
+        }
+    }
+    format!("({}) {base}", max_n.saturating_add(1))
+}
+
+/// A footer fork has sent `set_session_name` and is waiting for that
+/// command's own response.
+///
+/// pi starts each RPC line without waiting for the previous one. The
+/// `get_state` queued first can therefore answer *after*
+/// `session_info_changed` and still carry the name copied from the source.
+/// Applying that report puts the old title back. Ignore every report until
+/// the rename response itself arrives.
+pub(crate) fn fork_reported_name_ignored(rename_in_flight: bool) -> bool {
+    rename_in_flight
+}
+
+/// `Some(k)` when `title` is exactly `(k) {base}`.
+fn fork_title_number(title: &str, base: &str) -> Option<u32> {
+    let (digits, after) = split_fork_prefix(title)?;
+    if after != base {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+/// Index of the next user message after `assistant_ix`, counted only among
+/// user rows. `None` when the reply is the last turn.
+pub(crate) fn next_user_ordinal(is_user: &[bool], assistant_ix: usize) -> Option<usize> {
+    let mut ordinal = 0usize;
+    for (ix, user) in is_user.iter().copied().enumerate() {
+        if !user {
+            continue;
+        }
+        if ix > assistant_ix {
+            return Some(ordinal);
+        }
+        ordinal += 1;
+    }
+    None
+}
+
+/// The fork `entryId` for `user_ordinal` when pi's list has exactly
+/// `user_count` entries. A different length is a miss — the rows and the
+/// entry list no longer describe the same conversation.
+pub(crate) fn fork_entry_id(
+    user_ordinal: usize,
+    user_count: usize,
+    entry_ids: &[impl AsRef<str>],
+) -> Option<String> {
+    if entry_ids.len() != user_count {
+        return None;
+    }
+    entry_ids
+        .get(user_ordinal)
+        .map(|id| id.as_ref().to_string())
+}
+
+/// User-message ids from a `get_entries` payload.
+///
+/// pi's reply is `{entries, leafId}`. `leafId` is the active branch, and it
+/// is JSON `null` when the session has no entries. Without that id the walk
+/// has no path, so this is `None` instead of an empty list a caller could
+/// mistake for "no user messages".
+pub(crate) fn context_user_ids_from_entries(data: &serde_json::Value) -> Option<Vec<String>> {
+    let leaf_id = data
+        .get("leafId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|id| !id.is_empty())?;
+    let entries = data.get("entries").and_then(serde_json::Value::as_array)?;
+    Some(context_user_entry_ids(entries, leaf_id))
+}
+
+/// User-message entry ids on the branch the transcript is showing.
+///
+/// pi's `get_fork_messages` lists every user message in the file, including
+/// ones compaction summarized away and ones on abandoned branches. The
+/// screen follows the active leaf and, after compaction, keeps the summary
+/// plus the entries from `firstKeptEntryId` onward. Fork points have to
+/// come from that same list, or a click on a visible reply cannot be lined
+/// up with an `entryId`.
+pub(crate) fn context_user_entry_ids(entries: &[serde_json::Value], leaf_id: &str) -> Vec<String> {
+    struct Node<'a> {
+        id: &'a str,
+        parent_id: Option<&'a str>,
+        role: Option<&'a str>,
+        compaction: bool,
+        first_kept: Option<&'a str>,
+    }
+
+    let nodes: Vec<Node<'_>> = entries
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(serde_json::Value::as_str)?;
+            let parent_id = entry
+                .get("parentId")
+                .and_then(serde_json::Value::as_str)
+                .filter(|parent| !parent.is_empty());
+            let kind = entry.get("type").and_then(serde_json::Value::as_str);
+            Some(Node {
+                id,
+                parent_id,
+                role: entry
+                    .pointer("/message/role")
+                    .and_then(serde_json::Value::as_str),
+                compaction: kind == Some("compaction"),
+                first_kept: entry
+                    .get("firstKeptEntryId")
+                    .and_then(serde_json::Value::as_str),
+            })
+        })
+        .collect();
+    let mut index = std::collections::HashMap::<&str, usize>::new();
+    for (ix, node) in nodes.iter().enumerate() {
+        index.insert(node.id, ix);
+    }
+
+    let mut path = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut current = leaf_id;
+    while seen.insert(current) {
+        let Some(&ix) = index.get(current) else {
+            break;
+        };
+        path.push(ix);
+        let Some(parent) = nodes[ix].parent_id else {
+            break;
+        };
+        if parent == current {
+            break;
+        }
+        current = parent;
+    }
+    path.reverse();
+
+    let compaction_at = path.iter().rposition(|&ix| nodes[ix].compaction);
+    let context: Vec<usize> = match compaction_at {
+        None => path,
+        Some(compaction_at) => {
+            let mut context = vec![path[compaction_at]];
+            let first_kept = nodes[path[compaction_at]].first_kept;
+            let mut found_kept = false;
+            for &ix in &path[..compaction_at] {
+                if first_kept.is_some_and(|id| nodes[ix].id == id) {
+                    found_kept = true;
+                }
+                if found_kept && nodes[ix].role != Some("system") {
+                    context.push(ix);
+                }
+            }
+            context.extend_from_slice(&path[compaction_at + 1..]);
+            context
+        }
+    };
+
+    context
+        .into_iter()
+        .filter(|ix| nodes[*ix].role == Some("user"))
+        .map(|ix| nodes[ix].id.to_string())
+        .collect()
+}
+
 /// "42s" / "3m 12s" / "2h 5m" / "4d 3h" for the Runtime uptime readout.
 pub(crate) fn format_uptime(elapsed: Duration) -> String {
     let seconds = elapsed.as_secs();
@@ -1306,5 +1500,101 @@ mod tests {
         assert_eq!(SegmentPosition::at(0, 3), First);
         assert_eq!(SegmentPosition::at(1, 3), Middle);
         assert_eq!(SegmentPosition::at(2, 3), Last);
+    }
+
+    #[test]
+    fn fork_title_peels_one_numeric_prefix() {
+        assert_eq!(fork_title_base("fix login"), "fix login");
+        assert_eq!(fork_title_base("  (2) fix login  "), "fix login");
+        assert_eq!(fork_title_base("(1) (2) fix login"), "(2) fix login");
+        assert_eq!(fork_title_base("(a) fix login"), "(a) fix login");
+        assert_eq!(fork_title_base("(2)fix login"), "(2)fix login");
+    }
+
+    #[test]
+    fn fork_rename_ignores_reports_until_its_response() {
+        assert!(fork_reported_name_ignored(true));
+        assert!(!fork_reported_name_ignored(false));
+    }
+
+    #[test]
+    fn fork_title_numbers_siblings_and_skips_gaps() {
+        let existing = ["fix login", "(1) fix login", "(3) fix login", "(1) other"];
+        assert_eq!(fork_session_title("fix login", existing), "(4) fix login");
+        assert_eq!(
+            fork_session_title("(2) fix login", existing),
+            "(4) fix login"
+        );
+        assert_eq!(fork_session_title("other", existing), "(2) other");
+        assert_eq!(fork_session_title("fresh", existing), "(1) fresh");
+        assert_eq!(
+            fork_session_title("(2) fix login", std::iter::empty()),
+            "(3) fix login"
+        );
+    }
+
+    #[test]
+    fn next_user_ordinal_is_the_following_prompt() {
+        // assistant, user, assistant, user
+        let flags = [false, true, false, true];
+        assert_eq!(next_user_ordinal(&flags, 0), Some(0));
+        assert_eq!(next_user_ordinal(&flags, 2), Some(1));
+        assert_eq!(next_user_ordinal(&flags, 3), None);
+    }
+
+    #[test]
+    fn context_user_entry_ids_follow_the_compacted_branch() {
+        let entries = serde_json::json!([
+            {"type":"message","id":"u1","parentId":null,"message":{"role":"user"}},
+            {"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant"}},
+            {"type":"message","id":"u2","parentId":"a1","message":{"role":"user"}},
+            {"type":"message","id":"a2","parentId":"u2","message":{"role":"assistant"}},
+            {"type":"message","id":"sys","parentId":"a2","message":{"role":"system"}},
+            {
+                "type":"compaction","id":"c","parentId":"sys",
+                "firstKeptEntryId":"u2","summary":"earlier"
+            },
+            {"type":"message","id":"u3","parentId":"c","message":{"role":"user"}},
+            {"type":"message","id":"a3","parentId":"u3","message":{"role":"assistant"}},
+            {"type":"message","id":"off","parentId":"a1","message":{"role":"user"}}
+        ]);
+        let entries = entries.as_array().unwrap();
+        // Summarized `u1` and the abandoned `off` branch are not on screen.
+        // `u2` is the first kept prompt, then `u3` after the summary.
+        assert_eq!(
+            context_user_entry_ids(entries, "a3"),
+            vec!["u2".to_string(), "u3".to_string()]
+        );
+        assert_eq!(
+            fork_entry_id(1, 2, &context_user_entry_ids(entries, "a3")).as_deref(),
+            Some("u3")
+        );
+    }
+
+    #[test]
+    fn context_user_ids_from_entries_need_the_active_leaf() {
+        let entries = serde_json::json!([
+            {"type":"message","id":"u2","parentId":null,"message":{"role":"user"}},
+            {"type":"message","id":"a3","parentId":"u2","message":{"role":"assistant"}}
+        ]);
+        let with_leaf = serde_json::json!({"entries": entries, "leafId": "a3"});
+        assert_eq!(
+            context_user_ids_from_entries(&with_leaf),
+            Some(vec!["u2".to_string()])
+        );
+        let mut missing = with_leaf.clone();
+        missing.as_object_mut().unwrap().remove("leafId");
+        assert_eq!(context_user_ids_from_entries(&missing), None);
+        let mut null_leaf = with_leaf;
+        null_leaf["leafId"] = serde_json::Value::Null;
+        assert_eq!(context_user_ids_from_entries(&null_leaf), None);
+    }
+
+    #[test]
+    fn fork_entry_id_requires_the_same_user_count() {
+        let ids = ["a", "b"];
+        assert_eq!(fork_entry_id(1, 2, &ids).as_deref(), Some("b"));
+        assert_eq!(fork_entry_id(0, 3, &ids), None);
+        assert_eq!(fork_entry_id(2, 2, &ids), None);
     }
 }

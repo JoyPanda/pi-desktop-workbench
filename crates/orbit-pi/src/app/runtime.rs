@@ -580,6 +580,7 @@ impl OrbitApp {
         if self.client.is_none() {
             return;
         }
+        self.cancel_fork_followup();
         self.drop_client();
         self.busy = false;
         // The prompt this process was running has no answer coming: close the
@@ -592,6 +593,7 @@ impl OrbitApp {
     /// Stop then start the pi process (Restart button, and the automatic
     /// respawn after an exit).
     pub(super) fn runtime_restart(&mut self, cx: &mut Context<Self>) {
+        self.cancel_fork_followup();
         self.drop_client();
         self.runtime_start(cx);
         self.reattach_current_session();
@@ -708,6 +710,7 @@ impl OrbitApp {
     pub(super) fn adopt_session_file(&mut self, file: PathBuf) {
         if self.current_session_path.is_none() {
             self.current_session_path = Some(file);
+            self.stamp_held_fork_title();
         }
     }
 

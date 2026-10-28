@@ -208,6 +208,31 @@ struct BranchStatus {
     ahead_behind: Option<(usize, usize)>,
 }
 
+/// A footer fork that has not finished naming the new session.
+///
+/// `AwaitingPoint` is the `get_entries` round trip that locates the cut.
+/// `Switching` is the `fork` or tail `clone` that moves pi onto the new file.
+/// `Holding` is the
+/// title sent with `set_session_name`. It stays until that command's own
+/// response: pi runs RPC lines concurrently, so an earlier `get_state` can
+/// answer after the rename echo and still carry the copied name.
+enum ForkPending {
+    AwaitingPoint {
+        command_id: String,
+        user_ordinal: usize,
+        user_count: usize,
+        title: String,
+    },
+    Switching {
+        command_id: String,
+        title: String,
+    },
+    Holding {
+        command_id: String,
+        title: String,
+    },
+}
+
 pub struct OrbitApp {
     client: Option<PiClient>,
     /// Live state of the active pi process, surfaced in Settings → Runtime.
@@ -330,6 +355,11 @@ pub struct OrbitApp {
     temp_files: crate::temp_files::TempFiles,
     /// Display name pi reports for the session (`get_state.sessionName`).
     session_name: Option<String>,
+    /// Footer fork in flight, or the title it is waiting for pi to echo.
+    fork_pending: Option<ForkPending>,
+    /// `get_entries` ids from footer forks cancelled before the reply. Those
+    /// dumps are the whole tree; the quota poll must not consume them.
+    fork_ignored_entries: Vec<String>,
     /// pi is compacting right now (`get_state` / `compaction_*`).
     is_compacting: bool,
     /// pi is inside an automatic-retry delay (`auto_retry_*`). pi doesn't
@@ -1792,6 +1822,8 @@ impl OrbitApp {
             retention_ran: false,
             temp_files: crate::temp_files::TempFiles::default(),
             session_name: None,
+            fork_pending: None,
+            fork_ignored_entries: Vec::new(),
             is_compacting: false,
             retrying: false,
             retry_detail: None,

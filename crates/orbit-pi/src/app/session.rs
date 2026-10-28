@@ -721,6 +721,7 @@ impl OrbitApp {
             self.begin_new_task(cwd, window, cx);
             return;
         }
+        self.cancel_fork_followup();
         self.close_surfaces_for_new_task(cx);
         self.send(CommandBody::NewSession, "new_session");
         self.input.read(cx).focus(window);
@@ -731,7 +732,276 @@ impl OrbitApp {
     /// switches the process onto it; the `clone` response handler reloads the
     /// transcript and re-keys the session.
     pub(super) fn clone_session(&mut self, cx: &mut Context<Self>) {
+        // The footer fork has already asked pi to switch. Sending clone on
+        // top of that adopts whichever reply lands last.
+        if self.fork_in_flight() {
+            return;
+        }
+        // The held `(N)` title belongs to the fork, not to this full copy.
+        if matches!(self.fork_pending, Some(ForkPending::Holding { .. })) {
+            self.fork_pending = None;
+        }
         self.send(CommandBody::CloneSession, "clone");
+        cx.notify();
+    }
+
+    /// Drop a footer fork's cut, switch, or title hold.
+    ///
+    /// The hold ignores every name report until `set_session_name` answers.
+    /// Leaving the session or losing its process has to release that, or the
+    /// session now on screen never accepts its own name.
+    pub(super) fn cancel_fork_followup(&mut self) {
+        if let Some(ForkPending::AwaitingPoint { command_id, .. }) = self.fork_pending.take() {
+            self.fork_ignored_entries.push(command_id);
+        }
+    }
+
+    /// `true` once, when `id` is a fork `get_entries` abandoned before it
+    /// answered. The caller drops the reply.
+    pub(super) fn take_ignored_fork_entries(&mut self, id: &str) -> bool {
+        let Some(index) = self
+            .fork_ignored_entries
+            .iter()
+            .position(|pending| pending == id)
+        else {
+            return false;
+        };
+        self.fork_ignored_entries.swap_remove(index);
+        true
+    }
+
+    /// Fork the open session through assistant message `ix`. A later user
+    /// prompt is the cut (`fork` drops that prompt and everything after it).
+    /// The last turn has no later prompt, so it is a full `clone`. The new
+    /// session is named `(N) {base}` once pi has switched onto it.
+    pub(super) fn fork_from_message(&mut self, ix: usize, cx: &mut Context<Self>) {
+        if self.fork_in_flight() {
+            return;
+        }
+        if self.busy {
+            self.toast_warning(tr!("transcript.fork_while_busy"));
+            return;
+        }
+        if !self.transcript.is_assistant_message(ix) {
+            return;
+        }
+        let flags = self.transcript.user_flags();
+        let title = self.pending_fork_title();
+        if let Some(user_ordinal) = next_user_ordinal(&flags, ix) {
+            // The whole file still holds prompts compaction summarized away.
+            // `get_entries` plus the leaf is enough to walk the branch the
+            // transcript is actually showing.
+            let Some(command_id) =
+                self.send_tracked(CommandBody::GetEntries { since: None }, "get_entries")
+            else {
+                return;
+            };
+            self.fork_pending = Some(ForkPending::AwaitingPoint {
+                command_id,
+                user_ordinal,
+                user_count: flags.iter().filter(|flag| **flag).count(),
+                title,
+            });
+        } else {
+            let Some(command_id) = self.send_tracked(CommandBody::CloneSession, "clone") else {
+                return;
+            };
+            self.fork_pending = Some(ForkPending::Switching { command_id, title });
+        }
+        cx.notify();
+    }
+
+    /// A footer fork is waiting on pi. A second click must not start another.
+    fn fork_in_flight(&self) -> bool {
+        matches!(
+            self.fork_pending,
+            Some(ForkPending::AwaitingPoint { .. } | ForkPending::Switching { .. })
+        )
+    }
+
+    /// `(N) {base}` from the open session's title and the siblings already
+    /// in this workspace. The source title is included so a fork of `(2) …`
+    /// still advances even when the sidebar has not listed it yet.
+    fn pending_fork_title(&self) -> String {
+        let source =
+            session_display_title(self.session_name.as_deref(), self.current_title.as_deref());
+        let cwd = self.current_workspace.as_ref();
+        let listed = self.sessions.iter().filter_map(|session| {
+            let same_workspace = match cwd {
+                Some(cwd) => &session.cwd == cwd,
+                None => true,
+            };
+            same_workspace.then_some(session.title.as_str())
+        });
+        fork_session_title(&source, listed)
+    }
+
+    /// `true` when `id` is the footer fork's `fork` or tail `clone`.
+    pub(super) fn footer_fork_switching(&self, id: &str) -> bool {
+        matches!(
+            &self.fork_pending,
+            Some(ForkPending::Switching { command_id, .. }) if command_id == id
+        )
+    }
+
+    /// Apply the fork title now that pi is on the new session, and hold it
+    /// until `set_session_name` itself answers. An earlier `get_state` can
+    /// still report the name copied from the source after that echo.
+    pub(super) fn begin_fork_rename(&mut self, cx: &mut Context<Self>) {
+        let title = match self.fork_pending.take() {
+            Some(ForkPending::Switching { title, .. }) => title,
+            other => {
+                self.fork_pending = other;
+                return;
+            }
+        };
+        self.apply_fork_title(&title, cx);
+        let Some(command_id) = self.send_tracked(
+            CommandBody::SetSessionName {
+                name: title.clone(),
+            },
+            "set_session_name",
+        ) else {
+            return;
+        };
+        self.fork_pending = Some(ForkPending::Holding { command_id, title });
+    }
+
+    /// Drop a footer-fork command that failed, matched by the id we sent.
+    pub(super) fn abandon_fork_command(&mut self, command: &str, id: &str) {
+        let matches = match &self.fork_pending {
+            Some(ForkPending::AwaitingPoint { command_id, .. }) => {
+                command == "get_entries" && command_id == id
+            }
+            Some(ForkPending::Switching { command_id, .. }) => {
+                matches!(command, "fork" | "clone") && command_id == id
+            }
+            Some(ForkPending::Holding { command_id, .. }) => {
+                command == "set_session_name" && command_id == id
+            }
+            None => false,
+        };
+        if matches {
+            self.fork_pending = None;
+        }
+    }
+
+    /// The fork rename has not been answered yet. Reports from pi stay
+    /// ignored for the whole wait, including one that already matches.
+    pub(super) fn fork_hold_blocks(&self) -> bool {
+        fork_reported_name_ignored(matches!(
+            self.fork_pending,
+            Some(ForkPending::Holding { .. })
+        ))
+    }
+
+    /// `set_session_name` for this fork answered. Keep the title on the
+    /// header and the open sidebar row, then let later reports through.
+    pub(super) fn complete_fork_rename(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        let title = match self.fork_pending.take() {
+            Some(ForkPending::Holding { command_id, title }) if command_id == id => title,
+            other => {
+                self.fork_pending = other;
+                return false;
+            }
+        };
+        self.apply_fork_title(&title, cx);
+        true
+    }
+
+    /// Show `title` on the header and, once the new file is known, on its
+    /// sidebar row. The disk scan can still be the name copied from the source.
+    fn apply_fork_title(&mut self, title: &str, cx: &mut Context<Self>) {
+        self.session_name = Some(title.to_string());
+        self.current_title = Some(title.to_string());
+        self.seed_session_name_input(cx);
+        let Some(path) = self.current_session_path.clone() else {
+            return;
+        };
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.path == path)
+        {
+            session.title = title.to_string();
+        }
+    }
+
+    /// This `get_entries` reply is the one a footer fork is waiting on.
+    pub(super) fn fork_entries_pending(&self, id: &str) -> bool {
+        matches!(
+            &self.fork_pending,
+            Some(ForkPending::AwaitingPoint { command_id, .. }) if command_id == id
+        )
+    }
+
+    /// The cut could not be read. Drop the pending command and say so.
+    pub(super) fn reject_fork_point(&mut self, command: &str, id: &str) {
+        self.abandon_fork_command(command, id);
+        self.toast_error(tr!("transcript.fork_no_point"));
+    }
+
+    /// Once `get_state` names the new file, write the held title onto that
+    /// sidebar row. The fork reply often omits `sessionFile`, so the row
+    /// does not exist yet when the rename is first applied.
+    pub(super) fn stamp_held_fork_title(&mut self) {
+        let Some(ForkPending::Holding { title, .. }) = &self.fork_pending else {
+            return;
+        };
+        let title = title.clone();
+        let Some(path) = self.current_session_path.clone() else {
+            return;
+        };
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.path == path)
+        {
+            session.title = title;
+        }
+    }
+
+    /// `get_entries` came back for a footer fork. Send `fork` at the next
+    /// visible user message, or stop when that list does not match the screen.
+    pub(super) fn on_fork_entries(
+        &mut self,
+        id: &str,
+        data: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let (user_ordinal, user_count, title) = match self.fork_pending.take() {
+            Some(ForkPending::AwaitingPoint {
+                command_id,
+                user_ordinal,
+                user_count,
+                title,
+            }) if command_id == id => (user_ordinal, user_count, title),
+            other => {
+                self.fork_pending = other;
+                return;
+            }
+        };
+        // A prompt can start while the entry list is in flight. `fork`
+        // would abort that run.
+        if self.is_running() {
+            self.toast_warning(tr!("transcript.fork_while_busy"));
+            cx.notify();
+            return;
+        }
+        let Some(ids) = context_user_ids_from_entries(data) else {
+            self.toast_error(tr!("transcript.fork_no_point"));
+            cx.notify();
+            return;
+        };
+        let Some(entry_id) = fork_entry_id(user_ordinal, user_count, &ids) else {
+            self.toast_error(tr!("transcript.fork_no_point"));
+            cx.notify();
+            return;
+        };
+        let Some(command_id) = self.send_tracked(CommandBody::Fork { entry_id }, "fork") else {
+            return;
+        };
+        self.fork_pending = Some(ForkPending::Switching { command_id, title });
         cx.notify();
     }
 
@@ -746,6 +1016,7 @@ impl OrbitApp {
         // in flight is parked instead, so `new_session` never aborts it; a
         // dead process (or a different workspace) always needs its own.
         if self.current_workspace.as_ref() == Some(&cwd) && self.can_reuse_session() {
+            self.cancel_fork_followup();
             self.close_surfaces_for_new_task(cx);
             self.send(CommandBody::NewSession, "new_session");
             self.input.read(cx).focus(window);
@@ -765,6 +1036,7 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_fork_followup();
         // Leaving this session: cancel any open blocking dialog first, so a
         // parked run never waits on a modal tied to the previous session.
         self.cancel_open_dialog(cx);
@@ -898,6 +1170,7 @@ impl OrbitApp {
         if self.current_session_path.as_ref() == Some(&session.path) {
             return;
         }
+        self.cancel_fork_followup();
         // A blocking dialog belongs to the session being left; cancel it so
         // the now-parked run can settle instead of waiting on an unseen modal.
         self.cancel_open_dialog(cx);
@@ -2783,6 +3056,15 @@ impl OrbitApp {
             // Opening Review replaces the Git page, which shares the window.
             let _ = app.update(cx, |app, cx| app.close_git_for_review(cx));
             pane.update(cx, |pane, cx| pane.show_review_turn(latest, cx));
+        })
+    }
+
+    /// Hands an assistant footer a way to fork the open session through that
+    /// reply. The footer does not own the pi process.
+    pub(super) fn fork_opener(&self, cx: &Context<Self>) -> crate::transcript_view::ForkOpener {
+        let this = cx.weak_entity();
+        Rc::new(move |ix, _window, cx| {
+            let _ = this.update(cx, |app, cx| app.fork_from_message(ix, cx));
         })
     }
 

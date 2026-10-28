@@ -182,7 +182,7 @@ issue before starting.
 | Session retention | Workbench | Keep pi's session store from growing without bound. | Shipped — Settings → Privacy archives or deletes idle sessions on a schedule, alongside Orbit and pi scratch-file cleanup | — |
 | Parallel sessions | Sessions | Run multiple agents / sessions side by side. | Planned | — |
 | Explorer gaps | Explorer | Quick-open, sticky scroll, and directory folding in the file tree. | Planned — expand/collapse, filter, hidden toggle, and git badges ship today | — |
-| Conversation fork/rewind | Sessions | Branch and rewind a conversation (clone ships today). | Planned | — |
+| Conversation fork | Sessions | Branch a conversation at an assistant reply. | Shipped — the reply footer keeps history through that message and titles the copy `(N) original`; rewind is still open | — |
 | Scroll-perf measurement | Performance | On-device measurement of transcript scroll performance. | Planned | — |
 | Zed token migration | Design | Move the remaining surfaces (settings, pickers, command palette, modals, transcript chrome, sidebar rows) onto the Zed design tokens. | In progress — settings, usage, sidebar, transcript chrome, palette, pickers, modals, Explorer, Git panel, and terminal are on the tokens; the composer is the last major surface | — |
 
@@ -201,7 +201,8 @@ issue before starting.
 - [x] **Session retention** — archive or delete idle sessions on a schedule
 - [ ] **Parallel sessions** — multiple agents / sessions at once
 - [ ] **Explorer gaps** — quick-open, sticky scroll, directory folding
-- [ ] **Conversation fork/rewind** — branch and rewind a session
+- [x] **Conversation fork** — branch at an assistant reply; the copy is titled `(N) original`
+- [ ] **Conversation rewind** — rewind a session
 - [ ] **Scroll-perf measurement** — on-device transcript scroll benchmark
 
 ---
