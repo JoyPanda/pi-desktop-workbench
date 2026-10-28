@@ -36,7 +36,7 @@ use gpui::{
     App, ClipboardItem, Context, Corner, CursorStyle, DragMoveEvent, ElementId, Entity,
     ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla, Image, ImageSource, IntoElement,
     ListAlignment, ListState, MouseButton, MouseDownEvent, MouseUpEvent, ObjectFit,
-    PathPromptOptions, Pixels, Point, Render, Resource, ScrollStrategy, SharedString,
+    PathPromptOptions, Pixels, Point, Render, Resource, ScrollHandle, ScrollStrategy, SharedString,
     StatefulInteractiveElement, Subscription, TextAlign, Transformation, UniformListScrollHandle,
     Window,
 };
@@ -540,8 +540,13 @@ pub struct OrbitApp {
     /// Which archived sessions the sidebar lists. Persisted beside the
     /// project list.
     sidebar_archived_filter: SidebarArchivedFilter,
+    /// Which optional fields a session row draws. Persisted beside the
+    /// project list. The title is always shown.
+    sidebar_show: SidebarShow,
     /// The sidebar's Projects-header view menu is open.
     sidebar_sort_menu: bool,
+    /// The Show submenu of that view menu is open.
+    sidebar_show_menu: bool,
     /// Open row-actions menu on a workspace group header (which workspace's
     /// label + cwd). Mutually exclusive with `session_menu`.
     workspace_menu: Option<WorkspaceMenu>,
@@ -1866,7 +1871,9 @@ impl OrbitApp {
             workspace_sort: workspace_store.sort,
             sidebar_group_by: workspace_store.group_by,
             sidebar_archived_filter: workspace_store.archived_filter,
+            sidebar_show: workspace_store.show,
             sidebar_sort_menu: false,
+            sidebar_show_menu: false,
             workspace_menu: None,
             worktree_config,
             worktree_dir_input: worktree_dir_input.clone(),
@@ -2380,6 +2387,7 @@ impl OrbitApp {
             sort: self.workspace_sort,
             group_by: self.sidebar_group_by,
             archived_filter: self.sidebar_archived_filter,
+            show: self.sidebar_show,
         });
     }
 
@@ -2670,6 +2678,58 @@ impl SidebarArchivedFilter {
     }
 }
 
+/// Which optional fields a sidebar session row draws besides its title.
+/// Persisted as `show` in `workspaces.json`. A missing key keeps the
+/// default: the relative time on, the first-message summary off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SidebarShow {
+    /// Relative time of the last message, on the title line unless a second
+    /// line is already showing.
+    pub updated: bool,
+    /// The session's first message, one truncated line under the title.
+    pub summary: bool,
+}
+
+impl Default for SidebarShow {
+    fn default() -> Self {
+        Self {
+            updated: true,
+            summary: false,
+        }
+    }
+}
+
+impl SidebarShow {
+    /// Parse a persisted `show` array. Unknown keys are ignored. An empty
+    /// array means the user turned every optional field off.
+    pub(crate) fn from_keys<'a>(keys: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut show = Self {
+            updated: false,
+            summary: false,
+        };
+        for key in keys {
+            match key {
+                "updated" => show.updated = true,
+                "summary" => show.summary = true,
+                _ => {}
+            }
+        }
+        show
+    }
+
+    /// Keys written back to disk, in menu order.
+    pub(crate) fn keys(self) -> Vec<&'static str> {
+        let mut keys = Vec::new();
+        if self.updated {
+            keys.push("updated");
+        }
+        if self.summary {
+            keys.push("summary");
+        }
+        keys
+    }
+}
+
 /// `~/.orbit-pi/workspaces.json` — the folders Orbit lists in its sidebar,
 /// when each was added, and how the sidebar orders them. Orbit-owned: pi owns
 /// the session files, this only records which projects the user added.
@@ -2692,6 +2752,9 @@ struct WorkspaceStore {
     group_by: SidebarGroupBy,
     /// Which archived sessions the sidebar lists.
     archived_filter: SidebarArchivedFilter,
+    /// Which optional fields a session row draws. A missing key keeps the
+    /// default (relative time on, summary off).
+    show: SidebarShow,
 }
 
 /// Read the project list, tolerating the pre-timestamp format where
@@ -2738,6 +2801,13 @@ fn parse_workspace_store(value: &Value) -> WorkspaceStore {
             .get("archived_filter")
             .and_then(Value::as_str)
             .map(SidebarArchivedFilter::from_key)
+            .unwrap_or_default(),
+        // A missing key (a store written before the Show menu) keeps the
+        // default. An empty array is an explicit "nothing extra".
+        show: value
+            .get("show")
+            .and_then(Value::as_array)
+            .map(|keys| SidebarShow::from_keys(keys.iter().filter_map(Value::as_str)))
             .unwrap_or_default(),
         ..WorkspaceStore::default()
     };
@@ -2831,6 +2901,7 @@ fn persist_workspace_store(store: &WorkspaceStore) {
         "sort": store.sort.as_str(),
         "group_by": store.group_by.as_str(),
         "archived_filter": store.archived_filter.as_str(),
+        "show": store.show.keys(),
     });
     let _ = fs::write(path, payload.to_string());
 }

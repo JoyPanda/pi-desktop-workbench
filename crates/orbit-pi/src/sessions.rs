@@ -36,7 +36,8 @@ pub struct SessionInfo {
     /// pi's auto-title (`session_info.name`, truncated) when it named the
     /// session; otherwise the first user message. The sidebar's first line.
     pub title: String,
-    /// First user message preview — the sidebar's second line.
+    /// First user message. The sidebar draws it under the title only when
+    /// Show → Summary is on.
     pub first_message: String,
     /// Wall-clock time of the session's last *activity* — the newest
     /// `message` entry, not the file's mtime. Opening a session appends
@@ -863,7 +864,10 @@ mod tests {
         assert_eq!(second.modified, millis(1_700_000_002_000));
 
         // An unchanged file re-reads to the same result (a cache hit).
-        assert_eq!(read_session(&path).unwrap().modified, millis(1_700_000_002_000));
+        assert_eq!(
+            read_session(&path).unwrap().modified,
+            millis(1_700_000_002_000)
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

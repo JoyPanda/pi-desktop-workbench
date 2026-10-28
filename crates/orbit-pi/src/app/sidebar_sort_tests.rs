@@ -117,10 +117,10 @@ fn last_updated_sorts_an_empty_group_last() {
 }
 
 #[test]
-fn last_updated_keeps_the_open_sessions_group_first() {
-    // beta has the newest activity (a background run writing), but alpha
-    // holds the open session. Alpha must still lead, or the workspace the
-    // user is working in slides down on every watcher reload.
+fn last_updated_does_not_float_the_open_sessions_group() {
+    // beta has the newest activity. Alpha holds the open session, but
+    // selecting it must not pull alpha above beta — only a newer message
+    // moves a project.
     let sessions = vec![
         store_session("a1", "/work/alpha", 10),
         store_session("b1", "/work/beta", 30),
@@ -141,22 +141,22 @@ fn last_updated_keeps_the_open_sessions_group_first() {
         &active,
         &HashSet::new(),
     );
-    assert_eq!(group_labels(&rows), vec!["alpha", "beta"]);
+    assert_eq!(group_labels(&rows), vec!["beta", "alpha"]);
 }
 
 #[test]
-fn active_session_leads_its_group_over_a_newer_run() {
-    // Within one group the open session (oldest) must beat a running sibling
-    // with newer activity; otherwise the two swap as each appends a message.
+fn an_open_session_stays_behind_a_newer_sibling() {
+    // The store is newest-first. The open session is the oldest, and a
+    // sibling is mid-run. Selecting the old one must leave that order alone.
     let sessions = vec![
-        store_session("a1", "/work/alpha", 10),
         store_session("a2", "/work/alpha", 30),
         store_session("a3", "/work/alpha", 20),
+        store_session("a1", "/work/alpha", 10),
     ];
     let workspaces = workspace_paths(&["/work/alpha"]);
     let expanded: HashSet<String> = ["alpha"].iter().map(|s| s.to_string()).collect();
-    let running: HashSet<PathBuf> = [sessions[1].path.clone()].into_iter().collect();
-    let active = Some(sessions[0].path.clone());
+    let running: HashSet<PathBuf> = [sessions[0].path.clone()].into_iter().collect();
+    let active = Some(sessions[2].path.clone());
     let rows = build_sidebar_rows(
         &sessions,
         &workspaces,
@@ -177,7 +177,7 @@ fn active_session_leads_its_group_over_a_newer_run() {
             _ => None,
         })
         .collect();
-    // Open session first, then the live run, then the idle sibling.
+    // Newest message first, the order the store already established.
     assert_eq!(indices, vec![0, 1, 2]);
 }
 

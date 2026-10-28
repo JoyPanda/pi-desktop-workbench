@@ -205,6 +205,7 @@ impl Render for OrbitApp {
         let archived_paths: Rc<HashSet<PathBuf>> = Rc::new(archived_set);
         // Flat "one list" mode names each row's workspace instead of grouping.
         let show_workspace = self.sidebar_group_by == SidebarGroupBy::OneList;
+        let row_show = self.sidebar_show;
         // Parked (background) sessions mid-run — they keep their row under a
         // collapsed workspace header, like the open session, so a live task
         // is never hidden by a collapse. Also drives the running loader.
@@ -307,6 +308,7 @@ impl Render for OrbitApp {
                     &pinned,
                     &archived_paths,
                     show_workspace,
+                    row_show,
                     &live_paths,
                     &marks,
                     &workspace_icons,
@@ -649,6 +651,8 @@ impl Render for OrbitApp {
                                                 self.sidebar_group_by,
                                                 self.workspace_sort,
                                                 self.sidebar_archived_filter,
+                                                self.sidebar_show,
+                                                self.sidebar_show_menu,
                                                 self.sidebar_sort_menu,
                                                 cx.entity(),
                                                 theme,
@@ -696,6 +700,7 @@ impl Render for OrbitApp {
                                                                     &pinned,
                                                                     &archived_paths,
                                                                     show_workspace,
+                                                                    row_show,
                                                                     &live_paths,
                                                                     &marks,
                                                                     &workspace_icons,
@@ -1449,7 +1454,9 @@ impl OrbitApp {
                 .text_color(theme.code_text)
                 .flex()
                 .flex_col()
-                .gap(DynamicSpacing::Base02.px(&theme));
+                .gap(DynamicSpacing::Base02.px(&theme))
+                .max_h(px(160.))
+                .overflow_y_scroll();
             for line in &widget.lines {
                 let (text, runs) = ext_widgets::styled_line(line, &theme, &font);
                 card = card.child(StyledText::new(text).with_runs(runs));

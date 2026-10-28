@@ -128,43 +128,6 @@ pub(crate) fn sessions_with_placeholder(
     rows
 }
 
-/// Whether a session row's second line says anything its title does not.
-///
-/// pi titles a session from its first message, so on most rows the title *is*
-/// that message cut short and the preview is the same sentence carried on — a
-/// second line the eye reads and learns nothing from. The preview earns its
-/// place only when it diverges, which is the case this keeps: a session pi named
-/// itself ("Fix login bug") over the message it came from.
-///
-/// Compared on words rather than bytes, so the `…` a capped title ends with, its
-/// collapsed whitespace, or its trailing punctuation cannot make one sentence
-/// look like two.
-pub(crate) fn preview_adds_information(title: &str, preview: &str) -> bool {
-    let preview_words: Vec<&str> = preview.split_whitespace().collect();
-    if preview_words.is_empty() {
-        return false;
-    }
-    let title_words: Vec<&str> = title.split_whitespace().collect();
-    // A session with no title yet has nothing to repeat, so anything it has is
-    // news; only a real prefix means the preview is the title continued.
-    title_words.is_empty() || !continues_the_title(&title_words, &preview_words)
-}
-
-/// Whether `preview` picks up exactly where `title` left off. `cap_chars` cuts
-/// on the character, not the word, so the title's last word is often a fragment
-/// of the preview's — that fragment, and the `…` that marks it, belong to the cap
-/// rather than to the sentence.
-fn continues_the_title(title: &[&str], preview: &[&str]) -> bool {
-    let Some((last, head)) = title.split_last() else {
-        return false;
-    };
-    if preview.len() < title.len() || head.iter().zip(preview).any(|(a, b)| a != b) {
-        return false;
-    }
-    let last = last.trim_end_matches(['…', '.']);
-    last.is_empty() || preview[title.len() - 1].starts_with(last)
-}
-
 /// Build the grouped sidebar session list from Orbit's own project list. A
 /// workspace appears because the user added it, not because pi happens to
 /// have sessions there; sessions in unlisted folders are omitted entirely
@@ -192,15 +155,7 @@ pub(crate) fn build_sidebar_rows(
     running_paths: &HashSet<PathBuf>,
 ) -> Vec<SideRow> {
     let mut side_rows: Vec<SideRow> = Vec::new();
-    for (label, cwd, ixs) in sidebar_groups(
-        sessions,
-        workspaces,
-        sort,
-        added_at,
-        pinned,
-        active_path,
-        running_paths,
-    ) {
+    for (label, cwd, ixs) in sidebar_groups(sessions, workspaces, sort, added_at, pinned) {
         emit_workspace_group(
             &mut side_rows,
             sessions,
@@ -219,28 +174,19 @@ pub(crate) fn build_sidebar_rows(
     side_rows
 }
 
-/// Order rank for a session row: the open session leads (0), then pinned
-/// rows (1), then live background runs (2), then everything else (3), which
-/// keeps the store's newest-first order among equals (the sort is stable).
+/// Order rank for a session row: pinned rows lead (0), everything else
+/// follows (1). The sort is stable, so unpinned rows keep the store's
+/// newest-first order.
 ///
-/// The open session must *outrank* a background run, not merely share the top
-/// partition with it: `modified` moves on every `message` append, so two
-/// "leading" sessions still trade places on each watcher reload while both
-/// runs write. Ranking the open session first pins the row being read.
-fn session_lead_rank(
-    path: &Path,
-    pinned: &HashSet<PathBuf>,
-    active_path: &Option<PathBuf>,
-    running_paths: &HashSet<PathBuf>,
-) -> u8 {
-    if active_path.as_deref() == Some(path) {
+/// Selecting a session does not change its rank. A new message moves
+/// `modified`, and the next reload puts that session first among the
+/// unpinned rows. A live run stays where its last message puts it; the
+/// spinner and the collapsed-group reveal are separate from this rank.
+fn session_lead_rank(path: &Path, pinned: &HashSet<PathBuf>) -> u8 {
+    if pinned.contains(path) {
         0
-    } else if pinned.contains(path) {
-        1
-    } else if running_paths.contains(path) {
-        2
     } else {
-        3
+        1
     }
 }
 
@@ -256,8 +202,6 @@ fn sidebar_groups(
     sort: WorkspaceSort,
     added_at: &HashMap<PathBuf, SystemTime>,
     pinned: &HashSet<PathBuf>,
-    active_path: &Option<PathBuf>,
-    running_paths: &HashSet<PathBuf>,
 ) -> Vec<(String, PathBuf, Vec<usize>)> {
     let mut groups: Vec<(String, PathBuf, Vec<usize>)> = Vec::new();
     for ws in workspaces {
@@ -275,17 +219,14 @@ fn sidebar_groups(
     }
     // Order the groups for the active sort mode before any rows are laid out;
     // a group's own session order is independent (pinned-first, then recency).
-    sort_workspace_groups(&mut groups, sessions, sort, added_at, active_path);
-    // Leading sessions rise to the top of their project group by rank — the
-    // open one first, then pins, then live runs; recency order is preserved
-    // within each rank (the sort is stable). Doing this here rather than in
-    // `load_sessions` keeps an Orbit-owned preference out of the pi-store
-    // scan — and means a leading session can never be hidden by the
+    sort_workspace_groups(&mut groups, sessions, sort, added_at);
+    // Pinned sessions rise to the top of their project group; recency order
+    // is preserved within each rank (the sort is stable). Doing this here
+    // rather than in `load_sessions` keeps an Orbit-owned preference out of
+    // the pi-store scan — and means a pin can never be hidden by the
     // per-group truncation below.
     for (_, _, ixs) in groups.iter_mut() {
-        ixs.sort_by_key(|&ix| {
-            session_lead_rank(&sessions[ix].path, pinned, active_path, running_paths)
-        });
+        ixs.sort_by_key(|&ix| session_lead_rank(&sessions[ix].path, pinned));
     }
     groups
 }
@@ -363,22 +304,17 @@ fn emit_workspace_group(
 
 /// Build the flat sidebar list: every listed project's sessions in one
 /// ungrouped list, with no workspace headers, show-more, or collapse rows.
-/// Rows lead by rank — the open session, then pins, then live background
-/// runs — and the rest keep the store's newest-first order (the sort is
-/// stable). Used when the user turns workspace grouping off; the same
-/// `SideRow::Session` rows mean the render and keyboard paths are unchanged.
+/// Pinned rows lead; the rest keep the store's newest-first order (the sort
+/// is stable). Selecting a session does not move it. Used when the user
+/// turns workspace grouping off; the same `SideRow::Session` rows mean the
+/// render and keyboard paths are unchanged.
 pub(crate) fn build_flat_sidebar_rows(
     sessions: &[SessionInfo],
     pinned: &HashSet<PathBuf>,
-    active_path: &Option<PathBuf>,
-    running_paths: &HashSet<PathBuf>,
 ) -> Vec<SideRow> {
     let mut ixs: Vec<usize> = (0..sessions.len()).collect();
-    // Stable: sessions rise by rank without disturbing the newest-first
-    // order within each rank.
-    ixs.sort_by_key(|&ix| {
-        session_lead_rank(&sessions[ix].path, pinned, active_path, running_paths)
-    });
+    // Stable: pins rise without disturbing the newest-first order of the rest.
+    ixs.sort_by_key(|&ix| session_lead_rank(&sessions[ix].path, pinned));
     ixs.into_iter().map(SideRow::Session).collect()
 }
 
@@ -410,9 +346,8 @@ pub(crate) fn filter_archived(
 ///
 /// `LastUpdated` keys on each group's newest session activity — the group is
 /// not necessarily in activity order after the pin sort, so it takes the max
-/// rather than the first row — and finally floats the open session's group to
-/// the top, so a background run elsewhere writing messages cannot displace
-/// the workspace being worked in. `DateAdded` keys on the persisted added-at
+/// rather than the first row. Opening a session does not move its project;
+/// only a newer message does. `DateAdded` keys on the persisted added-at
 /// stamp. Ties break on the label so the order is stable across reloads, and
 /// unknown/empty keys sort last.
 fn sort_workspace_groups(
@@ -420,7 +355,6 @@ fn sort_workspace_groups(
     sessions: &[SessionInfo],
     sort: WorkspaceSort,
     added_at: &HashMap<PathBuf, SystemTime>,
-    active_path: &Option<PathBuf>,
 ) {
     if sort == WorkspaceSort::Manual {
         return;
@@ -433,19 +367,11 @@ fn sort_workspace_groups(
         WorkspaceSort::Manual => {}
         WorkspaceSort::AlphabeticalAsc => groups.sort_by(|a, b| by_label(a, b)),
         WorkspaceSort::AlphabeticalDesc => groups.sort_by(|a, b| by_label(b, a)),
-        WorkspaceSort::LastUpdated => {
-            groups.sort_by(|a, b| {
-                group_updated(&b.2, sessions)
-                    .cmp(&group_updated(&a.2, sessions))
-                    .then_with(|| by_label(a, b))
-            });
-            // The open session's group leads; a stable pass so the other
-            // groups keep their activity order.
-            if let Some(active) = active_path {
-                groups
-                    .sort_by_key(|(_, _, ixs)| !ixs.iter().any(|&ix| &sessions[ix].path == active));
-            }
-        }
+        WorkspaceSort::LastUpdated => groups.sort_by(|a, b| {
+            group_updated(&b.2, sessions)
+                .cmp(&group_updated(&a.2, sessions))
+                .then_with(|| by_label(a, b))
+        }),
         WorkspaceSort::DateAdded => groups.sort_by(|a, b| {
             added_at
                 .get(&b.1)
@@ -560,6 +486,8 @@ pub(crate) fn render_side_row(
     // Flat "one list" mode has no workspace headers, so each row names its
     // workspace instead.
     show_workspace: bool,
+    // Optional fields from the Show submenu. The title is always drawn.
+    row_show: SidebarShow,
     // Every session with a live (running or warm-idle) pi process. Guards
     // delete, which would otherwise let an alive process recreate the file.
     live_paths: &Rc<HashSet<PathBuf>>,
@@ -893,10 +821,9 @@ pub(crate) fn render_side_row(
             // Indented under its workspace group so the list reads as a
             // tree. The open session takes the `selection` fill with `selection_fg`
             // ink — the same selected-destination grammar as the nav rows;
-            // row actions are revealed on hover. A first-message preview adds
-            // a second line only when it says something the title does not
-            // ([`preview_adds_information`]); a title that is already the
-            // prompt stays one line.
+            // row actions are revealed on hover. The first-message line is
+            // the Show → Summary field, off unless the user turns it on, so
+            // every grouped row is the same height.
             // Outer item carries the inter-row spacing (padding) and the click
             // handler; the inner card holds the background/hover so the gap
             // between cards stays clear. Padding (not margin) is used because
@@ -947,7 +874,10 @@ pub(crate) fn render_side_row(
                 .w_full()
                 .pl(px(22.))
                 .pr(DynamicSpacing::Base08.px(&theme))
-                .py(DynamicSpacing::Base04.px(&theme))
+                // 8px above and below the title line. The previous 4px sat
+                // inside the line box and read as about 1px around the glyphs;
+                // this matches the taller conversation rows in Cursor.
+                .py(DynamicSpacing::Base08.px(&theme))
                 .rounded(list_item::RADIUS.px(&theme))
                 .flex()
                 .items_center()
@@ -968,7 +898,11 @@ pub(crate) fn render_side_row(
             // therefore one or two lines tall, and the age rides whichever
             // line is last.
             let age = sessions::relative_time(session.modified);
-            let show_preview = preview_adds_information(&session.title, &session.first_message);
+            // Summary is a whole-list choice, not a per-row guess, so every
+            // row grows by the same line when it is on.
+            let show_summary = row_show.summary;
+            let show_updated = row_show.updated;
+            let second_line = show_summary || show_workspace;
             // Flat list has no workspace headers — name the workspace on the
             // row instead. The glyph is the row's own status (open on the
             // active session, sync while running, archive when archived),
@@ -1040,7 +974,7 @@ pub(crate) fn render_side_row(
                                 this_for_menu,
                                 theme,
                             ))
-                            .when(!show_preview && !show_workspace, |line| {
+                            .when(!second_line && show_updated, |line| {
                                 line.child(
                                     div()
                                         .flex_none()
@@ -1051,8 +985,9 @@ pub(crate) fn render_side_row(
                             }),
                     )
                     // Line 2 — the workspace name (flat list only), the
-                    // first-message preview, and the age at the very end.
-                    .when(show_preview || show_workspace, |col| {
+                    // first-message summary when that field is on, and the
+                    // age at the very end when Updated is on.
+                    .when(second_line, |col| {
                         col.child(
                             div()
                                 .w_full()
@@ -1075,7 +1010,7 @@ pub(crate) fn render_side_row(
                                             .child(workspace_label),
                                     )
                                 })
-                                .when(show_preview, |line| {
+                                .when(show_summary, |line| {
                                     line.child(
                                         div()
                                             .flex_1()
@@ -1091,17 +1026,19 @@ pub(crate) fn render_side_row(
                                             .child(session.first_message.clone()),
                                     )
                                 })
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(if active {
-                                            theme.text_secondary
-                                        } else {
-                                            theme.text_muted
-                                        })
-                                        .child(age),
-                                ),
+                                .when(show_updated, |line| {
+                                    line.child(
+                                        div()
+                                            .flex_none()
+                                            .text_size(TextSize::XSmall.px(&theme))
+                                            .text_color(if active {
+                                                theme.text_secondary
+                                            } else {
+                                                theme.text_muted
+                                            })
+                                            .child(age),
+                                    )
+                                }),
                         )
                     }),
             );
@@ -1817,6 +1754,129 @@ fn workspace_appearance_picker(
         .into_any_element()
 }
 
+/// The Show row in the sidebar-options menu. It is not a check: hovering or
+/// clicking it opens a submenu of the fields a session row can draw.
+fn sidebar_show_row(
+    show: SidebarShow,
+    submenu_open: bool,
+    this: Entity<OrbitApp>,
+    theme: Theme,
+) -> impl IntoElement {
+    let this_open = this.clone();
+    let this_click = this.clone();
+    picker_entry(div().id("sidebar-show"), &theme)
+        .relative()
+        .h(picker::entry_height(&theme))
+        .flex_none()
+        .cursor_pointer()
+        .when(submenu_open, |row| row.bg(theme.surface_hover))
+        .when(!submenu_open, |row| {
+            row.hover(|s| s.bg(theme.surface_hover))
+        })
+        .on_hover(move |hovered: &bool, _, cx| {
+            if *hovered {
+                this_open.update(cx, |app, cx| app.open_sidebar_show_menu(cx));
+            }
+        })
+        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+            cx.stop_propagation();
+            this_click.update(cx, |app, cx| app.open_sidebar_show_menu(cx));
+        })
+        .child(icon(
+            "icons/eye.svg",
+            context_menu::ICON.px(&theme),
+            theme.text_muted,
+        ))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(theme.text_secondary)
+                .child(tr!("sidebar.show")),
+        )
+        .child(icon(
+            "icons/chevron-right.svg",
+            context_menu::ICON.px(&theme),
+            theme.text_muted,
+        ))
+        .when(submenu_open, |row| {
+            // Anchor at the row's right edge so the flyout sits beside the
+            // parent menu, the way Cursor's Show submenu does.
+            row.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .size(px(0.))
+                    .child(sidebar_show_popup(show, this, theme)),
+            )
+        })
+}
+
+/// The Show submenu: Updated (relative time) and Summary (first message).
+/// Toggling a field leaves both menus open.
+fn sidebar_show_popup(show: SidebarShow, this: Entity<OrbitApp>, theme: Theme) -> AnyElement {
+    let popup = picker_surface(div(), &theme)
+        .w(px(SHOW_POPOVER_W))
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+            cx.stop_propagation();
+        })
+        .on_mouse_down_out({
+            let this = this.clone();
+            move |_, _, cx| {
+                this.update(cx, |app, cx| {
+                    app.menu_dismissed_at = Some(Instant::now());
+                    app.close_sidebar_options();
+                    cx.notify();
+                })
+            }
+        })
+        .child(
+            div()
+                .py(picker::list_padding_y(&theme))
+                .flex()
+                .flex_col()
+                .gap(DynamicSpacing::Base01.px(&theme))
+                .child(sidebar_choice_item(
+                    "sidebar-show-updated",
+                    "icons/clock.svg",
+                    tr!("sidebar.show_updated"),
+                    show.updated,
+                    this.clone(),
+                    theme,
+                    false,
+                    |app, cx| app.toggle_sidebar_show_updated(cx),
+                ))
+                .child(sidebar_choice_item(
+                    "sidebar-show-summary",
+                    "icons/chat.svg",
+                    tr!("sidebar.show_summary"),
+                    show.summary,
+                    this,
+                    theme,
+                    false,
+                    |app, cx| app.toggle_sidebar_show_summary(cx),
+                )),
+        );
+
+    // The options menu is already a `deferred` layer. Nesting another one
+    // calls `defer_draw` while that layer is being drawn, and GPUI aborts
+    // with "cannot call defer_draw during deferred drawing". This flyout
+    // anchors beside the Show row and paints with its parent instead.
+    anchored()
+        .position_mode(AnchoredPositionMode::Local)
+        .anchor(Corner::TopLeft)
+        .offset(point(popover::MENU_OFFSET, px(0.)))
+        .snap_to_window_with_margin(popover::WINDOW_MARGIN)
+        .child(popup)
+        .into_any_element()
+}
+
 /// The hover-revealed view control on the sidebar's header. Opens the
 /// sidebar-options menu anchored below: how sessions are grouped, ordered,
 /// and filtered (each active choice checked).
@@ -1824,6 +1884,8 @@ pub(crate) fn sidebar_options_button(
     group_by: SidebarGroupBy,
     sort: WorkspaceSort,
     archived_filter: SidebarArchivedFilter,
+    show: SidebarShow,
+    show_menu: bool,
     open: bool,
     this: Entity<OrbitApp>,
     theme: Theme,
@@ -1856,6 +1918,8 @@ pub(crate) fn sidebar_options_button(
                     group_by,
                     sort,
                     archived_filter,
+                    show,
+                    show_menu,
                     this_for_popup,
                     theme,
                 ))
@@ -1872,6 +1936,10 @@ fn sidebar_choice_item<C>(
     active: bool,
     this: Entity<OrbitApp>,
     theme: Theme,
+    // Hovering a parent-menu row closes the Show submenu, so the flyout
+    // does not stay up over Group by / Order by / Filter. The Show fields
+    // themselves pass false — hovering them must not dismiss the flyout.
+    close_show_on_hover: bool,
     on_click: C,
 ) -> impl IntoElement
 where
@@ -1886,6 +1954,19 @@ where
                 .text_color(theme.selection_fg)
         })
         .when(!active, |row| row.hover(|s| s.bg(theme.surface_hover)))
+        .on_hover({
+            let this = this.clone();
+            move |hovered: &bool, _, cx| {
+                if close_show_on_hover && *hovered {
+                    this.update(cx, |app, cx| {
+                        if app.sidebar_show_menu {
+                            app.sidebar_show_menu = false;
+                            cx.notify();
+                        }
+                    });
+                }
+            }
+        })
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
             this.update(cx, |app, cx| on_click(app, cx));
@@ -1925,31 +2006,44 @@ where
 /// without truncating.
 const OPTIONS_POPOVER_W: f32 = 300.;
 
+/// Width of the Show submenu. The two field names are short.
+const SHOW_POPOVER_W: f32 = 220.;
+
 /// The sidebar-options menu, anchored below the header control. Uses the
 /// picker surface (search-less) and `picker_entry` rows so it matches the
-/// branch selector; an outside mouse-down dismisses it. Three sections:
-/// Group by, Order by, and Filter sessions.
+/// branch selector; an outside mouse-down dismisses it. Sections: Group by,
+/// Order by, Show (a submenu of row fields), and Filter sessions.
 pub(crate) fn sidebar_options_popup(
     group_by: SidebarGroupBy,
     sort: WorkspaceSort,
     archived_filter: SidebarArchivedFilter,
+    show: SidebarShow,
+    show_menu: bool,
     this: Entity<OrbitApp>,
     theme: Theme,
 ) -> AnyElement {
+    // No `overflow_hidden`: the Show flyout is a child of the Show row and
+    // draws past this box's right edge. Clipping to the menu would hide it.
+    // Rows are inset, so the rounded surface still reads cleanly.
     let popup = picker_surface(div(), &theme)
         .w(px(OPTIONS_POPOVER_W))
         .flex()
         .flex_col()
-        .overflow_hidden()
         .occlude()
         .on_mouse_down_out({
             let this = this.clone();
             move |_, _, cx| {
                 this.update(cx, |app, cx| {
+                    // A click on the Show submenu lands outside this popup.
+                    // That submenu dismisses both menus; doing it here would
+                    // close them before the field toggle runs.
+                    if app.sidebar_show_menu {
+                        return;
+                    }
                     // Arm the gesture guard so this same click's mouse-up
                     // cannot immediately re-open the menu.
                     app.menu_dismissed_at = Some(Instant::now());
-                    app.sidebar_sort_menu = false;
+                    app.close_sidebar_options();
                     cx.notify();
                 })
             }
@@ -1969,6 +2063,7 @@ pub(crate) fn sidebar_options_popup(
                         option == group_by,
                         this.clone(),
                         theme,
+                        true,
                         move |app, cx| app.set_sidebar_group_by(option, cx),
                     )
                 }))
@@ -1981,9 +2076,11 @@ pub(crate) fn sidebar_options_popup(
                         option == sort,
                         this.clone(),
                         theme,
+                        true,
                         move |app, cx| app.set_workspace_sort(option, cx),
                     )
                 }))
+                .child(sidebar_show_row(show, show_menu, this.clone(), theme))
                 .child(menu_header(tr!("sidebar.filter_sessions"), &theme))
                 .children(SidebarArchivedFilter::ALL.into_iter().map(|option| {
                     sidebar_choice_item(
@@ -1993,6 +2090,7 @@ pub(crate) fn sidebar_options_popup(
                         option == archived_filter,
                         this.clone(),
                         theme,
+                        true,
                         move |app, cx| app.set_sidebar_archived_filter(option, cx),
                     )
                 })),
@@ -2152,6 +2250,12 @@ impl OrbitApp {
         cx.notify();
     }
 
+    /// Close the sidebar view menu and its Show submenu together.
+    fn close_sidebar_options(&mut self) {
+        self.sidebar_sort_menu = false;
+        self.sidebar_show_menu = false;
+    }
+
     /// Dismiss window-level overlays (palette, pickers, popup selectors) so a
     /// row menu never opens underneath one — every open path above routes
     /// through here.
@@ -2168,7 +2272,7 @@ impl OrbitApp {
         if self.model_selector.is_some() {
             self.close_model_selector(window, cx);
         }
-        self.sidebar_sort_menu = false;
+        self.close_sidebar_options();
     }
 
     pub(super) fn on_menu_copy_path(&mut self, cx: &mut Context<Self>) {
@@ -2272,7 +2376,7 @@ impl OrbitApp {
             }
         }
         if self.sidebar_sort_menu {
-            self.sidebar_sort_menu = false;
+            self.close_sidebar_options();
             cx.notify();
             return;
         }
@@ -2286,7 +2390,7 @@ impl OrbitApp {
     /// Switch the workspace ordering and persist the choice with the project
     /// list. Re-sorting is pure UI: pi's session files are never touched.
     pub(super) fn set_workspace_sort(&mut self, sort: WorkspaceSort, cx: &mut Context<Self>) {
-        self.sidebar_sort_menu = false;
+        self.close_sidebar_options();
         if self.workspace_sort != sort {
             self.workspace_sort = sort;
             self.persist_workspace_prefs();
@@ -2302,7 +2406,7 @@ impl OrbitApp {
         group_by: SidebarGroupBy,
         cx: &mut Context<Self>,
     ) {
-        self.sidebar_sort_menu = false;
+        self.close_sidebar_options();
         if self.sidebar_group_by != group_by {
             self.sidebar_group_by = group_by;
             self.persist_workspace_prefs();
@@ -2317,12 +2421,35 @@ impl OrbitApp {
         filter: SidebarArchivedFilter,
         cx: &mut Context<Self>,
     ) {
-        self.sidebar_sort_menu = false;
+        self.close_sidebar_options();
         if self.sidebar_archived_filter != filter {
             self.sidebar_archived_filter = filter;
             self.persist_workspace_prefs();
         }
         self.clamp_sidebar_cursor(cx);
+        cx.notify();
+    }
+
+    /// Open the Show submenu. Hovering and clicking the Show row both call
+    /// this; it stays open until another row is hovered or the menu closes.
+    pub(super) fn open_sidebar_show_menu(&mut self, cx: &mut Context<Self>) {
+        if !self.sidebar_show_menu {
+            self.sidebar_show_menu = true;
+            cx.notify();
+        }
+    }
+
+    /// Flip the Updated field and persist it. The menus stay open.
+    pub(super) fn toggle_sidebar_show_updated(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_show.updated = !self.sidebar_show.updated;
+        self.persist_workspace_prefs();
+        cx.notify();
+    }
+
+    /// Flip the Summary field and persist it. The menus stay open.
+    pub(super) fn toggle_sidebar_show_summary(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_show.summary = !self.sidebar_show.summary;
+        self.persist_workspace_prefs();
         cx.notify();
     }
 
@@ -2428,9 +2555,7 @@ impl OrbitApp {
             .map(|(path, _)| path.clone())
             .collect();
         match self.sidebar_group_by {
-            SidebarGroupBy::OneList => {
-                build_flat_sidebar_rows(sessions, pinned, &self.current_session_path, &running)
-            }
+            SidebarGroupBy::OneList => build_flat_sidebar_rows(sessions, pinned),
             SidebarGroupBy::Workspace => build_sidebar_rows(
                 sessions,
                 &self.workspaces,
@@ -2683,7 +2808,7 @@ impl OrbitApp {
             || self.workspace_menu.take().is_some()
             || self.sidebar_sort_menu
         {
-            self.sidebar_sort_menu = false;
+            self.close_sidebar_options();
             cx.notify();
             return;
         }
@@ -2753,58 +2878,5 @@ mod tests {
         assert_eq!(clamp_cursor(0, 0), None);
         assert_eq!(clamp_cursor(3, 2), Some(1));
         assert_eq!(clamp_cursor(1, 5), Some(1));
-    }
-
-    /// The row keeps its second line only when the preview diverges from the
-    /// title. pi's auto-title is the first message, so the repeat is the common
-    /// case, not the edge.
-    #[test]
-    fn a_preview_that_only_continues_the_title_is_not_worth_a_line() {
-        // pi's title is the message cut short: same sentence, nothing added.
-        assert!(!preview_adds_information(
-            "can you update the screenshot of the",
-            "can you update the screenshot of the app on the marketing page",
-        ));
-        // The placeholder case: title and preview are the same string.
-        assert!(!preview_adds_information(
-            "Explain the project structure.",
-            "Explain the project structure.",
-        ));
-        // A capped title ends with an ellipsis and the preview does not; that
-        // difference alone must not buy a second line.
-        assert!(!preview_adds_information(
-            "Fixing the OAuth redirect loop…",
-            "Fixing the OAuth redirect loop in the callback handler",
-        ));
-        // `cap_chars` cuts mid-word, so the title's last word is a fragment of
-        // the preview's. The fragment is the cap's, not the sentence's.
-        assert!(!preview_adds_information(
-            "can you update the screenshot of the ap…",
-            "can you update the screenshot of the app on the marketing page",
-        ));
-        // Collapsed whitespace and a newline are formatting, not content.
-        assert!(!preview_adds_information(
-            "Tidy the release notes",
-            "Tidy the   release\nnotes before tagging",
-        ));
-    }
-
-    #[test]
-    fn a_preview_that_says_something_new_keeps_its_line() {
-        // pi named the session itself: the message is new information.
-        assert!(preview_adds_information(
-            "Fix login bug",
-            "the oauth redirect is looping",
-        ));
-        // Sharing an opening word is not repeating a sentence.
-        assert!(preview_adds_information(
-            "Fix the login flow",
-            "The oauth redirect is looping in production",
-        ));
-        // No preview at all is nothing to show.
-        assert!(!preview_adds_information("Fix login bug", "   "));
-        assert!(!preview_adds_information("Fix login bug", ""));
-        // A session with no title yet has nothing to repeat.
-        assert!(preview_adds_information("", "anything at all"));
     }
 }
