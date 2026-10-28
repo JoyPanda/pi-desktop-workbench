@@ -4,7 +4,7 @@
 //! planned for.
 
 use super::*;
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeKey};
 
 fn image_attachment(name: &str) -> Attachment {
     Attachment {
@@ -31,7 +31,7 @@ fn file(path: &str, size: u64) -> AttachedFile {
 
 fn app(cx: &mut gpui::TestAppContext) -> Entity<OrbitApp> {
     cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     })
 }
@@ -62,7 +62,7 @@ fn draw(cx: &mut gpui::VisualTestContext, app: &Entity<OrbitApp>) {
 /// touching the typed text.
 #[gpui::test]
 fn the_count_header_and_clear_appear_only_for_a_real_tray(cx: &mut gpui::TestAppContext) {
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
 

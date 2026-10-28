@@ -7,9 +7,9 @@ use super::*;
 /// page.
 #[gpui::test]
 fn expanding_review_opens_the_sessions_sidebar(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
 
@@ -58,9 +58,9 @@ fn expanding_review_opens_the_sessions_sidebar(cx: &mut gpui::TestAppContext) {
 /// gives the session view back at the width the reader dialed in.
 #[gpui::test]
 fn expanding_fills_the_page_beside_the_sidebar(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
 
@@ -119,9 +119,9 @@ fn expanding_fills_the_page_beside_the_sidebar(cx: &mut gpui::TestAppContext) {
 /// child) clean out of the viewport.
 #[gpui::test]
 fn a_wide_docked_review_stays_inside_the_window(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let viewport = cx.update(|window, _| window.viewport_size());

@@ -8,9 +8,9 @@ use super::*;
 /// silently clobbering a manual thinking choice.
 #[gpui::test]
 fn failed_default_model_push_disarms_the_default(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
 
@@ -40,9 +40,9 @@ fn failed_default_model_push_disarms_the_default(cx: &mut gpui::TestAppContext) 
 /// user's choice.
 #[gpui::test]
 fn manual_model_selection_disarms_the_default(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
 

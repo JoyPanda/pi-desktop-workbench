@@ -8,7 +8,7 @@
 #![cfg(unix)]
 
 use super::*;
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeKey};
 use std::os::unix::fs::PermissionsExt as _;
 
 /// A pi that swallows stdin: the write succeeds, the process stays alive, and
@@ -46,7 +46,7 @@ impl Drop for SilentPi {
 fn app_with_silent_pi(cx: &mut gpui::TestAppContext) -> (Entity<OrbitApp>, SilentPi) {
     let fake = SilentPi::start("progress");
     let app = cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     });
     cx.update(|cx| {

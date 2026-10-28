@@ -266,11 +266,6 @@ const SETTINGS_SEARCH_INDEX: &[(SettingsSection, &str, &str)] = &[
     ),
     (
         SettingsSection::Appearance,
-        "settings.design_system",
-        "design system classic operational minimalism visual language",
-    ),
-    (
-        SettingsSection::Appearance,
         "settings.theme",
         "theme palette color light dark editor",
     ),
@@ -5955,16 +5950,6 @@ impl OrbitApp {
         if background.is_some() {
             theme_rows.push(self.backdrop_preview(theme));
         }
-        // The design-system switch comes first: it selects the visual language
-        // (Classic or Operational) without touching the remembered palette in
-        // either system.
-        theme_rows.push(self.setting_row(
-            theme,
-            &tr!("settings.design_system"),
-            Some(&tr!("settings.design_system_description")),
-            None,
-            Some(self.design_system_control(theme, this.clone(), cx)),
-        ));
         theme_rows.push(self.setting_row(
             theme,
             &tr!("settings.appearance"),
@@ -6169,97 +6154,6 @@ impl OrbitApp {
         }
         sections
     }
-    /// One keyboard-focusable radio group for the visual language. The two
-    /// choices are stable identities; the Theme row below lists only the
-    /// palettes belonging to the chosen system.
-    fn design_system_control(
-        &self,
-        theme: Theme,
-        this: Entity<OrbitApp>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        use theme::DesignSystem;
-        let current = theme::appearance_prefs(cx).design_system;
-        let keyboard_this = this.clone();
-        let count = DesignSystem::ALL.len();
-        div()
-            .id("design-system")
-            .focusable()
-            .border_1()
-            .border_color(gpui::transparent_black())
-            .rounded(button::RADIUS.px(&theme))
-            .p(DynamicSpacing::Base04.px(&theme))
-            .focus(|style| style.border_color(theme.focus_ring))
-            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
-            .flex()
-            .items_center()
-            .on_key_down(move |event, _, cx| {
-                let index = DesignSystem::ALL
-                    .iter()
-                    .position(|system| *system == current)
-                    .unwrap_or(0);
-                let next = match event.keystroke.key.as_str() {
-                    "left" | "up" => (index + count - 1) % count,
-                    "right" | "down" => (index + 1) % count,
-                    "home" => 0,
-                    "end" => count - 1,
-                    _ => return,
-                };
-                cx.stop_propagation();
-                keyboard_this.update(cx, |app, cx| {
-                    app.set_design_system(DesignSystem::ALL[next], cx);
-                });
-            })
-            .children(
-                DesignSystem::ALL
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, system)| {
-                        let this = this.clone();
-                        let active = current == system;
-                        let label = match system {
-                            DesignSystem::Classic => tr!("settings.design_system_classic"),
-                            DesignSystem::Operational => {
-                                tr!("settings.design_system_operational")
-                            }
-                        };
-                        segmented_segment(
-                            div().id(system.as_str()),
-                            &theme,
-                            ButtonSize::Medium,
-                            SegmentPosition::at(index, count),
-                        )
-                        .font_weight(FontWeight::MEDIUM)
-                        .cursor_pointer()
-                        .when(active, |b| {
-                            b.border_color(theme.border)
-                                .raised_flat(theme.surface_selected)
-                                .text_color(theme.text_primary)
-                        })
-                        .when(!active, |b| {
-                            b.border_color(theme.border)
-                                .raised_flat(theme.surface_elevated)
-                                .text_color(theme.text_secondary)
-                                .hover(|s| s.raised_flat(theme.surface_hover))
-                        })
-                        .on_click(move |_, _, cx| {
-                            this.update(cx, |app, cx| app.set_design_system(system, cx));
-                        })
-                        .child(label)
-                    }),
-            )
-            .into_any_element()
-    }
-
-    fn set_design_system(&mut self, design_system: theme::DesignSystem, cx: &mut Context<Self>) {
-        let mut prefs = theme::appearance_prefs(cx);
-        prefs.set_design_system(design_system);
-        if let Err(error) = theme::set_appearance_prefs(cx, prefs) {
-            self.toast_error(tr!("settings.appearance_save_failed", error = error));
-        }
-        cx.notify();
-    }
-
     /// One keyboard-focusable radio group drawn as a segmented control (the
     /// same control as the follow-up delivery mode); arrows choose the
     /// adjacent mode.
@@ -6749,14 +6643,17 @@ impl OrbitApp {
     }
 
     /// The palettes the Theme dropdown lists, in the order it paints them:
-    /// every palette of `mode` in the active design system, in
-    /// [`theme::ThemeId::ALL`] order.
+    /// every theme of `mode`, built-ins first, then install-directory themes.
     ///
     /// Both the label builder and the click handler read this, so a row index
     /// always resolves to the palette it painted.
-    pub(super) fn theme_catalog(&self, mode: ThemeMode, cx: &Context<Self>) -> Vec<theme::ThemeId> {
-        let design_system = theme::appearance_prefs(cx).design_system;
-        theme::themes_for_system(mode, design_system).collect()
+    pub(super) fn theme_catalog(
+        &self,
+        mode: ThemeMode,
+        cx: &Context<Self>,
+    ) -> Vec<theme::ThemeKey> {
+        let _ = cx;
+        theme::themes_for(mode).collect()
     }
 
     /// Appearance → Theme. `mode` is the resolved appearance, so the row shows
@@ -8418,13 +8315,13 @@ mod theme_catalog_tests {
 
     fn test_app(cx: &mut gpui::TestAppContext) -> Entity<OrbitApp> {
         cx.update(|cx| {
-            cx.set_global(Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT));
             cx.set_global(theme::AppearancePrefs::default());
             cx.new(OrbitApp::new)
         })
     }
 
-    fn choose_dark_theme(cx: &mut gpui::TestAppContext, id: theme::ThemeId) {
+    fn choose_dark_theme(cx: &mut gpui::TestAppContext, id: theme::ThemeKey) {
         cx.update(|cx| {
             let mut prefs = theme::appearance_prefs(cx);
             prefs.set_theme(ThemeMode::Dark, id);
@@ -8436,41 +8333,12 @@ mod theme_catalog_tests {
     fn catalog_lists_every_dark_palette(cx: &mut gpui::TestAppContext) {
         let app = test_app(cx);
         let cx = cx.add_empty_window();
-        choose_dark_theme(cx, theme::ThemeId::Orbit);
+        choose_dark_theme(cx, theme::ThemeKey::ORBIT);
         cx.update(|_, cx| {
             app.update(cx, |app, cx| {
                 assert_eq!(
                     app.theme_catalog(ThemeMode::Dark, cx),
-                    vec![
-                        theme::ThemeId::Orbit,
-                        theme::ThemeId::OrbitDarker,
-                        theme::ThemeId::OrbitCobalt,
-                        theme::ThemeId::OrbitAzure,
-                        theme::ThemeId::Flexoki,
-                    ]
-                );
-            });
-        });
-    }
-
-    #[gpui::test]
-    fn catalog_follows_the_design_system(cx: &mut gpui::TestAppContext) {
-        let app = test_app(cx);
-        let cx = cx.add_empty_window();
-        cx.update(|_, cx| {
-            let mut prefs = theme::appearance_prefs(cx);
-            prefs.set_design_system(theme::DesignSystem::Operational);
-            cx.set_global(prefs);
-        });
-        cx.update(|_, cx| {
-            app.update(cx, |app, cx| {
-                assert_eq!(
-                    app.theme_catalog(ThemeMode::Dark, cx),
-                    vec![theme::ThemeId::Operational]
-                );
-                assert_eq!(
-                    app.theme_catalog(ThemeMode::Light, cx),
-                    vec![theme::ThemeId::OperationalLight]
+                    theme::themes_for(ThemeMode::Dark).collect::<Vec<_>>()
                 );
             });
         });
@@ -8484,13 +8352,7 @@ mod theme_catalog_tests {
             app.update(cx, |app, cx| {
                 assert_eq!(
                     app.theme_catalog(ThemeMode::Light, cx),
-                    vec![
-                        theme::ThemeId::OrbitLight,
-                        theme::ThemeId::OrbitAzureLight,
-                        theme::ThemeId::OrbitPaper,
-                        theme::ThemeId::OrbitContrast,
-                        theme::ThemeId::FlexokiLight,
-                    ]
+                    theme::themes_for(ThemeMode::Light).collect::<Vec<_>>()
                 );
             });
         });
@@ -8612,9 +8474,9 @@ mod about_banner_tests {
     /// dismiss id is absent from the About tree.)
     #[gpui::test]
     fn about_page_mounts_the_star_banner_without_a_dismiss(cx: &mut gpui::TestAppContext) {
-        use crate::theme::{Theme, ThemeId};
+        use crate::theme::{Theme, ThemeKey};
 
-        cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
         let cx = cx.add_empty_window();
         let app = cx.update(|_, cx| cx.new(OrbitApp::new));
         cx.update(|_, cx| {

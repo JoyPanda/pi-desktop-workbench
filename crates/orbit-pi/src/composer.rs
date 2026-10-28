@@ -2243,9 +2243,9 @@ mod tests {
     /// and the base text between them stays untinted.
     #[test]
     fn mentions_carry_a_tint_and_plain_text_does_not() {
-        use crate::theme::{Theme, ThemeId};
+        use crate::theme::{Theme, ThemeKey};
 
-        let theme = Theme::for_id(ThemeId::Orbit);
+        let theme = Theme::for_id(ThemeKey::ORBIT);
         let base = TextRun {
             len: 0,
             font: gpui::font("Test"),
@@ -2526,7 +2526,7 @@ mod geometry_tests {
     fn click_mapping_survives_a_paste_growth(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let input = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.new(ComposerInput::new)
         });
         let harness = cx.update(|_, cx| {
@@ -2607,7 +2607,7 @@ mod geometry_tests {
     fn vertical_caret_movement_spans_lines(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let input = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.new(ComposerInput::new)
         });
         let harness = cx.update(|_, cx| {
@@ -2642,7 +2642,7 @@ mod geometry_tests {
     fn arrow_keys_move_the_caret(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let input = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.bind_keys([
                 KeyBinding::new("left", Left, Some("Composer")),
                 KeyBinding::new("right", Right, Some("Composer")),
@@ -2727,7 +2727,7 @@ mod geometry_tests {
 
         let cx = cx.add_empty_window();
         let input = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.bind_keys([
                 KeyBinding::new("left", Left, Some("Composer")),
                 KeyBinding::new("right", Right, Some("Composer")),
@@ -2781,7 +2781,7 @@ mod geometry_tests {
     fn word_and_line_navigation(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let input = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.bind_keys([
                 KeyBinding::new("alt-left", WordLeft, Some("Composer")),
                 KeyBinding::new("alt-right", WordRight, Some("Composer")),
@@ -2858,7 +2858,7 @@ mod geometry_tests {
     fn gutter_syntax_editor_paints_and_hit_tests(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let input = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             let input = cx.new(|cx| {
                 ComposerInput::new(cx)
                     .with_gutter(true)
@@ -2911,7 +2911,7 @@ mod geometry_tests {
     fn undo_and_redo_round_trip(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let input = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.new(ComposerInput::new)
         });
         cx.update(|window, cx| {
@@ -2941,7 +2941,7 @@ mod geometry_tests {
 
     fn ime_input(cx: &mut VisualTestContext) -> Entity<ComposerInput> {
         cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.new(ComposerInput::new)
         })
     }

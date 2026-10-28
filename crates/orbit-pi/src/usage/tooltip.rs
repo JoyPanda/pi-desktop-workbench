@@ -51,12 +51,12 @@ mod tests {
     use gpui::{point, px, AvailableSpace, TestAppContext};
 
     use super::*;
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
     /// Lay a tooltip out the way GPUI does (`prepaint_tooltip` uses
     /// `AvailableSpace::min_size()`) and return its card bounds.
     fn card_for(text: &'static str, cx: &mut TestAppContext) -> gpui::Bounds<gpui::Pixels> {
-        cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
         let cx = cx.add_empty_window();
         let _ = cx.draw(
             point(px(0.), px(0.)),

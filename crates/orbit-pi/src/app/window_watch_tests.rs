@@ -4,14 +4,14 @@
 //! frontmost, and nothing else reports the close.
 
 use super::*;
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeKey};
 use gpui::{point, px, size, Bounds, TestAppContext, WindowBounds, WindowOptions};
 
 /// A closed window must not keep swallowing notifications.
 #[gpui::test]
 fn closing_the_window_clears_the_notification_gate(cx: &mut TestAppContext) {
     let (app, window) = cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         let app = cx.new(OrbitApp::new);
         let window = cx
             .open_window(

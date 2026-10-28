@@ -46,10 +46,10 @@ impl Render for QueueBarProbe {
 /// messages accumulate.
 #[gpui::test]
 fn queue_bar_is_one_compact_grouped_surface(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
     use orbit_rpc::PendingQueue;
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| {
         cx.new(|cx| {
@@ -119,10 +119,10 @@ fn queue_bar_is_one_compact_grouped_surface(cx: &mut gpui::TestAppContext) {
 fn sending_hints_match_footer_metrics_and_share_the_context_row(cx: &mut gpui::TestAppContext) {
     use crate::theme::{
         tokens::{button, ButtonSize},
-        Theme, ThemeId,
+        Theme, ThemeKey,
     };
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| {
         cx.new(|cx| {
@@ -203,9 +203,9 @@ fn sending_hints_match_footer_metrics_and_share_the_context_row(cx: &mut gpui::T
 /// has to be observed in a window that never has.
 #[gpui::test]
 fn an_idle_status_row_keeps_the_send_hints_out_of_the_chrome(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| {
         cx.new(|cx| {
@@ -258,9 +258,9 @@ fn an_idle_status_row_keeps_the_send_hints_out_of_the_chrome(cx: &mut gpui::Test
 /// each other in one frame registry.
 #[gpui::test]
 fn the_thinking_chip_appears_only_when_the_model_has_a_ladder(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let app = cx.update(|cx| cx.new(OrbitApp::new));
 
     for (levels, expected) in [
@@ -304,9 +304,9 @@ fn the_thinking_chip_appears_only_when_the_model_has_a_ladder(cx: &mut gpui::Tes
 #[gpui::test]
 fn the_access_chip_names_the_mode_only_when_it_is_not_the_default(cx: &mut gpui::TestAppContext) {
     use crate::access::AccessMode;
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let app = cx.update(|cx| cx.new(OrbitApp::new));
 
     for (mode, labelled) in [

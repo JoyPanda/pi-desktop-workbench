@@ -1036,10 +1036,10 @@ impl Render for OrbitApp {
                                                 .px(DynamicSpacing::Base16.px(&theme))
                                                 .pt(DynamicSpacing::Base12.px(&theme))
                                                 .pb(DynamicSpacing::Base12.px(&theme))
-                                                // Base interface font for the input
-                                                // (scales with the UI font-size
-                                                // setting); the editor inherits it.
-                                                .text_size(TextSize::Default.px(&theme))
+                                                // Same measure as user bubbles and
+                                                // assistant prose: the UI-scaled
+                                                // body size, not Editor Size.
+                                                .text_size(theme.body_px())
                                                 .flex()
                                                 .flex_col()
                                                 .gap(DynamicSpacing::Base16.px(&theme))

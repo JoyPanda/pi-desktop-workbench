@@ -55,7 +55,9 @@ impl OrbitApp {
         if self
             .mention_fd_key
             .as_ref()
-            .is_some_and(|(cached_root, cached_query)| cached_root == &root && cached_query == query)
+            .is_some_and(|(cached_root, cached_query)| {
+                cached_root == &root && cached_query == query
+            })
         {
             return self.mention_fd_hits.clone();
         }

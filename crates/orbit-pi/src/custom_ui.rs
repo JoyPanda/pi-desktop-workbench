@@ -617,7 +617,7 @@ mod tests {
 #[cfg(test)]
 mod render_tests {
     use super::*;
-    use crate::theme::ThemeId;
+    use crate::theme::ThemeKey;
     use gpui::{point, size, Modifiers, TestAppContext};
 
     struct Harness {
@@ -650,7 +650,7 @@ mod render_tests {
     fn custom_frame_lays_out_chrome_and_grid(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let ui = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(ThemeKey::ORBIT));
             cx.new(|cx| {
                 CustomUi::new(
                     surface(),
@@ -715,7 +715,7 @@ mod render_tests {
     fn blank_surface_lines_render(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
         let ui = cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(ThemeKey::ORBIT));
             let mut surface = surface();
             surface.lines = vec!["header".into(), "".into(), "\x1b[0m".into()];
             cx.new(|cx| {
@@ -760,7 +760,7 @@ mod render_tests {
     #[gpui::test]
     fn clicking_the_scrim_dismisses_without_a_double_lease(cx: &mut TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(ThemeKey::ORBIT)));
 
         let cancels = std::rc::Rc::new(std::cell::Cell::new(0usize));
         let host = cx.update(|_, cx| {

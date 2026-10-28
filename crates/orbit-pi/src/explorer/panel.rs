@@ -1696,7 +1696,7 @@ mod tests {
         std::fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
 
         let cx = cx.add_empty_window();
-        cx.update(|_, app| app.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, app| app.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
 
         let open: OpenHandler = Rc::new(|_, _, _| {});
         let op: FileOpHandler = Rc::new(|_, _| {});

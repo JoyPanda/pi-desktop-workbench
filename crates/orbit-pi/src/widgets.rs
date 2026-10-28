@@ -322,10 +322,10 @@ fn utf8_char_len(byte: u8) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::ThemeId;
+    use crate::theme::ThemeKey;
 
     fn theme() -> Theme {
-        Theme::for_id(ThemeId::Orbit)
+        Theme::for_id(ThemeKey::ORBIT)
     }
 
     fn runs(line: &str) -> (String, Vec<TextRun>) {

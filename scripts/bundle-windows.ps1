@@ -82,6 +82,9 @@ New-Item -ItemType Directory -Force $stage | Out-Null
 Copy-Item $exe "$stage/orbit-pi.exe"
 Copy-Item "assets/icons/icon.ico" "$stage/icon.ico"
 Copy-Item "LICENSE" "$stage/LICENSE"
+# Editable copies beside the exe. The binary also embeds these files;
+# a same-id JSON here overrides the embedded theme.
+Copy-Item -Recurse "crates/orbit-pi/themes" "$stage/themes"
 Compress-Archive -Path "$stage/*" -DestinationPath "dist/$package.zip" -Force
 
 # The bare executable, byte-for-byte what went into the zip above, as its own

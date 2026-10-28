@@ -1151,7 +1151,7 @@ mod tests {
         use gpui::KeyBinding;
 
         cx.update(|cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.bind_keys([
                 KeyBinding::new("up", Up, Some("Composer")),
                 KeyBinding::new("down", Down, Some("Composer")),

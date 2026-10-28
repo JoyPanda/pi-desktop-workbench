@@ -5,7 +5,7 @@ use std::{io, path::Path};
 use gpui::{App, Global, Window, WindowAppearance};
 use serde_json::{json, Value};
 
-use super::{get, persist_path, DesignSystem, Theme, ThemeId, ThemeMode};
+use super::{get, keys_for, persist_path, Theme, ThemeKey, ThemeMode};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum AppearanceMode {
@@ -30,14 +30,10 @@ impl AppearanceMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AppearancePrefs {
     pub mode: AppearanceMode,
-    /// Which visual language is active. Existing palettes keep
-    /// [`DesignSystem::Classic`], the default.
-    pub design_system: DesignSystem,
-    /// The remembered Classic palette for each appearance. Operational
-    /// palettes are fixed by the design system and do not overwrite these, so
-    /// switching back restores the user's previous Classic choice.
-    light_theme: ThemeId,
-    dark_theme: ThemeId,
+    /// The palette for light appearance, including install-directory themes.
+    light_theme: ThemeKey,
+    /// The palette for dark appearance.
+    dark_theme: ThemeKey,
 }
 
 impl Global for AppearancePrefs {}
@@ -46,9 +42,8 @@ impl Default for AppearancePrefs {
     fn default() -> Self {
         Self {
             mode: AppearanceMode::System,
-            design_system: DesignSystem::Classic,
-            light_theme: ThemeId::OrbitAzureLight,
-            dark_theme: ThemeId::OrbitAzure,
+            light_theme: ThemeKey::ORBIT_AZURE_LIGHT,
+            dark_theme: ThemeKey::ORBIT_AZURE,
         }
     }
 }
@@ -59,12 +54,11 @@ impl AppearancePrefs {
     /// the user's other selections.
     fn parse(raw: &str) -> Self {
         let mut prefs = Self::default();
-        if let Some(id) = ThemeId::parse(raw) {
+        if let Some(id) = ThemeKey::parse(raw) {
             prefs.mode = match id.appearance() {
                 ThemeMode::Light => AppearanceMode::Light,
                 ThemeMode::Dark => AppearanceMode::Dark,
             };
-            prefs.design_system = id.design_system();
             prefs.store_theme(id.appearance(), id);
             return prefs;
         }
@@ -76,40 +70,41 @@ impl AppearancePrefs {
             Some("dark") => AppearanceMode::Dark,
             _ => AppearanceMode::System,
         };
-        let design_system_field = value["design_system"].as_str();
-        if let Some(system) = design_system_field.and_then(DesignSystem::parse) {
-            prefs.design_system = system;
+        // Old files kept the classic choice in the theme slots and selected
+        // Operational through `design_system`, which was never written into
+        // those slots. Honor that selection. The settings row is gone, so the
+        // slots themselves become the operational pair.
+        let operational = value["design_system"].as_str().is_some_and(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "operational" | "restrained" | "operational-minimalism"
+            )
+        });
+        if operational {
+            prefs.light_theme = ThemeKey::OPERATIONAL_LIGHT;
+            prefs.dark_theme = ThemeKey::OPERATIONAL;
+            return prefs;
         }
         for (key, mode) in [
             ("light_theme", ThemeMode::Light),
             ("dark_theme", ThemeMode::Dark),
         ] {
-            if let Some(id) = value[key].as_str().and_then(ThemeId::parse) {
-                // Without an explicit system field, an Operational palette in
-                // the legacy theme slot means the user chose that system.
-                if design_system_field.is_none() && id.design_system() != DesignSystem::Classic {
-                    prefs.design_system = id.design_system();
-                }
-                if id.design_system() == DesignSystem::Classic {
-                    prefs.store_theme(mode, id);
-                }
+            if let Some(id) = value[key].as_str().and_then(ThemeKey::parse) {
+                prefs.store_theme(mode, id);
             }
         }
         prefs
     }
 
-    pub fn theme(self, mode: ThemeMode) -> ThemeId {
-        if self.design_system == DesignSystem::Operational {
-            return self.design_system.theme_id(mode);
-        }
+    pub fn theme(self, mode: ThemeMode) -> ThemeKey {
         match mode {
             ThemeMode::Light => self.light_theme,
             ThemeMode::Dark => self.dark_theme,
         }
     }
 
-    fn store_theme(&mut self, mode: ThemeMode, id: ThemeId) {
-        if id.appearance() != mode || id.design_system() != DesignSystem::Classic {
+    fn store_theme(&mut self, mode: ThemeMode, id: ThemeKey) {
+        if id.appearance() != mode {
             return;
         }
         match mode {
@@ -118,23 +113,12 @@ impl AppearancePrefs {
         }
     }
 
-    /// Select a palette. A Classic palette also selects the Classic design
-    /// system; an Operational palette selects the Operational system. The
-    /// design-system control is the normal way to switch systems; this keeps
-    /// direct palette choices coherent too.
-    pub fn set_theme(&mut self, mode: ThemeMode, id: ThemeId) {
-        if id.appearance() != mode {
-            return;
-        }
-        self.design_system = id.design_system();
+    /// Select the palette for `mode`. The theme's own chrome travels with it.
+    pub fn set_theme(&mut self, mode: ThemeMode, id: ThemeKey) {
         self.store_theme(mode, id);
     }
 
-    pub fn set_design_system(&mut self, design_system: DesignSystem) {
-        self.design_system = design_system;
-    }
-
-    pub fn resolve(self, system: WindowAppearance) -> ThemeId {
+    pub fn resolve(self, system: WindowAppearance) -> ThemeKey {
         let mode = match self.mode {
             AppearanceMode::Light => ThemeMode::Light,
             AppearanceMode::Dark => ThemeMode::Dark,
@@ -166,7 +150,6 @@ impl AppearancePrefs {
             path,
             json!({
                 "mode": self.mode.as_str(),
-                "design_system": self.design_system.as_str(),
                 "light_theme": self.light_theme.as_str(),
                 "dark_theme": self.dark_theme.as_str(),
             })
@@ -175,21 +158,9 @@ impl AppearancePrefs {
     }
 }
 
-/// Every palette of `mode` in [`ThemeId::ALL`] order, across every design
-/// system. The settings dropdown filters this by the active system.
-pub fn themes_for(mode: ThemeMode) -> impl Iterator<Item = ThemeId> {
-    ThemeId::ALL
-        .into_iter()
-        .filter(move |id| id.appearance() == mode)
-}
-
-/// Every palette of `mode` that belongs to `design_system`, in [`ThemeId::ALL`]
-/// order: the set the Theme dropdown offers for that appearance.
-pub fn themes_for_system(
-    mode: ThemeMode,
-    design_system: DesignSystem,
-) -> impl Iterator<Item = ThemeId> {
-    themes_for(mode).filter(move |id| id.design_system() == design_system)
+/// Every theme of `mode`: built-ins first, then install-directory themes.
+pub fn themes_for(mode: ThemeMode) -> impl Iterator<Item = ThemeKey> {
+    keys_for(mode).into_iter()
 }
 
 pub fn appearance_prefs(cx: &App) -> AppearancePrefs {
@@ -236,61 +207,28 @@ mod tests {
     fn new_preferences_follow_system() {
         let prefs = AppearancePrefs::default();
         assert_eq!(prefs.mode, AppearanceMode::System);
-        assert_eq!(prefs.design_system, DesignSystem::Classic);
+        assert_eq!(prefs.theme(ThemeMode::Dark), ThemeKey::ORBIT_AZURE);
+        assert_eq!(prefs.theme(ThemeMode::Light), ThemeKey::ORBIT_AZURE_LIGHT);
     }
 
     #[test]
-    fn operational_is_opt_in_and_preserves_the_classic_choice() {
-        let mut prefs = AppearancePrefs {
-            mode: AppearanceMode::Dark,
-            dark_theme: ThemeId::Flexoki,
-            ..AppearancePrefs::default()
-        };
-        assert_eq!(prefs.resolve(WindowAppearance::Dark), ThemeId::Flexoki);
-        prefs.set_design_system(DesignSystem::Operational);
-        assert_eq!(
-            prefs.theme(ThemeMode::Dark),
-            ThemeId::Operational,
-            "Operational uses its own dark palette"
-        );
-        assert_eq!(
-            prefs.theme(ThemeMode::Light),
-            ThemeId::OperationalLight,
-            "Operational uses its own light palette"
-        );
-        prefs.set_design_system(DesignSystem::Classic);
-        assert_eq!(
-            prefs.theme(ThemeMode::Dark),
-            ThemeId::Flexoki,
-            "switching back restores the remembered Classic palette"
-        );
-    }
-
-    #[test]
-    fn design_system_is_persisted_and_parsed() {
-        let json = r#"{"mode":"light","design_system":"operational","light_theme":"orbit-paper","dark_theme":"orbit-cobalt"}"#;
+    fn operational_design_system_still_selects_operational() {
+        let json = r#"{"mode":"dark","design_system":"operational","light_theme":"orbit-paper","dark_theme":"flexoki"}"#;
         let prefs = AppearancePrefs::parse(json);
-        assert_eq!(prefs.mode, AppearanceMode::Light);
-        assert_eq!(prefs.design_system, DesignSystem::Operational);
-        assert_eq!(
-            prefs.resolve(WindowAppearance::Light),
-            ThemeId::OperationalLight
-        );
-        // The remembered Classic choice is not discarded by the system change.
-        let mut prefs = prefs;
-        prefs.set_design_system(DesignSystem::Classic);
-        assert_eq!(prefs.theme(ThemeMode::Light), ThemeId::OrbitPaper);
-        assert_eq!(prefs.theme(ThemeMode::Dark), ThemeId::OrbitCobalt);
+        assert_eq!(prefs.resolve(WindowAppearance::Dark), ThemeKey::OPERATIONAL);
+        assert_eq!(prefs.theme(ThemeMode::Light), ThemeKey::OPERATIONAL_LIGHT);
+        assert_eq!(prefs.theme(ThemeMode::Dark), ThemeKey::OPERATIONAL);
+        assert_ne!(prefs.theme(ThemeMode::Dark), ThemeKey::ORBIT_AZURE);
+        assert_ne!(prefs.theme(ThemeMode::Dark), ThemeKey::FLEXOKI);
     }
 
     #[test]
     fn legacy_operational_theme_key_selects_the_system() {
         let prefs = AppearancePrefs::parse("operational-light");
         assert_eq!(prefs.mode, AppearanceMode::Light);
-        assert_eq!(prefs.design_system, DesignSystem::Operational);
         assert_eq!(
             prefs.resolve(WindowAppearance::Light),
-            ThemeId::OperationalLight
+            ThemeKey::OPERATIONAL_LIGHT
         );
     }
 
@@ -300,7 +238,7 @@ mod tests {
             AppearancePrefs::parse("flexoki\n"),
             AppearancePrefs {
                 mode: AppearanceMode::Dark,
-                dark_theme: ThemeId::Flexoki,
+                dark_theme: ThemeKey::FLEXOKI,
                 ..AppearancePrefs::default()
             }
         );
@@ -312,7 +250,7 @@ mod tests {
             AppearancePrefs::parse("one-light"),
             AppearancePrefs {
                 mode: AppearanceMode::Light,
-                light_theme: ThemeId::OrbitLight,
+                light_theme: ThemeKey::ORBIT_LIGHT,
                 ..AppearancePrefs::default()
             }
         );
@@ -321,14 +259,14 @@ mod tests {
     #[test]
     fn system_resolves_normal_and_vibrant_appearances() {
         let prefs = AppearancePrefs {
-            dark_theme: ThemeId::Flexoki,
+            dark_theme: ThemeKey::FLEXOKI,
             ..AppearancePrefs::default()
         };
         for (system, expected) in [
-            (WindowAppearance::Light, ThemeId::OrbitAzureLight),
-            (WindowAppearance::VibrantLight, ThemeId::OrbitAzureLight),
-            (WindowAppearance::Dark, ThemeId::Flexoki),
-            (WindowAppearance::VibrantDark, ThemeId::Flexoki),
+            (WindowAppearance::Light, ThemeKey::ORBIT_AZURE_LIGHT),
+            (WindowAppearance::VibrantLight, ThemeKey::ORBIT_AZURE_LIGHT),
+            (WindowAppearance::Dark, ThemeKey::FLEXOKI),
+            (WindowAppearance::VibrantDark, ThemeKey::FLEXOKI),
         ] {
             assert_eq!(prefs.resolve(system), expected);
         }
@@ -337,12 +275,12 @@ mod tests {
     #[test]
     fn explicit_modes_ignore_system() {
         for (mode, expected) in [
-            (AppearanceMode::Light, ThemeId::OrbitAzureLight),
-            (AppearanceMode::Dark, ThemeId::Flexoki),
+            (AppearanceMode::Light, ThemeKey::ORBIT_AZURE_LIGHT),
+            (AppearanceMode::Dark, ThemeKey::FLEXOKI),
         ] {
             let prefs = AppearancePrefs {
                 mode,
-                dark_theme: ThemeId::Flexoki,
+                dark_theme: ThemeKey::FLEXOKI,
                 ..AppearancePrefs::default()
             };
             for system in [WindowAppearance::Light, WindowAppearance::Dark] {
@@ -357,13 +295,16 @@ mod tests {
             mode: AppearanceMode::Light,
             ..AppearancePrefs::default()
         };
-        prefs.set_theme(ThemeMode::Dark, ThemeId::OrbitDarker);
+        prefs.set_theme(ThemeMode::Dark, ThemeKey::ORBIT_DARKER);
         assert_eq!(
             prefs.resolve(WindowAppearance::Dark),
-            ThemeId::OrbitAzureLight
+            ThemeKey::ORBIT_AZURE_LIGHT
         );
         prefs.mode = AppearanceMode::Dark;
-        assert_eq!(prefs.resolve(WindowAppearance::Light), ThemeId::OrbitDarker);
+        assert_eq!(
+            prefs.resolve(WindowAppearance::Light),
+            ThemeKey::ORBIT_DARKER
+        );
     }
 
     #[test]
@@ -374,7 +315,7 @@ mod tests {
         assert_eq!(
             prefs,
             AppearancePrefs {
-                dark_theme: ThemeId::Flexoki,
+                dark_theme: ThemeKey::FLEXOKI,
                 ..AppearancePrefs::default()
             }
         );
@@ -395,7 +336,7 @@ mod tests {
         for mode in AppearanceMode::ALL {
             let prefs = AppearancePrefs {
                 mode,
-                dark_theme: ThemeId::OrbitCobalt,
+                dark_theme: ThemeKey::ORBIT_COBALT,
                 ..AppearancePrefs::default()
             };
             prefs.persist_to(&path).unwrap();
@@ -421,13 +362,13 @@ mod tests {
         cx.update(|cx| {
             let prefs = AppearancePrefs {
                 mode: AppearanceMode::Dark,
-                dark_theme: ThemeId::Flexoki,
+                dark_theme: ThemeKey::FLEXOKI,
                 ..AppearancePrefs::default()
             };
             cx.set_global(prefs);
-            cx.set_global(Theme::for_id(ThemeId::Flexoki));
+            cx.set_global(Theme::for_id(ThemeKey::FLEXOKI));
             apply_system_appearance(cx, WindowAppearance::Light);
-            assert_eq!(get(cx).theme_id, ThemeId::Flexoki);
+            assert_eq!(get(cx).theme_id, ThemeKey::FLEXOKI);
             assert_eq!(appearance_prefs(cx), prefs);
         });
     }
@@ -436,74 +377,37 @@ mod tests {
     fn dropdown_choices_partition_the_catalog() {
         let light: Vec<_> = themes_for(ThemeMode::Light).collect();
         let dark: Vec<_> = themes_for(ThemeMode::Dark).collect();
-        assert_eq!(
-            light,
-            vec![
-                ThemeId::OrbitLight,
-                ThemeId::OrbitAzureLight,
-                ThemeId::OrbitPaper,
-                ThemeId::OrbitContrast,
-                ThemeId::FlexokiLight,
-                ThemeId::OperationalLight,
-            ]
-        );
-        assert_eq!(
-            dark,
-            vec![
-                ThemeId::Orbit,
-                ThemeId::OrbitDarker,
-                ThemeId::OrbitCobalt,
-                ThemeId::OrbitAzure,
-                ThemeId::Flexoki,
-                ThemeId::Operational,
-            ]
-        );
-        assert_eq!(light.len() + dark.len(), ThemeId::ALL.len());
+        assert!(light.contains(&ThemeKey::ORBIT_LIGHT));
+        assert!(dark.contains(&ThemeKey::ORBIT));
+        assert!(light.iter().all(|id| id.appearance() == ThemeMode::Light));
+        assert!(dark.iter().all(|id| id.appearance() == ThemeMode::Dark));
+        assert_eq!(light.len() + dark.len(), crate::theme::bundled_keys().len());
         assert!(dark.iter().all(|id| id.appearance() == ThemeMode::Dark));
     }
 
     #[test]
-    fn dropdown_choices_are_filtered_by_design_system() {
-        let classic_dark: Vec<_> =
-            themes_for_system(ThemeMode::Dark, DesignSystem::Classic).collect();
-        assert_eq!(
-            classic_dark,
-            vec![
-                ThemeId::Orbit,
-                ThemeId::OrbitDarker,
-                ThemeId::OrbitCobalt,
-                ThemeId::OrbitAzure,
-                ThemeId::Flexoki,
-            ]
-        );
-        let operational_dark: Vec<_> =
-            themes_for_system(ThemeMode::Dark, DesignSystem::Operational).collect();
-        assert_eq!(operational_dark, vec![ThemeId::Operational]);
-        let operational_light: Vec<_> =
-            themes_for_system(ThemeMode::Light, DesignSystem::Operational).collect();
-        assert_eq!(operational_light, vec![ThemeId::OperationalLight]);
-    }
-
-    #[test]
     fn every_theme_round_trips_through_its_key() {
-        for id in ThemeId::ALL {
-            assert_eq!(ThemeId::parse(id.as_str()), Some(id));
+        for id in crate::theme::bundled_keys() {
+            assert_eq!(ThemeKey::parse(id.as_str()), Some(id));
         }
     }
 
     #[test]
     fn retired_theme_keys_still_load() {
-        assert_eq!(ThemeId::parse("dracula"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("nord"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("one-light"), Some(ThemeId::OrbitLight));
-        assert_eq!(ThemeId::parse("gruvbox-light"), Some(ThemeId::OrbitLight));
+        assert_eq!(ThemeKey::parse("dracula"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("nord"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("one-light"), Some(ThemeKey::ORBIT_LIGHT));
+        assert_eq!(
+            ThemeKey::parse("gruvbox-light"),
+            Some(ThemeKey::ORBIT_LIGHT)
+        );
     }
 
     #[gpui::test]
     fn system_changes_apply_live_and_preserve_ui_preferences(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let prefs = AppearancePrefs {
-                dark_theme: ThemeId::Flexoki,
+                dark_theme: ThemeKey::FLEXOKI,
                 ..AppearancePrefs::default()
             };
             cx.set_global(prefs);
@@ -511,12 +415,12 @@ mod tests {
                 reduce_motion: true,
                 ..super::super::UiPrefs::default()
             };
-            cx.set_global(Theme::for_id(ThemeId::Flexoki).with_ui(ui));
+            cx.set_global(Theme::for_id(ThemeKey::FLEXOKI).with_ui(ui));
             apply_system_appearance(cx, WindowAppearance::Light);
-            assert_eq!(get(cx).theme_id, ThemeId::OrbitAzureLight);
+            assert_eq!(get(cx).theme_id, ThemeKey::ORBIT_AZURE_LIGHT);
             assert_eq!(get(cx).ui, ui);
             apply_system_appearance(cx, WindowAppearance::Dark);
-            assert_eq!(get(cx).theme_id, ThemeId::Flexoki);
+            assert_eq!(get(cx).theme_id, ThemeKey::FLEXOKI);
             assert_eq!(appearance_prefs(cx), prefs);
         });
     }

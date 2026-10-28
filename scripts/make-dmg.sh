@@ -73,6 +73,8 @@ make_app() {
   mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
 
   cp "$binary" "$out/Contents/MacOS/$EXEC_NAME"
+  mkdir -p "$out/Contents/MacOS/themes"
+  cp "$ROOT/crates/orbit-pi/themes/"*.json "$out/Contents/MacOS/themes/"
   cp "$ICON" "$out/Contents/Resources/icon.icns"
   printf 'APPL????' > "$out/Contents/PkgInfo"
 

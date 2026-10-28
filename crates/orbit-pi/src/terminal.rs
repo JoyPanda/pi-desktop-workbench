@@ -2287,7 +2287,7 @@ mod tests {
     #[test]
     fn prepare_grid_resolves_colors_flags_and_selection() {
         let palette = test_palette();
-        let theme = Theme::for_id(theme::ThemeId::Orbit);
+        let theme = Theme::for_id(theme::ThemeKey::ORBIT);
         let font = test_font();
         let mut term = test_term(20, 3);
         let mut processor: Processor = Processor::new();
@@ -2317,7 +2317,7 @@ mod tests {
     #[test]
     fn prepare_grid_paints_the_selection() {
         let palette = test_palette();
-        let theme = Theme::for_id(theme::ThemeId::Orbit);
+        let theme = Theme::for_id(theme::ThemeKey::ORBIT);
         let font = test_font();
         let mut term = test_term(10, 2);
         let mut processor: Processor = Processor::new();
@@ -2349,7 +2349,7 @@ mod tests {
     #[test]
     fn selection_side_left_stops_before_the_cursor_cell() {
         let palette = test_palette();
-        let theme = Theme::for_id(theme::ThemeId::Orbit);
+        let theme = Theme::for_id(theme::ThemeKey::ORBIT);
         let font = test_font();
         let mut term = test_term(10, 2);
         let mut processor: Processor = Processor::new();
@@ -2379,7 +2379,7 @@ mod tests {
     #[test]
     fn prepare_grid_survives_a_right_prompt_round_trip() {
         let palette = test_palette();
-        let theme = Theme::for_id(theme::ThemeId::Orbit);
+        let theme = Theme::for_id(theme::ThemeKey::ORBIT);
         let font = test_font();
         let mut term = test_term(20, 3);
         let mut processor: Processor = Processor::new();
@@ -2406,7 +2406,7 @@ mod tests {
     #[test]
     fn prepare_grid_places_the_cursor_and_tracks_focus() {
         let palette = test_palette();
-        let theme = Theme::for_id(theme::ThemeId::Orbit);
+        let theme = Theme::for_id(theme::ThemeKey::ORBIT);
         let font = test_font();
         let mut term = test_term(10, 2);
         let mut processor: Processor = Processor::new();
@@ -2441,7 +2441,7 @@ mod tests {
     #[test]
     fn prepare_grid_reports_scrollback_position() {
         let palette = test_palette();
-        let theme = Theme::for_id(theme::ThemeId::Orbit);
+        let theme = Theme::for_id(theme::ThemeKey::ORBIT);
         let font = test_font();
         let mut term = test_term(10, 2);
         let mut processor: Processor = Processor::new();
@@ -2548,7 +2548,7 @@ mod tests {
     #[gpui::test]
     fn typing_reaches_the_shell(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
 
         // `cat` echoes stdin verbatim, so anything that reaches the PTY comes
         // back on the grid — a keystroke that never arrives leaves it empty.
@@ -2606,7 +2606,7 @@ mod tests {
     #[gpui::test]
     fn opening_the_panel_and_typing_reaches_the_shell(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
         // The app's real keymap: a global binding that matched typed letters
         // would swallow them here exactly as it does in the running app.
         cx.update(|_, cx| crate::bind_keys(cx));
@@ -2681,7 +2681,7 @@ mod tests {
         let cx = cx.add_empty_window();
         // `TerminalView::render` reads the theme global, which only `init`
         // installs in the app. A test sets it directly to avoid disk prefs.
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
 
         let directory = std::env::temp_dir();
         let _ = cx.draw(
@@ -2742,7 +2742,7 @@ mod tests {
     #[gpui::test]
     fn new_tabs_keep_the_earlier_shells_alive(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
 
         let panel = panel_with_tabs(cx, 2, std::env::temp_dir());
         cx.update(|_, cx| {
@@ -2767,7 +2767,7 @@ mod tests {
     #[gpui::test]
     fn hiding_the_panel_deactivates_every_tab(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
 
         let panel = panel_with_tabs(cx, 2, std::env::temp_dir());
         cx.update(|window, cx| panel.update(cx, |panel, cx| panel.toggle(window, cx)));
@@ -2792,7 +2792,7 @@ mod tests {
     #[gpui::test]
     fn closing_a_tab_selects_its_neighbour(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
 
         let panel = panel_with_tabs(cx, 3, std::env::temp_dir());
         let third = cx.update(|_, cx| panel.read(cx).tabs[2].entity_id());
@@ -2819,7 +2819,7 @@ mod tests {
     #[gpui::test]
     fn closing_the_last_tab_closes_the_panel(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
 
         let panel = panel_with_tabs(cx, 1, std::env::temp_dir());
         assert!(cx.update(|_, cx| panel.read(cx).is_open()));
@@ -2835,7 +2835,7 @@ mod tests {
     #[gpui::test]
     fn cycling_tabs_wraps_at_the_ends(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
 
         let panel = panel_with_tabs(cx, 3, std::env::temp_dir());
         cx.update(|window, cx| panel.update(cx, |panel, cx| panel.select_tab(0, window, cx)));
@@ -2868,7 +2868,7 @@ mod tests {
     #[gpui::test]
     fn switching_workspaces_spares_running_shells(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
 
         let first = std::env::temp_dir();
         let second = PathBuf::from("/tmp");
@@ -2934,7 +2934,7 @@ mod tests {
     #[gpui::test]
     fn tab_labels_fall_back_to_the_folder(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(theme::ThemeKey::ORBIT)));
         let (view, label) = cx.update(|_, cx| {
             let view = cx.new(|cx| TerminalView::new(PathBuf::from("/tmp/orbit-tab-label"), cx));
             let label = view.read(cx).label().to_string();

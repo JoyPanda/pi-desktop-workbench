@@ -2653,10 +2653,7 @@ impl GitPanel {
                     } else {
                         commit_message::Scope::Staged
                     };
-                    let rows: Vec<_> = rows
-                        .into_iter()
-                        .filter(|row| scope.matches(row))
-                        .collect();
+                    let rows: Vec<_> = rows.into_iter().filter(|row| scope.matches(row)).collect();
                     if rows.is_empty() {
                         return Err(tr!("git.no_staged_changes"));
                     }
@@ -2694,10 +2691,8 @@ impl GitPanel {
                             return;
                         }
                         match warning {
-                            Some(err) => panel.set_failure(tr!(
-                                "git_panel.commit_message_fallback",
-                                error = err
-                            )),
+                            Some(err) => panel
+                                .set_failure(tr!("git_panel.commit_message_fallback", error = err)),
                             None => panel.set_status(tr!("git_panel.commit_message_ready")),
                         }
                     }

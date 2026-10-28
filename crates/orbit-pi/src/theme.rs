@@ -2,12 +2,11 @@
 //!
 //! Colors are semantic roles (backgrounds, text, borders, transcript
 //! surfaces) rather than raw steps, so every paint site reads from one
-//! place. A [`ThemeId`] names a palette; [`DesignSystem`] names a visual
-//! language; [`AppearancePrefs`] chooses the system, which light or dark
-//! palette to use, and optionally follows the system appearance. Classic is
-//! the existing catalog; Operational is the opt-in Restrained Operational
-//! Minimalism layer. The UI face is Zed's bundled IBM Plex Sans
-//! (`.ZedSans`); code surfaces use Zed's Lilex (`.ZedMono`).
+//! place. A [`ThemeKey`] names a palette loaded by [`registry`]; [`Chrome`]
+//! chooses flat or raised geometry; [`AppearancePrefs`] chooses which light
+//! or dark palette to use, and optionally follows the system appearance.
+//! The UI face is Zed's bundled IBM Plex Sans (`.ZedSans`); code surfaces
+//! use Zed's Lilex (`.ZedMono`).
 
 use std::path::PathBuf;
 use std::sync::{OnceLock, RwLock};
@@ -20,282 +19,39 @@ use crate::highlight::TokenClass;
 mod appearance;
 pub use appearance::*;
 
+mod registry;
+pub use registry::{bundled_keys, keys_for, load_install_themes, Chrome, ThemeKey, TypeScale};
+
 /// Zed's design tokens (spacing, type, icons, buttons, elevation, motion),
 /// resolved through this theme.
 pub mod tokens;
 
 /// Dark or light appearance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThemeMode {
     Dark,
     Light,
 }
 
-/// A visual language, independent of light/dark appearance. Existing palettes
-/// are [`DesignSystem::Classic`]; [`DesignSystem::Operational`] is the opt-in
-/// Restrained Operational Minimalism system. The choice is persisted with the
-/// appearance preferences, so switching systems restores the previous palette
-/// choice within each system.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum DesignSystem {
-    /// Orbit's existing palette and token geometry. The default; unchanged.
-    #[default]
-    Classic,
-    /// Near-black neutral surfaces, lime interaction accent, tighter radii,
-    /// flatter elevation, and 11px captions.
-    Operational,
-}
-
-impl DesignSystem {
-    pub const ALL: [Self; 2] = [Self::Classic, Self::Operational];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Classic => "classic",
-            Self::Operational => "operational",
-        }
-    }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "classic" | "legacy" | "orbit" => Some(Self::Classic),
-            "operational" | "restrained" | "operational-minimalism" => Some(Self::Operational),
-            _ => None,
-        }
-    }
-
-    /// The palette this system uses for `mode`.
-    pub fn theme_id(self, mode: ThemeMode) -> ThemeId {
-        match (self, mode) {
-            (Self::Classic, ThemeMode::Dark) => ThemeId::OrbitAzure,
-            (Self::Classic, ThemeMode::Light) => ThemeId::OrbitAzureLight,
-            (Self::Operational, ThemeMode::Dark) => ThemeId::Operational,
-            (Self::Operational, ThemeMode::Light) => ThemeId::OperationalLight,
-        }
-    }
-}
-
-/// One of the selectable Orbit palettes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThemeId {
-    Orbit,
-    OrbitLight,
-    OrbitPaper,
-    OrbitContrast,
-    OrbitDarker,
-    /// Graphite canvas, cool ink, and an electric-blue accent. Formerly
-    /// `OrbitMinimal`; renamed so "minimal" names the interface, never a hue.
-    OrbitCobalt,
-    /// The blue redesign that briefly held the `Orbit` name: charcoal canvas,
-    /// neutral surfaces, restrained blue accent, accent-filled primary buttons.
-    OrbitAzure,
-    /// The one ported editor theme that stays: warm paper ink on a near-black
-    /// ground, with a light counterpart.
-    Flexoki,
-    FlexokiLight,
-    /// Light counterpart to [`Self::OrbitAzure`].
-    OrbitAzureLight,
-    /// Restrained Operational Minimalism, dark: near-black canvas, neutral
-    /// charcoal layers, lime interaction accent.
-    Operational,
-    /// Restrained Operational Minimalism, light: warm off-white canvas, white
-    /// panels, olive interaction accent.
-    OperationalLight,
-}
-
-impl ThemeId {
-    /// Every palette the app ships, dark first, in the order the settings
-    /// dropdown paints them. The settings dropdown filters this list to the
-    /// active [`DesignSystem`]; this catalog stays complete so palette
-    /// invariants cover every shipped color set.
-    pub const ALL: [ThemeId; 12] = [
-        Self::Orbit,
-        Self::OrbitDarker,
-        Self::OrbitCobalt,
-        Self::OrbitAzure,
-        Self::Flexoki,
-        Self::Operational,
-        Self::OrbitLight,
-        Self::OrbitAzureLight,
-        Self::OrbitPaper,
-        Self::OrbitContrast,
-        Self::FlexokiLight,
-        Self::OperationalLight,
-    ];
-
-    /// Persisted key; also accepts legacy theme names (mapped to Orbit).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Orbit => "orbit",
-            Self::OrbitLight => "orbit-light",
-            Self::OrbitPaper => "orbit-paper",
-            Self::OrbitContrast => "orbit-contrast",
-            Self::OrbitDarker => "orbit-darker",
-            Self::OrbitCobalt => "orbit-cobalt",
-            Self::OrbitAzure => "orbit-azure",
-            Self::Flexoki => "flexoki",
-            Self::FlexokiLight => "flexoki-light",
-            Self::OrbitAzureLight => "orbit-azure-light",
-            Self::Operational => "operational",
-            Self::OperationalLight => "operational-light",
-        }
-    }
-
-    /// The design system this palette belongs to.
-    pub fn design_system(self) -> DesignSystem {
-        match self {
-            Self::Operational | Self::OperationalLight => DesignSystem::Operational,
-            _ => DesignSystem::Classic,
-        }
-    }
-
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw.trim() {
-            // Current keys, plus legacy dark theme names → Orbit.
-            "orbit"
-            | "dark"
-            | "one-dark"
-            | "zedokai"
-            | "zedokai-darker"
-            | "zedokai-filter-octagon"
-            | "zedokai-darker-filter-octagon"
-            | "zedokai-filter-spectrum"
-            | "zedokai-darker-filter-spectrum" => Some(Self::Orbit),
-            // Current key, plus the legacy generic light aliases → Orbit Light.
-            "orbit-light" | "light" => Some(Self::OrbitLight),
-            "orbit-paper" => Some(Self::OrbitPaper),
-            "orbit-contrast" | "orbit-high-contrast" => Some(Self::OrbitContrast),
-            "orbit-darker" => Some(Self::OrbitDarker),
-            // Graphite-and-blue dark. `orbit-minimal` is the pre-rename key,
-            // and the rest name the palette's origin; all three still load.
-            "orbit-cobalt" | "orbit-minimal" | "codex" | "codex-dark" => Some(Self::OrbitCobalt),
-            "orbit-azure" | "azure" => Some(Self::OrbitAzure),
-            "orbit-azure-light" | "azure-light" => Some(Self::OrbitAzureLight),
-            // Retired editor themes. Their saved keys still load: dark ones
-            // land on Orbit, light ones on Orbit Light.
-            "vague"
-            | "batsignal-dark"
-            | "batsignal"
-            | "ashwood"
-            | "obsidian-dark"
-            | "obsidian"
-            | "matte-black"
-            | "matte-black-theme"
-            | "adwaita-pastel-dark"
-            | "adwaita-pastel"
-            | "ashen"
-            | "discord-dark"
-            | "dark-discord"
-            | "discord"
-            | "catppuccin"
-            | "catppuccin-mocha"
-            | "catppuccin-dark"
-            | "dracula"
-            | "dracula-dark"
-            | "gruvbox"
-            | "gruvbox-dark"
-            | "nord"
-            | "nord-dark"
-            | "tokyo-night"
-            | "tokyonight"
-            | "tokyo-night-storm"
-            | "one-dark-pro"
-            | "onedarkpro"
-            | "one-dark-pro-max"
-            | "onedarkpromax"
-            | "odpm"
-            | "monokai"
-            | "solarized-dark"
-            | "solarized"
-            | "ayu-dark"
-            | "ayu"
-            | "kanagawa"
-            | "kanagawa-wave"
-            | "aura"
-            | "aura-dark"
-            | "carbonfox"
-            | "carbonfox-dark"
-            | "fields-of-the-shire"
-            | "fields-of-the-shire-dark"
-            | "jetbrains"
-            | "jetbrains-dark"
-            | "mono"
-            | "mono-plus"
-            | "night-owl"
-            | "nightowl"
-            | "night-owl-dark"
-            | "open-chamber"
-            | "openchamber"
-            | "vesper"
-            | "vitesse" => Some(Self::Orbit),
-            "catppuccin-latte" | "catppuccin-light" | "latte" | "solarized-light" | "one-light"
-            | "one-light-pro" | "nord-light" | "nord-snow-storm" | "gruvbox-light"
-            | "tokyo-night-light" | "tokyonight-light" | "tokyo-night-day" | "ayu-light" => {
-                Some(Self::OrbitLight)
-            }
-            "flexoki" | "flexoki-dark" => Some(Self::Flexoki),
-            "flexoki-light" => Some(Self::FlexokiLight),
-            "operational" | "operational-dark" | "operational-minimalism" => {
-                Some(Self::Operational)
-            }
-            "operational-light" | "operational-minimalism-light" => Some(Self::OperationalLight),
-            _ => None,
-        }
-    }
-
-    /// Human label for the settings dropdown.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Orbit => "Orbit",
-            Self::OrbitLight => "Orbit Light",
-            Self::OrbitPaper => "Orbit Paper",
-            Self::OrbitContrast => "Orbit Contrast",
-            Self::OrbitDarker => "Orbit Darker",
-            Self::OrbitCobalt => "Orbit Cobalt",
-            Self::OrbitAzure => "Orbit Azure",
-            Self::Flexoki => "Flexoki",
-            Self::FlexokiLight => "Flexoki Light",
-            Self::OrbitAzureLight => "Orbit Azure Light",
-            Self::Operational => "Operational",
-            Self::OperationalLight => "Operational Light",
-        }
-    }
-
-    pub fn appearance(self) -> ThemeMode {
-        match self {
-            Self::OrbitLight
-            | Self::OrbitAzureLight
-            | Self::OrbitPaper
-            | Self::OrbitContrast
-            | Self::FlexokiLight
-            | Self::OperationalLight => ThemeMode::Light,
-            Self::Orbit
-            | Self::OrbitAzure
-            | Self::OrbitDarker
-            | Self::OrbitCobalt
-            | Self::Flexoki
-            | Self::Operational => ThemeMode::Dark,
-        }
-    }
-}
-
 /// Semantic palette. Copy so list closures and hover styles can capture it
 /// without a lifetime.
 ///
-/// The first group is the canonical design-system surface: one semantic role
-/// per meaning, resolved from the active [`ThemeId`] and [`ThemeMode`]. Paint
-/// sites should read these names rather than raw color values. The remaining
-/// fields are specialized roles (code washes, syntax, selection washes) that
-/// do not belong to the general surface ramp.
+/// The first group is the canonical surface: one semantic role per meaning,
+/// resolved from the active [`ThemeKey`]. Paint sites should read these names
+/// rather than raw color values. The remaining fields are specialized roles
+/// (code washes, syntax, selection washes, conversation output) that do not
+/// belong to the general surface ramp.
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
-    pub theme_id: ThemeId,
+    pub theme_id: ThemeKey,
     pub mode: ThemeMode,
-    /// Active visual language. Existing palettes resolve to
-    /// [`DesignSystem::Classic`], so their paint is unchanged.
-    pub design_system: DesignSystem,
+    /// Flat or raised geometry. Comes from the theme file, not a settings row.
+    pub chrome: Chrome,
     /// UI customization (General settings): language + font sizes.
     pub ui: UiPrefs,
+    /// Conversation type scale. Body, headings, and aside are authored here
+    /// and scaled by the UI font size. Code is scaled by the editor font size.
+    pub type_scale: TypeScale,
 
     // ── Surfaces ────────────────────────────────────────────────────────
     /// Root window and workspace canvas.
@@ -384,9 +140,27 @@ pub struct Theme {
     pub syn_literal: Hsla,
     pub syn_meta: Hsla,
     pub syn_operator: Hsla,
-    /// Inline-code chip wash. The wash is the accent at low alpha; the
-    /// glyphs ride the body ink, so code stays distinct from links.
+    /// Inline-code chip wash. The wash is the accent at low alpha unless the
+    /// theme sets `output.inlineCodeBg`.
     pub inline_code_bg: Hsla,
+    /// Set only when the theme file names an inline-code foreground. Paint
+    /// falls back to the surrounding prose ink when this is `None`.
+    pub output_inline_fg: Option<Hsla>,
+    pub output_prose: Hsla,
+    pub output_heading: Hsla,
+    pub output_link: Hsla,
+    pub output_code_bg: Hsla,
+    pub output_code_fg: Hsla,
+    pub output_code_header_bg: Hsla,
+    pub output_code_header_fg: Hsla,
+    pub output_user_bg: Hsla,
+    pub output_user_fg: Hsla,
+    pub output_quote_bg: Hsla,
+    pub output_quote_border: Hsla,
+    pub output_quote_fg: Hsla,
+    /// Syntax keyword. Shell command tokens use the same color. Omitted
+    /// keywords fall back to [`Self::accent_text`].
+    pub syn_keyword: Hsla,
     pub shadow_contact: Hsla,
 }
 
@@ -547,7 +321,7 @@ impl UiPrefs {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::for_id(ThemeId::OrbitAzure)
+        Self::for_id(ThemeKey::ORBIT_AZURE)
     }
 }
 
@@ -827,658 +601,24 @@ pub fn font_prefs() -> FontPrefs {
     }
 }
 
-/// The raw color tokens for one palette. Derived washes (hover overlay,
-/// strong border, inline-code wash) and shadows are computed from these in
-/// [`Theme::build`], so a palette only carries its actual colors.
-#[derive(Clone, Copy)]
-struct Palette {
-    background: u32,
-    surface: u32,
-    surface_secondary: u32,
-    elevated: u32,
-    hover: u32,
-    active: u32,
-    selection: u32,
-    /// Selected navigation/list row wash. Classic palettes mirror `selection`.
-    selected_surface: u32,
-    selection_fg: u32,
-    border: u32,
-    border_subtle: u32,
-    text: u32,
-    text_secondary: u32,
-    text_muted: u32,
-    text_disabled: u32,
-    success: u32,
-    error: u32,
-    error_hover: u32,
-    error_fg: u32,
-    accent: u32,
-    accent_hover: u32,
-    accent_pressed: u32,
-    accent_fg: u32,
-    accent_text: u32,
-    focus_ring: u32,
-    /// Primary-action button fill, separate from the identity accent.
-    action: u32,
-    action_hover: u32,
-    action_pressed: u32,
-    action_fg: u32,
-    warning: u32,
-    info: u32,
-    assistant_text: u32,
-    code_bg: u32,
-    code_text: u32,
-    syn_string: u32,
-    syn_number: u32,
-    syn_function: u32,
-    syn_type: u32,
-    syn_comment: u32,
-    syn_literal: u32,
-    syn_meta: u32,
-    syn_operator: u32,
-}
-
-/// Orbit dark: near-black canvas, neutral charcoal surfaces, the ember
-/// interaction accent, and light primary buttons with dark ink. This is the
-/// default dark appearance; Orbit Azure carries the blue design.
-const ORBIT: Palette = Palette {
-    background: 0x1A1A1A,
-    surface: 0x181818,
-    surface_secondary: 0x1E1E1E,
-    elevated: 0x232323,
-    hover: 0x262626,
-    active: 0x2A2A2A,
-    selection: 0x282828,
-    selected_surface: 0x282828,
-    selection_fg: 0xE2E2E2,
-    border: 0x2A2A2A,
-    border_subtle: 0x232323,
-    text: 0xE2E2E2,
-    text_secondary: 0xA3A3A3,
-    text_muted: 0x8A8A8A,
-    text_disabled: 0x606060,
-    success: 0x62C987,
-    error: 0xE2726A,
-    error_hover: 0xEC8A82,
-    error_fg: 0x17181C,
-    accent: 0xE2795B,
-    accent_hover: 0xEC8B72,
-    accent_pressed: 0xD9634A,
-    accent_fg: 0x17181C,
-    accent_text: 0xE2795B,
-    focus_ring: 0xE2E2E2,
-    action: 0xE7E9EC,
-    action_hover: 0xF2F3F6,
-    action_pressed: 0xDDE0E4,
-    action_fg: 0x17181C,
-    warning: 0xE0B36A,
-    info: 0x7FA7D9,
-    assistant_text: 0xE2E2E2,
-    code_bg: 0x151515,
-    code_text: 0xE2E2E2,
-    syn_string: 0x62C987,
-    syn_number: 0xE0B36A,
-    syn_function: 0xE2E2E2,
-    syn_type: 0xE2E2E2,
-    syn_comment: 0xA3A3A3,
-    syn_literal: 0xE2795B,
-    syn_meta: 0xE2726A,
-    syn_operator: 0x8A8A8A,
-};
-
-/// Orbit Darker ("Premium Graphite"): a deeper cut of Orbit — near-black
-/// graphite surfaces, lighter hairlines, restrained ember accent.
-const ORBIT_DARKER: Palette = Palette {
-    background: 0x111111,
-    surface: 0x0D0D0D,
-    surface_secondary: 0x131313,
-    elevated: 0x191919,
-    hover: 0x1E1E1E,
-    active: 0x232323,
-    selection: 0x222A38,
-    selected_surface: 0x222A38,
-    selection_fg: 0xF0F0F0,
-    border: 0x252525,
-    border_subtle: 0x1B1B1B,
-    text: 0xE8E8E8,
-    text_secondary: 0xA1A1A1,
-    text_muted: 0x8C8C8C,
-    text_disabled: 0x5A5A5A,
-    success: 0x69C58A,
-    error: 0xE16F68,
-    error_hover: 0xEB827A,
-    error_fg: 0x111214,
-    accent: 0xE07A5F,
-    accent_hover: 0xEA8A72,
-    accent_pressed: 0xC9644B,
-    accent_fg: 0x111214,
-    accent_text: 0xE9A288,
-    focus_ring: 0xE9A288,
-    action: 0xE9EAEC,
-    action_hover: 0xFFFFFF,
-    action_pressed: 0xDCDEE1,
-    action_fg: 0x111214,
-    warning: 0xDDB56A,
-    info: 0x6EA0D8,
-    assistant_text: 0xE4E4E4,
-    code_bg: 0x0C0C0C,
-    code_text: 0xE4E4E4,
-    syn_string: 0x69C58A,
-    syn_number: 0xDDB56A,
-    syn_function: 0xE4E4E4,
-    syn_type: 0xD7D7D7,
-    syn_comment: 0x8D8D8D,
-    syn_literal: 0xE07A5F,
-    syn_meta: 0xE16F68,
-    syn_operator: 0x8A8A8A,
-};
-
-/// Orbit Cobalt (formerly "Orbit Minimal", codex-inspired): a deep graphite
-/// canvas with cool-gray ink and an electric-blue interaction accent.
-const ORBIT_COBALT: Palette = Palette {
-    background: 0x181818,
-    surface: 0x121212,
-    surface_secondary: 0x171717,
-    elevated: 0x1E1E1E,
-    hover: 0x242424,
-    active: 0x292929,
-    selection: 0x1D2B3F,
-    selected_surface: 0x1D2B3F,
-    selection_fg: 0xF1F1F1,
-    border: 0x2A2A2A,
-    border_subtle: 0x202020,
-    text: 0xF1F1F1,
-    text_secondary: 0xA7A7A7,
-    text_muted: 0x8E8E8E,
-    text_disabled: 0x5C5C5C,
-    success: 0x40C977,
-    error: 0xFA423E,
-    error_hover: 0xFF625E,
-    error_fg: 0x111111,
-    accent: 0x339CFF,
-    accent_hover: 0x4FA8FF,
-    accent_pressed: 0x2B8AE6,
-    accent_fg: 0x111111,
-    accent_text: 0x5EAEFF,
-    focus_ring: 0x6EA0FF,
-    action: 0xF1F1F1,
-    action_hover: 0xFFFFFF,
-    action_pressed: 0xE4E4E4,
-    action_fg: 0x111111,
-    warning: 0xD9B45D,
-    info: 0x65A4E8,
-    assistant_text: 0xE8E8E8,
-    code_bg: 0x101010,
-    code_text: 0xE7E7E7,
-    // Syntax keeps the editor's cool-blue keywords with semantic green/amber.
-    syn_string: 0x40C977,
-    syn_number: 0xD9B45D,
-    syn_function: 0xFFFFFF,
-    syn_type: 0xD7D7D7,
-    syn_comment: 0x888888,
-    syn_literal: 0x5EAEFF,
-    syn_meta: 0xF06A6A,
-    syn_operator: 0x8A8A8A,
-};
-
-/// Orbit Azure: charcoal canvas with a restrained blue interaction accent —
-/// the blue counterpart to Orbit. Primary buttons ride the accent.
-const ORBIT_AZURE: Palette = Palette {
-    background: 0x181818,
-    surface: 0x1F1F1F,
-    surface_secondary: 0x242424,
-    elevated: 0x292929,
-    hover: 0x303030,
-    active: 0x363636,
-    // One step below the reference #303A4B so accent-colored labels on the
-    // selected row still clear 4.5:1.
-    selection: 0x2F3949,
-    selected_surface: 0x2F3949,
-    selection_fg: 0xE5E5E5,
-    border: 0x343434,
-    border_subtle: 0x292929,
-    text: 0xE5E5E5,
-    text_secondary: 0xA3A3A3,
-    text_muted: 0x909090,
-    text_disabled: 0x606060,
-    success: 0x4CAF86,
-    error: 0xE47478,
-    error_hover: 0xE98A8D,
-    error_fg: 0x171717,
-    accent: 0x286CF0,
-    accent_hover: 0x2D6FEF,
-    accent_pressed: 0x1F5DD8,
-    accent_fg: 0xFFFFFF,
-    accent_text: 0x6EA0FF,
-    focus_ring: 0x6EA0FF,
-    action: 0x286CF0,
-    action_hover: 0x2D6FEF,
-    action_pressed: 0x1F5DD8,
-    action_fg: 0xFFFFFF,
-    warning: 0xE5AD55,
-    info: 0x65A4E8,
-    assistant_text: 0xE5E5E5,
-    code_bg: 0x151515,
-    code_text: 0xE5E5E5,
-    syn_string: 0x4CAF86,
-    syn_number: 0xE5AD55,
-    syn_function: 0xE5E5E5,
-    syn_type: 0xE5E5E5,
-    syn_comment: 0xA3A3A3,
-    syn_literal: 0xE2795B,
-    syn_meta: 0xE16D70,
-    syn_operator: 0x8A8A8A,
-};
-
-/// Orbit Azure Light: the same blue on a cool near-white canvas. Primary
-/// buttons ride the accent, so hover and pressed step deeper.
-const ORBIT_AZURE_LIGHT: Palette = Palette {
-    background: 0xF5F5F5,
-    surface: 0xFFFFFF,
-    surface_secondary: 0xF8F8F8,
-    elevated: 0xF0F0F0,
-    hover: 0xEBEBEB,
-    active: 0xE2E2E2,
-    selection: 0xE8EEFA,
-    selected_surface: 0xE8EEFA,
-    selection_fg: 0x171717,
-    border: 0xE5E5E5,
-    border_subtle: 0xEEEEEE,
-    text: 0x171717,
-    text_secondary: 0x525252,
-    text_muted: 0x696969,
-    text_disabled: 0xA3A3A3,
-    success: 0x247A56,
-    error: 0xC03940,
-    error_hover: 0xB83239,
-    error_fg: 0xFFFFFF,
-    accent: 0x286CF0,
-    accent_hover: 0x1F5DD8,
-    accent_pressed: 0x194BB5,
-    accent_fg: 0xFFFFFF,
-    accent_text: 0x1F5DD8,
-    focus_ring: 0x286CF0,
-    action: 0x286CF0,
-    action_hover: 0x1F5DD8,
-    action_pressed: 0x194BB5,
-    action_fg: 0xFFFFFF,
-    warning: 0x94600D,
-    info: 0x2864A8,
-    assistant_text: 0x171717,
-    code_bg: 0xEEEEEE,
-    code_text: 0x171717,
-    syn_string: 0x297E48,
-    syn_number: 0x99631E,
-    syn_function: 0x171717,
-    syn_type: 0x171717,
-    syn_comment: 0x525252,
-    syn_literal: 0xB55035,
-    syn_meta: 0xC03940,
-    syn_operator: 0x5F5F5F,
-};
-
-/// Orbit Light: the ember accent on a warm off-white canvas, with dark
-/// primary buttons. Orbit Azure Light carries the blue design.
-const ORBIT_LIGHT: Palette = Palette {
-    background: 0xF6F5F6,
-    surface: 0xF3F3F3,
-    surface_secondary: 0xEFEFEF,
-    elevated: 0xECECEC,
-    hover: 0xE8E8E8,
-    active: 0xE2E2E2,
-    selection: 0xE5E5E5,
-    selected_surface: 0xE5E5E5,
-    selection_fg: 0x242424,
-    border: 0xE2E2E2,
-    border_subtle: 0xECECEC,
-    text: 0x242424,
-    text_secondary: 0x666666,
-    text_muted: 0x696969,
-    text_disabled: 0xA3A3A3,
-    success: 0x277845,
-    error: 0xB94038,
-    error_hover: 0xB83239,
-    error_fg: 0xFFFFFF,
-    accent: 0xB55035,
-    accent_hover: 0xA8482B,
-    accent_pressed: 0x8F3A22,
-    accent_fg: 0xFFFFFF,
-    accent_text: 0xA4462C,
-    focus_ring: 0x242424,
-    action: 0x202227,
-    action_hover: 0x34363C,
-    action_pressed: 0x171A1E,
-    action_fg: 0xF8F8F9,
-    warning: 0x915E1C,
-    info: 0x2C6E9B,
-    assistant_text: 0x242424,
-    code_bg: 0xE6E6E6,
-    code_text: 0x242424,
-    syn_string: 0x297E48,
-    syn_number: 0x99631E,
-    syn_function: 0x242424,
-    syn_type: 0x242424,
-    syn_comment: 0x666666,
-    syn_literal: 0xB55035,
-    syn_meta: 0xC3433B,
-    syn_operator: 0x6F6F6F,
-};
-
-/// Orbit Paper: a cooler, neutral paper canvas in the Orbit grammar — a light
-/// counterpart to Orbit's warm off-white, with the same ember accent.
-const ORBIT_PAPER: Palette = Palette {
-    background: 0xF7F7F8,
-    surface: 0xF1F1F3,
-    surface_secondary: 0xF4F4F6,
-    elevated: 0xE9E9EC,
-    hover: 0xE3E3E7,
-    active: 0xDBDBE0,
-    selection: 0xE3E9F7,
-    selected_surface: 0xE3E9F7,
-    selection_fg: 0x232327,
-    border: 0xE0E0E4,
-    border_subtle: 0xE8E8EB,
-    text: 0x232327,
-    text_secondary: 0x5A5A62,
-    text_muted: 0x686870,
-    text_disabled: 0xA0A0A8,
-    success: 0x277644,
-    error: 0xB63F37,
-    error_hover: 0xB83239,
-    error_fg: 0xF7F7F8,
-    accent: 0xB55035,
-    accent_hover: 0xB24E30,
-    accent_pressed: 0x9A3F27,
-    accent_fg: 0xF7F7F8,
-    accent_text: 0x9A3F27,
-    focus_ring: 0xB55035,
-    action: 0xB55035,
-    action_hover: 0xB24E30,
-    action_pressed: 0x9A3F27,
-    action_fg: 0xF7F7F8,
-    warning: 0x8F5D1C,
-    info: 0x2864A8,
-    assistant_text: 0x232327,
-    code_bg: 0xEDEDF0,
-    code_text: 0x232327,
-    syn_string: 0x297E48,
-    syn_number: 0x99631E,
-    syn_function: 0x232327,
-    syn_type: 0x232327,
-    syn_comment: 0x62626A,
-    syn_literal: 0xB55035,
-    syn_meta: 0xC3433B,
-    syn_operator: 0x5F5F5F,
-};
-
-/// Orbit Contrast: a near-white, high-contrast light palette with deeper ink
-/// and a stronger hairline, for maximum legibility.
-const ORBIT_CONTRAST: Palette = Palette {
-    background: 0xFFFFFF,
-    surface: 0xF7F7F7,
-    surface_secondary: 0xF5F5F5,
-    elevated: 0xEDEDED,
-    hover: 0xE6E6E6,
-    active: 0xDBDBDB,
-    selection: 0xE4EBFA,
-    selected_surface: 0xE4EBFA,
-    selection_fg: 0x0F0F0F,
-    border: 0xC9C9C9,
-    border_subtle: 0xE2E2E2,
-    text: 0x0F0F0F,
-    text_secondary: 0x454545,
-    text_muted: 0x666666,
-    text_disabled: 0x8A8A8A,
-    success: 0x1E6B39,
-    error: 0xB02A22,
-    error_hover: 0xC84037,
-    error_fg: 0xFFFFFF,
-    accent: 0xA8431F,
-    accent_hover: 0xBA5430,
-    accent_pressed: 0x8E3214,
-    accent_fg: 0xFFFFFF,
-    accent_text: 0x8E3214,
-    focus_ring: 0xA8431F,
-    action: 0xA8431F,
-    action_hover: 0xBA5430,
-    action_pressed: 0x96391A,
-    action_fg: 0xFFFFFF,
-    warning: 0x8A5310,
-    info: 0x1F5A99,
-    assistant_text: 0x0F0F0F,
-    code_bg: 0xF2F2F2,
-    code_text: 0x0F0F0F,
-    syn_string: 0x1E6B39,
-    syn_number: 0x8A5310,
-    syn_function: 0x0F0F0F,
-    syn_type: 0x0F0F0F,
-    syn_comment: 0x5A5A5A,
-    syn_literal: 0xA8431F,
-    syn_meta: 0xB02A22,
-    syn_operator: 0x5F5F5F,
-};
-
-/// Flexoki Light — the canonical light counterpart to Flexoki.
-const FLEXOKI_LIGHT: Palette = Palette {
-    background: 0xFFFCF0,
-    surface: 0xF2F0E5,
-    surface_secondary: 0xF7F4E9,
-    elevated: 0xE6E4D9,
-    hover: 0xDAD8CE,
-    active: 0xCECDC3,
-    selection: 0xE7E4D6,
-    selected_surface: 0xE7E4D6,
-    selection_fg: 0x282726,
-    border: 0xDAD8CE,
-    border_subtle: 0xE6E4D9,
-    text: 0x282726,
-    text_secondary: 0x575653,
-    text_muted: 0x66645E,
-    text_disabled: 0xA09E98,
-    success: 0x566C09,
-    error: 0xAF3029,
-    error_hover: 0xC4483F,
-    error_fg: 0xFFFCF0,
-    accent: 0xBC5215,
-    accent_hover: 0xB24E0F,
-    accent_pressed: 0xA84712,
-    accent_fg: 0xFFFCF0,
-    accent_text: 0xA84712,
-    focus_ring: 0xBC5215,
-    action: 0xBC5215,
-    action_hover: 0xB24E0F,
-    action_pressed: 0xA84712,
-    action_fg: 0xFFFCF0,
-    warning: 0x7E6000,
-    info: 0x2A6B8A,
-    assistant_text: 0x282726,
-    code_bg: 0xF2F0E5,
-    code_text: 0x282726,
-    syn_string: 0x24837B,
-    syn_number: 0x5E409D,
-    syn_function: 0xBC5215,
-    syn_type: 0xA07901,
-    syn_comment: 0x878580,
-    syn_literal: 0x5E409D,
-    syn_meta: 0xA02F6F,
-    syn_operator: 0xAF3029,
-};
-
-/// Flexoki — ported from OpenChamber's `flexoki-dark`.
-const FLEXOKI: Palette = Palette {
-    background: 0x171515,
-    surface: 0x1C1B1A,
-    surface_secondary: 0x201E1D,
-    elevated: 0x252221,
-    hover: 0x2D2B2B,
-    active: 0x3E3B3B,
-    selection: 0x26242C,
-    selected_surface: 0x26242C,
-    selection_fg: 0xCECDC3,
-    border: 0x2D2C2A,
-    border_subtle: 0x252221,
-    text: 0xCECDC3,
-    text_secondary: 0x9A9893,
-    text_muted: 0x8C8C8C,
-    text_disabled: 0x5A5855,
-    success: 0xA0AF54,
-    error: 0xD96A60,
-    error_hover: 0xD96D63,
-    error_fg: 0x0B0B0B,
-    accent: 0xDA702C,
-    accent_hover: 0xDE8044,
-    accent_pressed: 0xC76322,
-    accent_fg: 0x171515,
-    accent_text: 0xDA702C,
-    focus_ring: 0xDA702C,
-    action: 0xDA702C,
-    action_hover: 0xDE8044,
-    action_pressed: 0xC76322,
-    action_fg: 0x171515,
-    warning: 0xD0A215,
-    info: 0x6B99B8,
-    assistant_text: 0xCECDC3,
-    code_bg: 0x1C1B1A,
-    code_text: 0xCECDC3,
-    syn_string: 0x3AA99F,
-    syn_number: 0x8B7EC8,
-    syn_function: 0xDA702C,
-    syn_type: 0xD0A215,
-    syn_comment: 0x878580,
-    syn_literal: 0x8B7EC8,
-    syn_meta: 0xDA702C,
-    syn_operator: 0xD14D41,
-};
-
-/// Operational dark: Restrained Operational Minimalism. A near-black canvas,
-/// neutral charcoal layers, and a lime interaction accent. The muted ink is a
-/// step lighter than the reference draft so it clears AA on elevated panels;
-/// the row-selection wash is its own olive-tinted step, separate from the
-/// blue-gray text-selection wash.
-const OPERATIONAL: Palette = Palette {
-    background: 0x080A0B,
-    surface: 0x101112,
-    surface_secondary: 0x141618,
-    elevated: 0x181A1D,
-    hover: 0x1B1D20,
-    active: 0x232629,
-    selection: 0x303A4B,
-    selected_surface: 0x1B2115,
-    selection_fg: 0xE6E7E8,
-    border: 0x25272A,
-    border_subtle: 0x1B1D20,
-    text: 0xE6E7E8,
-    text_secondary: 0xA2A4A7,
-    text_muted: 0x8A8C90,
-    text_disabled: 0x5C5F63,
-    success: 0x36C979,
-    error: 0xF0444E,
-    error_hover: 0xFF6B73,
-    error_fg: 0x171A11,
-    accent: 0xC5F34A,
-    accent_hover: 0xD4FA6A,
-    accent_pressed: 0xACD936,
-    accent_fg: 0x171A11,
-    accent_text: 0xC5F34A,
-    focus_ring: 0xC5F34A,
-    action: 0xC5F34A,
-    action_hover: 0xD4FA6A,
-    action_pressed: 0xACD936,
-    action_fg: 0x171A11,
-    warning: 0xF5A623,
-    info: 0x65A4E8,
-    assistant_text: 0xE6E7E8,
-    code_bg: 0x0C0E0F,
-    code_text: 0xE6E7E8,
-    syn_string: 0x36C979,
-    syn_number: 0xF5B95C,
-    syn_function: 0xE6E7E8,
-    syn_type: 0xC6C9CD,
-    syn_comment: 0x8A8C90,
-    syn_literal: 0xD4FA6A,
-    syn_meta: 0xF07A82,
-    syn_operator: 0xA0A2A5,
-};
-
-/// Operational light: the same hierarchy on a warm off-white canvas. Panels
-/// are white and lift above the canvas; the olive accent and its darker text
-/// variant keep labels readable on both white and the selected-row wash.
-const OPERATIONAL_LIGHT: Palette = Palette {
-    background: 0xF4F4F1,
-    surface: 0xFFFFFF,
-    surface_secondary: 0xFAFAF8,
-    // A hair off white so a light toggle knob stays visible on its off track.
-    elevated: 0xF7F7F2,
-    hover: 0xEEEEEA,
-    active: 0xE4E5DF,
-    selection: 0xE1E9D1,
-    selected_surface: 0xEEF3DF,
-    selection_fg: 0x24291C,
-    border: 0xE1E2DC,
-    border_subtle: 0xECEDE7,
-    text: 0x171916,
-    text_secondary: 0x50544D,
-    text_muted: 0x6A6E66,
-    text_disabled: 0x989B93,
-    success: 0x187847,
-    error: 0xC4313D,
-    error_hover: 0xD63B47,
-    error_fg: 0xFFFFFF,
-    accent: 0x5C791C,
-    accent_hover: 0x4D6716,
-    accent_pressed: 0x405611,
-    accent_fg: 0xFFFFFF,
-    accent_text: 0x4D6716,
-    focus_ring: 0x5C791C,
-    action: 0x5C791C,
-    action_hover: 0x4D6716,
-    action_pressed: 0x405611,
-    action_fg: 0xFFFFFF,
-    warning: 0x94600D,
-    info: 0x2864A8,
-    assistant_text: 0x171916,
-    code_bg: 0xEEEDE5,
-    code_text: 0x171916,
-    syn_string: 0x187847,
-    syn_number: 0x94600D,
-    syn_function: 0x171916,
-    syn_type: 0x50544D,
-    syn_comment: 0x6A6E66,
-    syn_literal: 0x4D6716,
-    syn_meta: 0xC4313D,
-    syn_operator: 0x50544D,
-};
-
-fn palette(id: ThemeId) -> Palette {
-    match id {
-        ThemeId::Orbit => ORBIT,
-        ThemeId::OrbitLight => ORBIT_LIGHT,
-        ThemeId::OrbitPaper => ORBIT_PAPER,
-        ThemeId::OrbitContrast => ORBIT_CONTRAST,
-        ThemeId::OrbitDarker => ORBIT_DARKER,
-        ThemeId::OrbitCobalt => ORBIT_COBALT,
-        ThemeId::OrbitAzure => ORBIT_AZURE,
-        ThemeId::Flexoki => FLEXOKI,
-        ThemeId::FlexokiLight => FLEXOKI_LIGHT,
-        ThemeId::OrbitAzureLight => ORBIT_AZURE_LIGHT,
-        ThemeId::Operational => OPERATIONAL,
-        ThemeId::OperationalLight => OPERATIONAL_LIGHT,
-    }
-}
-
 impl Theme {
-    pub fn for_id(id: ThemeId) -> Self {
-        Self::build(id.appearance(), UiPrefs::default(), id, palette(id))
+    pub fn for_id(id: ThemeKey) -> Self {
+        registry::theme(id, UiPrefs::default()).unwrap_or_else(|| {
+            Self::from_resolved(
+                registry::record(ThemeKey::ORBIT_AZURE).expect("bundled azure theme"),
+                UiPrefs::default(),
+            )
+        })
     }
 
     #[cfg(test)]
     pub fn dark() -> Self {
-        Self::for_id(ThemeId::OrbitAzure)
+        Self::for_id(ThemeKey::ORBIT_AZURE)
     }
 
     #[cfg(test)]
     pub fn light() -> Self {
-        Self::for_id(ThemeId::OrbitAzureLight)
+        Self::for_id(ThemeKey::ORBIT_AZURE_LIGHT)
     }
 
     /// Keep the current UI customization across a palette switch.
@@ -1502,9 +642,52 @@ impl Theme {
     }
 
     /// Scale a terminal/tool-output size by the Terminal font size setting
-    /// (`terminal_font_size / 13`, the default).
+    /// (`terminal_font_size / 13`, the default). The terminal panel is the
+    /// only surface that uses this; conversation asides use [`Self::aside_px`].
     pub fn term_px(&self, value: f32) -> Pixels {
         px(value * (self.ui.terminal_font_size / 13.))
+    }
+
+    /// Composer, user bubble, and assistant body. Authored on the type scale
+    /// and multiplied by the UI font size.
+    pub fn body_px(&self) -> Pixels {
+        self.ui_px(self.type_scale.body)
+    }
+
+    pub fn body_line_px(&self) -> Pixels {
+        self.ui_px(self.type_scale.body_line)
+    }
+
+    /// Heading size and line height for a markdown level. Levels below 4 use
+    /// the h4 step.
+    pub fn heading_px(&self, level: u8) -> (Pixels, Pixels) {
+        let (size, line) = match level {
+            1 => (self.type_scale.h1, self.type_scale.h1_line),
+            2 => (self.type_scale.h2, self.type_scale.h2_line),
+            3 => (self.type_scale.h3, self.type_scale.h3_line),
+            _ => (self.type_scale.h4, self.type_scale.h4_line),
+        };
+        (self.ui_px(size), self.ui_px(line))
+    }
+
+    /// Code fences. The authored code size is scaled by Editor Size, so the
+    /// default 13px step equals the editor font size.
+    pub fn code_block_px(&self) -> Pixels {
+        self.code_px(self.type_scale.code)
+    }
+
+    pub fn code_block_line_px(&self) -> Pixels {
+        self.code_px(self.type_scale.code_line)
+    }
+
+    /// Thinking and tool output. Scaled by the UI font size, not Editor Size
+    /// or Terminal Size.
+    pub fn aside_px(&self) -> Pixels {
+        self.ui_px(self.type_scale.aside)
+    }
+
+    pub fn aside_line_px(&self) -> Pixels {
+        self.ui_px(self.type_scale.aside_line)
     }
 
     /// Paint color for one syntax token, shared by transcript code blocks
@@ -1513,7 +696,7 @@ impl Theme {
     /// syntax identity); comments are explicitly legible on the code wash.
     pub fn token_color(self, class: TokenClass) -> Hsla {
         match class {
-            TokenClass::Keyword => self.accent_text,
+            TokenClass::Keyword => self.syn_keyword,
             TokenClass::Literal => self.syn_literal,
             TokenClass::String => self.syn_string,
             TokenClass::Comment => self.syn_comment,
@@ -1522,7 +705,7 @@ impl Theme {
             TokenClass::Function => self.syn_function,
             TokenClass::Meta => self.syn_meta,
             // Terminal vocabulary: command, flag, path, control operator.
-            TokenClass::Command => self.accent_text,
+            TokenClass::Command => self.syn_keyword,
             TokenClass::Flag => self.syn_number,
             TokenClass::Path => self.text_primary,
             TokenClass::Operator => self.syn_operator,
@@ -1535,7 +718,7 @@ impl Theme {
     /// actions, so they take the readable accent foreground — the role
     /// terminal command words and syntax keywords already carry.
     pub fn mention_command(self) -> Hsla {
-        self.accent_text
+        self.syn_keyword
     }
 
     /// Paint color for an `@file` mention in the composer. Files take the
@@ -1551,19 +734,25 @@ impl Theme {
         color
     }
 
-    /// Build a full [`Theme`] from its appearance + raw palette tokens.
-    fn build(mode: ThemeMode, ui: UiPrefs, id: ThemeId, p: Palette) -> Self {
+    /// Build a full [`Theme`] from a resolved registry record.
+    pub(crate) fn from_resolved(record: registry::ThemeRecord, ui: UiPrefs) -> Self {
+        let p = record.colors;
+        let mode = record.appearance;
         let text = hex(p.text);
         let accent = hex(p.accent);
+        let assistant = hex(p.assistant_text);
         let (wash, wash_strong, border_strong, contact) = match mode {
             ThemeMode::Dark => (0.05, 0.09, 0.14, 0.32),
             ThemeMode::Light => (0.06, 0.10, 0.16, 0.10),
         };
+        let color = |value: Option<u32>, fallback: Hsla| value.map(hex).unwrap_or(fallback);
+        let inline_bg = color(record.output.inline_code_bg, accent.opacity(0.10));
         Self {
-            theme_id: id,
+            theme_id: record.key,
             mode,
-            design_system: id.design_system(),
+            chrome: record.chrome,
             ui,
+            type_scale: record.scale,
             background: hex(p.background),
             surface: hex(p.surface),
             surface_secondary: hex(p.surface_secondary),
@@ -1613,7 +802,21 @@ impl Theme {
             syn_literal: hex(p.syn_literal),
             syn_meta: hex(p.syn_meta),
             syn_operator: hex(p.syn_operator),
-            inline_code_bg: accent.opacity(0.10),
+            inline_code_bg: inline_bg,
+            output_inline_fg: record.output.inline_code_fg.map(hex),
+            output_prose: color(record.output.prose, assistant),
+            output_heading: color(record.output.heading, text),
+            output_link: color(record.output.link, hex(p.accent_text)),
+            output_code_bg: color(record.output.code_bg, hex(p.code_bg)),
+            output_code_fg: color(record.output.code_fg, hex(p.code_text)),
+            output_code_header_bg: color(record.output.code_header_bg, text.opacity(wash)),
+            output_code_header_fg: color(record.output.code_header_fg, hex(p.text_muted)),
+            output_user_bg: color(record.output.user_bubble_bg, hex(p.elevated)),
+            output_user_fg: color(record.output.user_bubble_fg, text),
+            output_quote_bg: color(record.output.quote_bg, text.opacity(wash)),
+            output_quote_border: color(record.output.quote_border, hex(p.text_muted)),
+            output_quote_fg: color(record.output.quote_fg, hex(p.text_secondary)),
+            syn_keyword: color(record.output.keyword, hex(p.accent_text)),
             shadow_contact: hsla(0., 0., 0., contact),
         }
     }
@@ -1670,6 +873,7 @@ fn persist_path() -> PathBuf {
 
 /// Install the persisted appearance (System by default) and font preferences.
 pub fn init(cx: &mut App) {
+    load_install_themes();
     let prefs = AppearancePrefs::load();
     cx.set_global(prefs);
     cx.set_global(Theme::for_id(prefs.resolve(cx.window_appearance())).with_ui(UiPrefs::load()));
@@ -1763,65 +967,86 @@ mod tests {
     }
 
     #[test]
-    fn design_system_keys_round_trip() {
-        for system in DesignSystem::ALL {
-            assert_eq!(DesignSystem::parse(system.as_str()), Some(system));
-            assert_eq!(system.theme_id(ThemeMode::Dark).design_system(), system);
-            assert_eq!(system.theme_id(ThemeMode::Light).design_system(), system);
-        }
+    fn chrome_follows_the_theme() {
+        assert_eq!(Theme::for_id(ThemeKey::OPERATIONAL).chrome, Chrome::Flat);
+        assert_eq!(
+            Theme::for_id(ThemeKey::OPERATIONAL_LIGHT).chrome,
+            Chrome::Flat
+        );
+        assert_eq!(Theme::for_id(ThemeKey::ORBIT).chrome, Chrome::Classic);
+        assert_eq!(Theme::for_id(ThemeKey::VSCODE_DARK).chrome, Chrome::Flat);
+        assert_eq!(Theme::for_id(ThemeKey::VSCODE_LIGHT).chrome, Chrome::Flat);
     }
 
     #[test]
     fn parse_theme_id() {
-        assert_eq!(ThemeId::parse("orbit"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("orbit-light"), Some(ThemeId::OrbitLight));
-        assert_eq!(ThemeId::parse("system"), None);
-        assert_eq!(ThemeId::Flexoki.as_str(), "flexoki");
-        assert_eq!(ThemeId::Flexoki.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeKey::parse("orbit"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("orbit-light"), Some(ThemeKey::ORBIT_LIGHT));
+        assert_eq!(ThemeKey::parse("system"), None);
+        assert_eq!(ThemeKey::FLEXOKI.as_str(), "flexoki");
+        assert_eq!(ThemeKey::FLEXOKI.appearance(), ThemeMode::Dark);
         // Legacy theme names map onto Orbit / Orbit Light.
-        assert_eq!(ThemeId::parse("dark"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("light"), Some(ThemeId::OrbitLight));
-        assert_eq!(ThemeId::parse("one-dark"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("zedokai"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("flexoki-dark"), Some(ThemeId::Flexoki));
-        assert_eq!(ThemeId::parse("flexoki"), Some(ThemeId::Flexoki));
-        assert_eq!(ThemeId::parse("flexoki-light"), Some(ThemeId::FlexokiLight));
+        assert_eq!(ThemeKey::parse("dark"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("light"), Some(ThemeKey::ORBIT_LIGHT));
+        assert_eq!(ThemeKey::parse("one-dark"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("zedokai"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("flexoki-dark"), Some(ThemeKey::FLEXOKI));
+        assert_eq!(ThemeKey::parse("flexoki"), Some(ThemeKey::FLEXOKI));
+        assert_eq!(
+            ThemeKey::parse("flexoki-light"),
+            Some(ThemeKey::FLEXOKI_LIGHT)
+        );
         // Orbit-family keys.
-        assert_eq!(ThemeId::parse("orbit-paper"), Some(ThemeId::OrbitPaper));
+        assert_eq!(ThemeKey::parse("orbit-paper"), Some(ThemeKey::ORBIT_PAPER));
         assert_eq!(
-            ThemeId::parse("orbit-contrast"),
-            Some(ThemeId::OrbitContrast)
+            ThemeKey::parse("orbit-contrast"),
+            Some(ThemeKey::ORBIT_CONTRAST)
         );
-        assert_eq!(ThemeId::parse("orbit-darker"), Some(ThemeId::OrbitDarker));
-        assert_eq!(ThemeId::OrbitDarker.as_str(), "orbit-darker");
-        assert_eq!(ThemeId::OrbitDarker.appearance(), ThemeMode::Dark);
-        assert_eq!(ThemeId::parse("orbit-cobalt"), Some(ThemeId::OrbitCobalt));
+        assert_eq!(
+            ThemeKey::parse("orbit-darker"),
+            Some(ThemeKey::ORBIT_DARKER)
+        );
+        assert_eq!(ThemeKey::ORBIT_DARKER.as_str(), "orbit-darker");
+        assert_eq!(ThemeKey::ORBIT_DARKER.appearance(), ThemeMode::Dark);
+        assert_eq!(
+            ThemeKey::parse("orbit-cobalt"),
+            Some(ThemeKey::ORBIT_COBALT)
+        );
         // The pre-rename key and the palette's origin still load.
-        assert_eq!(ThemeId::parse("orbit-minimal"), Some(ThemeId::OrbitCobalt));
-        assert_eq!(ThemeId::parse("codex"), Some(ThemeId::OrbitCobalt));
-        assert_eq!(ThemeId::OrbitCobalt.as_str(), "orbit-cobalt");
-        assert_eq!(ThemeId::parse("operational"), Some(ThemeId::Operational));
         assert_eq!(
-            ThemeId::parse("operational-dark"),
-            Some(ThemeId::Operational)
+            ThemeKey::parse("orbit-minimal"),
+            Some(ThemeKey::ORBIT_COBALT)
+        );
+        assert_eq!(ThemeKey::parse("codex"), Some(ThemeKey::ORBIT_COBALT));
+        assert_eq!(ThemeKey::ORBIT_COBALT.as_str(), "orbit-cobalt");
+        assert_eq!(ThemeKey::parse("operational"), Some(ThemeKey::OPERATIONAL));
+        assert_eq!(
+            ThemeKey::parse("operational-dark"),
+            Some(ThemeKey::OPERATIONAL)
         );
         assert_eq!(
-            ThemeId::parse("operational-light"),
-            Some(ThemeId::OperationalLight)
+            ThemeKey::parse("operational-light"),
+            Some(ThemeKey::OPERATIONAL_LIGHT)
         );
-        assert_eq!(ThemeId::Operational.as_str(), "operational");
-        assert_eq!(ThemeId::OperationalLight.as_str(), "operational-light");
+        assert_eq!(ThemeKey::OPERATIONAL.as_str(), "operational");
+        assert_eq!(ThemeKey::OPERATIONAL_LIGHT.as_str(), "operational-light");
         // Retired editor themes still load: dark onto Orbit, light onto Orbit
         // Light.
-        assert_eq!(ThemeId::parse("dracula"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("nord"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("catppuccin-mocha"), Some(ThemeId::Orbit));
-        assert_eq!(ThemeId::parse("one-light"), Some(ThemeId::OrbitLight));
-        assert_eq!(ThemeId::parse("nord-snow-storm"), Some(ThemeId::OrbitLight));
-        assert_eq!(ThemeId::parse("tokyo-night-day"), Some(ThemeId::OrbitLight));
+        assert_eq!(ThemeKey::parse("dracula"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("nord"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("catppuccin-mocha"), Some(ThemeKey::ORBIT));
+        assert_eq!(ThemeKey::parse("one-light"), Some(ThemeKey::ORBIT_LIGHT));
+        assert_eq!(
+            ThemeKey::parse("nord-snow-storm"),
+            Some(ThemeKey::ORBIT_LIGHT)
+        );
+        assert_eq!(
+            ThemeKey::parse("tokyo-night-day"),
+            Some(ThemeKey::ORBIT_LIGHT)
+        );
         // Every selectable theme round-trips through its persisted key.
-        for id in ThemeId::ALL {
-            assert_eq!(ThemeId::parse(id.as_str()), Some(id));
+        for id in bundled_keys() {
+            assert_eq!(ThemeKey::parse(id.as_str()), Some(id));
         }
     }
 
@@ -1830,7 +1055,7 @@ mod tests {
     /// split is by ink rather than hue.
     #[test]
     fn mention_token_colors_are_distinct_across_palettes() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let theme = Theme::for_id(id);
             let command = theme.mention_command();
             let file = theme.mention_file();
@@ -1848,7 +1073,7 @@ mod tests {
     /// the pale track — so the knob is its own light token there.
     #[test]
     fn toggle_knob_stays_light_on_light_tracks() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let theme = Theme::for_id(id);
             match theme.mode {
                 ThemeMode::Light => assert!(
@@ -1863,27 +1088,20 @@ mod tests {
         }
     }
 
-    /// Every shipped palette is selectable under its name.
+    /// Every shipped palette is selectable under a unique name. The list
+    /// itself comes from `themes/*.json`, so a new file must not require
+    /// this test to grow.
     #[test]
     fn theme_catalog_labels() {
-        let labels: Vec<&str> = ThemeId::ALL.iter().map(|id| id.label()).collect();
-        assert_eq!(
-            labels,
-            vec![
-                "Orbit",
-                "Orbit Darker",
-                "Orbit Cobalt",
-                "Orbit Azure",
-                "Flexoki",
-                "Operational",
-                "Orbit Light",
-                "Orbit Azure Light",
-                "Orbit Paper",
-                "Orbit Contrast",
-                "Flexoki Light",
-                "Operational Light",
-            ]
-        );
+        let keys = bundled_keys();
+        assert!(!keys.is_empty());
+        let mut labels: Vec<&str> = keys.iter().map(|id| id.label()).collect();
+        assert!(labels.iter().all(|label| !label.is_empty()));
+        let before = labels.len();
+        labels.sort_unstable();
+        labels.dedup();
+        assert_eq!(labels.len(), before, "theme names must be unique");
+        assert!(labels.contains(&"Orbit"));
     }
 
     fn rel_lum(v: u32) -> f64 {
@@ -1932,7 +1150,7 @@ mod tests {
     /// the sidebar surface and on the hover pill it is painted over.
     #[test]
     fn the_project_name_ink_stays_readable_in_every_palette() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let theme = Theme::for_id(id);
             let ink = crate::workspace_mark::default_label_ink(&theme);
             // Untinted is the common case; a tinted project is the user's own
@@ -1957,6 +1175,10 @@ mod tests {
         }
     }
 
+    fn palette(id: ThemeKey) -> registry::Palette {
+        registry::raw_palette(id).unwrap_or_else(|| panic!("{id:?} is not bundled"))
+    }
+
     /// Every palette must keep its foreground readable against the surfaces
     /// it is painted on. The bars are the delivered floor: ink clears AA on
     /// the canvas, the accent stays legible as text (`accent_text`, the role
@@ -1964,7 +1186,7 @@ mod tests {
     /// pair (selected row, primary button) holds at 4.5:1.
     #[test]
     fn every_theme_has_readable_foregrounds() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let p = palette(id);
             let c = |a, b| contrast(a, b);
             assert!(
@@ -2113,7 +1335,7 @@ mod tests {
     /// transparent role is a defect in the palette, not in the caller.
     #[test]
     fn every_palette_exposes_the_semantic_vocabulary() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let t = Theme::for_id(id);
             let colors = [
                 ("background", t.background),
@@ -2162,7 +1384,7 @@ mod tests {
     /// three primary-button states carry the same floor.
     #[test]
     fn interactive_and_muted_foregrounds_clear_aa() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let p = palette(id);
             let c = |a, b| contrast(a, b);
             assert!(
@@ -2226,7 +1448,7 @@ mod tests {
     /// reintroduce low-contrast metadata on the active row.
     #[test]
     fn selection_rows_keep_their_metadata_readable() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let p = palette(id);
             let c = |a, b| contrast(a, b);
             for (label, wash) in [
@@ -2256,7 +1478,7 @@ mod tests {
     /// button always answers a hover with a visible step.
     #[test]
     fn every_theme_holds_its_surface_grammar() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let p = palette(id);
             let l = |v: u32| rel_lum(v);
             match id.appearance() {
@@ -2278,7 +1500,7 @@ mod tests {
                         "{id:?}: active must sit above hover"
                     );
                 }
-                ThemeMode::Light if id.design_system() == DesignSystem::Operational => {
+                ThemeMode::Light if id == ThemeKey::OPERATIONAL_LIGHT => {
                     // Operational light is paper-canvas + white panels: the
                     // raised step is the brightest plane, so it lifts off the
                     // warm canvas instead of recessing into it. The interaction
@@ -2337,8 +1559,8 @@ mod tests {
     /// role split: their selected-row wash is the old `selection` color.
     #[test]
     fn classic_row_selection_matches_the_existing_wash() {
-        for id in ThemeId::ALL {
-            if id.design_system() == DesignSystem::Classic {
+        for id in bundled_keys() {
+            if Theme::for_id(id).chrome == Chrome::Classic {
                 let p = palette(id);
                 assert_eq!(
                     p.selected_surface, p.selection,
@@ -2350,7 +1572,7 @@ mod tests {
 
     #[test]
     fn accent_carries_chroma() {
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             let accent = Theme::for_id(id).accent;
             assert!(
                 accent.s > 0.05,
@@ -2362,42 +1584,41 @@ mod tests {
 
     #[test]
     fn theme_appearance_matches_label() {
-        assert_eq!(ThemeId::Orbit.appearance(), ThemeMode::Dark);
-        assert_eq!(ThemeId::OrbitLight.appearance(), ThemeMode::Light);
-        assert_eq!(ThemeId::OrbitPaper.appearance(), ThemeMode::Light);
-        assert_eq!(ThemeId::OrbitContrast.appearance(), ThemeMode::Light);
-        assert_eq!(ThemeId::OrbitDarker.appearance(), ThemeMode::Dark);
-        assert_eq!(ThemeId::OrbitCobalt.appearance(), ThemeMode::Dark);
-        assert_eq!(ThemeId::FlexokiLight.appearance(), ThemeMode::Light);
-        assert_eq!(ThemeId::OrbitAzure.appearance(), ThemeMode::Dark);
-        assert_eq!(ThemeId::OrbitAzureLight.appearance(), ThemeMode::Light);
-        assert_eq!(ThemeId::Operational.appearance(), ThemeMode::Dark);
-        assert_eq!(ThemeId::OperationalLight.appearance(), ThemeMode::Light);
-        assert_eq!(ThemeId::Orbit.label(), "Orbit");
-        assert_eq!(ThemeId::OrbitLight.label(), "Orbit Light");
-        assert_eq!(ThemeId::OrbitPaper.label(), "Orbit Paper");
-        assert_eq!(ThemeId::OrbitContrast.label(), "Orbit Contrast");
-        assert_eq!(ThemeId::OrbitDarker.label(), "Orbit Darker");
-        assert_eq!(ThemeId::OrbitCobalt.label(), "Orbit Cobalt");
-        assert_eq!(ThemeId::Flexoki.label(), "Flexoki");
-        assert_eq!(ThemeId::FlexokiLight.label(), "Flexoki Light");
-        assert_eq!(ThemeId::OrbitAzure.label(), "Orbit Azure");
-        assert_eq!(ThemeId::OrbitAzureLight.label(), "Orbit Azure Light");
-        assert_eq!(ThemeId::Operational.label(), "Operational");
-        assert_eq!(ThemeId::OperationalLight.label(), "Operational Light");
-        assert_eq!(
-            ThemeId::Operational.design_system(),
-            DesignSystem::Operational
-        );
-        assert_eq!(ThemeId::Orbit.design_system(), DesignSystem::Classic);
+        assert_eq!(ThemeKey::ORBIT.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeKey::ORBIT_LIGHT.appearance(), ThemeMode::Light);
+        assert_eq!(ThemeKey::ORBIT_PAPER.appearance(), ThemeMode::Light);
+        assert_eq!(ThemeKey::ORBIT_CONTRAST.appearance(), ThemeMode::Light);
+        assert_eq!(ThemeKey::ORBIT_DARKER.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeKey::ORBIT_COBALT.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeKey::FLEXOKI_LIGHT.appearance(), ThemeMode::Light);
+        assert_eq!(ThemeKey::ORBIT_AZURE.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeKey::ORBIT_AZURE_LIGHT.appearance(), ThemeMode::Light);
+        assert_eq!(ThemeKey::OPERATIONAL.appearance(), ThemeMode::Dark);
+        assert_eq!(ThemeKey::OPERATIONAL_LIGHT.appearance(), ThemeMode::Light);
+        assert_eq!(ThemeKey::ORBIT.label(), "Orbit");
+        assert_eq!(ThemeKey::ORBIT_LIGHT.label(), "Orbit Light");
+        assert_eq!(ThemeKey::ORBIT_PAPER.label(), "Orbit Paper");
+        assert_eq!(ThemeKey::ORBIT_CONTRAST.label(), "Orbit Contrast");
+        assert_eq!(ThemeKey::ORBIT_DARKER.label(), "Orbit Darker");
+        assert_eq!(ThemeKey::ORBIT_COBALT.label(), "Orbit Cobalt");
+        assert_eq!(ThemeKey::FLEXOKI.label(), "Flexoki");
+        assert_eq!(ThemeKey::FLEXOKI_LIGHT.label(), "Flexoki Light");
+        assert_eq!(ThemeKey::ORBIT_AZURE.label(), "Orbit Azure");
+        assert_eq!(ThemeKey::ORBIT_AZURE_LIGHT.label(), "Orbit Azure Light");
+        assert_eq!(ThemeKey::OPERATIONAL.label(), "Operational");
+        assert_eq!(ThemeKey::OPERATIONAL_LIGHT.label(), "Operational Light");
+        assert_eq!(ThemeKey::VSCODE_DARK.label(), "VS Code Dark");
+        assert_eq!(ThemeKey::VSCODE_LIGHT.label(), "VS Code Light");
+        assert_eq!(ThemeKey::OPERATIONAL.chrome(), Chrome::Flat);
+        assert_eq!(ThemeKey::ORBIT.chrome(), Chrome::Classic);
         // The reverted default is the ember identity; Azure is the blue design.
         assert_eq!(
-            Theme::for_id(ThemeId::Orbit).accent,
+            Theme::for_id(ThemeKey::ORBIT).accent,
             hex(0xE2795B),
             "Orbit keeps its ember accent"
         );
         assert_eq!(
-            Theme::for_id(ThemeId::OrbitAzure).accent,
+            Theme::for_id(ThemeKey::ORBIT_AZURE).accent,
             hex(0x286CF0),
             "Orbit Azure keeps the blue accent"
         );
@@ -2408,7 +1629,7 @@ mod tests {
     /// onto the same tokens, the theme has lost what makes it Flexoki.
     #[test]
     fn flexoki_keeps_its_own_syntax_palette() {
-        let flexoki = Theme::for_id(ThemeId::Flexoki);
+        let flexoki = Theme::for_id(ThemeKey::FLEXOKI);
         let orbit = Theme::dark();
         assert_eq!(flexoki.mode, ThemeMode::Dark);
         assert_ne!(
@@ -2511,8 +1732,8 @@ mod tests {
         assert!(close(theme.code_px(13.), px(11.)));
         assert!(close(theme.term_px(13.), px(15.)));
         // A palette switch carries UI customization over.
-        let light = Theme::for_id(ThemeId::OrbitLight).with_ui(theme.ui);
-        assert_eq!(light.theme_id, ThemeId::OrbitLight);
+        let light = Theme::for_id(ThemeKey::ORBIT_LIGHT).with_ui(theme.ui);
+        assert_eq!(light.theme_id, ThemeKey::ORBIT_LIGHT);
         assert_eq!(light.ui, theme.ui);
     }
 
@@ -2522,14 +1743,14 @@ mod tests {
         let light = Theme::light();
         assert_ne!(dark.background, light.background);
         assert_ne!(dark.text_primary, light.text_primary);
-        assert_eq!(dark.theme_id, ThemeId::OrbitAzure);
-        assert_eq!(light.theme_id, ThemeId::OrbitAzureLight);
+        assert_eq!(dark.theme_id, ThemeKey::ORBIT_AZURE);
+        assert_eq!(light.theme_id, ThemeKey::ORBIT_AZURE_LIGHT);
         // Every palette is distinct from the default.
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             assert_eq!(Theme::for_id(id).theme_id, id);
         }
         // Orbit is dark; Orbit Light is light.
-        for id in ThemeId::ALL {
+        for id in bundled_keys() {
             assert_eq!(Theme::for_id(id).mode, id.appearance());
         }
     }

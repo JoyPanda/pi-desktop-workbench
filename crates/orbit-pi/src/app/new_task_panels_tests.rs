@@ -4,11 +4,11 @@
 //! Explorer, the terminal, and Settings stayed open behind/over the page.
 
 use super::*;
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeKey};
 
 fn test_app(cx: &mut gpui::TestAppContext) -> Entity<OrbitApp> {
     cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     })
 }

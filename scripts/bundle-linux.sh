@@ -28,6 +28,8 @@ cargo build --locked --release -p orbit-pi
 
 dir="$staging/$package"
 install -Dm755 target/release/orbit-pi "$dir/bin/orbit-pi"
+mkdir -p "$dir/bin/themes"
+cp crates/orbit-pi/themes/*.json "$dir/bin/themes/"
 install -Dm644 assets/icons/icon.png \
   "$dir/share/icons/hicolor/256x256/apps/dev.orbit.pi.png"
 install -Dm644 LICENSE "$dir/share/licenses/orbit-pi/LICENSE"
@@ -66,6 +68,8 @@ if command -v dpkg-deb >/dev/null 2>&1; then
     "$deb/usr/share/icons/hicolor/256x256/apps" \
     "$deb/usr/share/doc/orbit-pi"
   install -Dm755 target/release/orbit-pi "$deb/usr/bin/orbit-pi"
+  mkdir -p "$deb/usr/bin/themes"
+  cp crates/orbit-pi/themes/*.json "$deb/usr/bin/themes/"
   install -Dm644 assets/icons/icon.png \
     "$deb/usr/share/icons/hicolor/256x256/apps/dev.orbit.pi.png"
   install -Dm644 LICENSE "$deb/usr/share/doc/orbit-pi/copyright"

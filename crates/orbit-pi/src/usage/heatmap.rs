@@ -513,7 +513,12 @@ fn day_readout(
                 .gap(DynamicSpacing::Base12.px(&theme))
                 .whitespace_nowrap()
                 .text_size(TextSize::Small.px(&theme))
-                .child(div().flex_none().text_color(theme.text_muted).child(label.clone()))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.text_muted)
+                        .child(label.clone()),
+                )
                 .child(
                     div()
                         .min_w_0()
@@ -705,7 +710,7 @@ mod tests {
         use gpui::prelude::*;
         use gpui::{point, px, AvailableSpace, Context, Render, Window};
 
-        use crate::theme::ThemeId;
+        use crate::theme::ThemeKey;
 
         /// The calendar, rendered with one day hovered.
         struct CalendarProbe {
@@ -716,7 +721,11 @@ mod tests {
         }
 
         impl Render for CalendarProbe {
-            fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            fn render(
+                &mut self,
+                _window: &mut Window,
+                _cx: &mut Context<Self>,
+            ) -> impl IntoElement {
                 div().w(px(self.width)).child(super::calendar(
                     "usage-calendar",
                     &self.calendar,
@@ -731,7 +740,7 @@ mod tests {
             }
         }
 
-        let theme = Theme::for_id(ThemeId::Orbit);
+        let theme = Theme::for_id(ThemeKey::ORBIT);
         // 53 weeks of days, every one in range, so the grid is a full year.
         let days: Vec<super::super::aggregate::DayCell> = (0..53 * 7)
             .map(|ix| super::super::aggregate::DayCell {

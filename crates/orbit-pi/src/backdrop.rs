@@ -715,7 +715,7 @@ mod tests {
     #[gpui::test]
     fn the_layer_draws(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(Theme::for_id(crate::theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(Theme::for_id(crate::theme::ThemeKey::ORBIT)));
         let view = cx.update(|_, cx| {
             cx.new(|_| {
                 struct Layer(Theme);
@@ -728,7 +728,7 @@ mod tests {
                         div().size_full().child(super::layer(self.0, 12.5))
                     }
                 }
-                Layer(Theme::for_id(crate::theme::ThemeId::Orbit))
+                Layer(Theme::for_id(crate::theme::ThemeKey::ORBIT))
             })
         });
         let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(620.)), |_, _| {

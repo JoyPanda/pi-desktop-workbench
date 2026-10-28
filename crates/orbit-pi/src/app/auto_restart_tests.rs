@@ -9,13 +9,13 @@
 #![cfg(unix)]
 
 use super::*;
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeKey};
 use std::os::unix::fs::PermissionsExt as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 fn test_app(cx: &mut gpui::TestAppContext) -> Entity<OrbitApp> {
     cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     })
 }

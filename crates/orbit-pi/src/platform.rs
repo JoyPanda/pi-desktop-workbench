@@ -1718,8 +1718,8 @@ fn windows_clipboard_png() -> Option<Vec<u8>> {
             Raw::Raster(bytes)
         } else if let Some(bytes) = named("GIF").or_else(|| named("image/gif")) {
             Raw::Raster(bytes)
-        } else if let Some(bytes) = unsafe { copy_format(CF_DIBV5) }
-            .or_else(|| unsafe { copy_format(CF_DIB) })
+        } else if let Some(bytes) =
+            unsafe { copy_format(CF_DIBV5) }.or_else(|| unsafe { copy_format(CF_DIB) })
         {
             Raw::Dib(bytes)
         } else {

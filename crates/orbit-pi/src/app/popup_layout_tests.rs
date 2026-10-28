@@ -234,9 +234,9 @@ fn max_h_collapses_uniform_list_in_zero_height_context(cx: &mut gpui::TestAppCon
 /// button.
 #[gpui::test]
 fn worktree_advanced_menu_opens_below_its_button(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let viewport = cx.update(|window, _| window.viewport_size());
@@ -277,9 +277,9 @@ fn worktree_advanced_menu_opens_below_its_button(cx: &mut gpui::TestAppContext) 
 /// could never be closed from its own button.
 #[gpui::test]
 fn worktree_advanced_button_click_toggles_the_menu_closed(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let app = cx.update(|cx| cx.new(OrbitApp::new));
 
     cx.update(|cx| {
@@ -351,9 +351,9 @@ impl Render for ContextMenuProbe {
 
 #[gpui::test]
 fn context_menu_shell_lays_out_on_zeds_metrics(cx: &mut gpui::TestAppContext) {
-    use crate::theme::ThemeId;
+    use crate::theme::ThemeKey;
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let _ = cx.draw(
         point(px(0.), px(0.)),
@@ -459,9 +459,9 @@ impl Render for ModalCardProbe {
 
 #[gpui::test]
 fn modal_card_uses_zeds_header_and_footer_metrics(cx: &mut gpui::TestAppContext) {
-    use crate::theme::ThemeId;
+    use crate::theme::ThemeKey;
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let _ = cx.draw(
         point(px(0.), px(0.)),
@@ -491,10 +491,10 @@ fn modal_card_uses_zeds_header_and_footer_metrics(cx: &mut gpui::TestAppContext)
 /// what a user actually sees.
 #[gpui::test]
 fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
     cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         crate::bind_keys(cx);
     });
     let cx = cx.add_empty_window();
@@ -578,10 +578,10 @@ fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn model_picker_arrows_work_after_the_palette_route(cx: &mut gpui::TestAppContext) {
     use crate::command_palette::PaletteCommand;
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
     cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         crate::bind_keys(cx);
     });
     let cx = cx.add_empty_window();
@@ -657,11 +657,11 @@ fn model_picker_arrows_work_after_the_palette_route(cx: &mut gpui::TestAppContex
 /// replays the composer box's bubbled mouse-up exactly as gpui would.
 #[gpui::test]
 fn chip_click_does_not_let_the_composer_steal_picker_focus(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
     use gpui::{Modifiers, MouseButton, MouseUpEvent};
 
     cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         crate::bind_keys(cx);
     });
     let cx = cx.add_empty_window();
@@ -784,9 +784,9 @@ fn chip_click_does_not_let_the_composer_steal_picker_focus(cx: &mut gpui::TestAp
 /// `flex_1` child collapses and the cards get clipped instead.
 #[gpui::test]
 fn quota_popup_scrolls_instead_of_clipping_its_last_card(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let _ = cx.draw(
@@ -856,9 +856,9 @@ fn quota_popup_scrolls_instead_of_clipping_its_last_card(cx: &mut gpui::TestAppC
 /// card and the restore card are distinct elements, never the same one.
 #[gpui::test]
 fn quota_popup_moves_hidden_providers_into_their_own_group(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let _ = cx.draw(
@@ -916,10 +916,10 @@ fn quota_popup_moves_hidden_providers_into_their_own_group(cx: &mut gpui::TestAp
 fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
     use crate::app::mcp_ui::QuotaPopupTab;
     use crate::mcp::McpManager;
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
     use std::fs;
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let _ = cx.draw(
@@ -1038,9 +1038,9 @@ fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
 /// clicks until it settles: neither picker may open while `is_running`.
 #[gpui::test]
 fn model_and_thinking_pickers_stay_shut_while_running(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let _ = cx.draw(

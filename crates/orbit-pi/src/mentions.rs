@@ -449,7 +449,9 @@ fn score_path(path: &str, query: &str, is_dir: bool) -> i32 {
 }
 
 fn path_depth(path: &str) -> usize {
-    path.split('/').filter(|segment| !segment.is_empty()).count()
+    path.split('/')
+        .filter(|segment| !segment.is_empty())
+        .count()
 }
 
 /// Search `root` with `fd`, the same walker pi's TUI uses for `@`.
@@ -836,7 +838,10 @@ mod tests {
         // Filename substring outranks a path-only accident, and a name that
         // does not contain the query scores nothing.
         assert!(score_path("Assets/FooMetaData.cs", "MetaData", false) >= 50);
-        assert_eq!(score_path("Temp/Agent/_adhoc/RunDataRegenAll.cs", "MetaData", false), 0);
+        assert_eq!(
+            score_path("Temp/Agent/_adhoc/RunDataRegenAll.cs", "MetaData", false),
+            0
+        );
         assert!(score_path("metadata.bytes", "MetaData", false) >= 50);
     }
 

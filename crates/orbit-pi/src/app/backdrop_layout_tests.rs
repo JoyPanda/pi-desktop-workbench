@@ -1,6 +1,6 @@
 use super::*;
 use crate::theme::tokens::{Radius, TextSize};
-use crate::theme::ThemeId;
+use crate::theme::ThemeKey;
 use gpui::size;
 
 fn solid_image(width: u32, height: u32) -> std::sync::Arc<gpui::RenderImage> {
@@ -56,7 +56,7 @@ fn backdrop_wrapper_stays_inside_the_main_area(cx: &mut gpui::TestAppContext) {
                     .children(OrbitApp::backdrop_image(
                         Some(solid_image(1600, 900)),
                         crate::dither::Tuning::default(),
-                        Theme::for_id(ThemeId::Orbit),
+                        Theme::for_id(ThemeKey::ORBIT),
                     )),
             )
     });
@@ -125,9 +125,9 @@ fn backdrop_img_box_matches_its_wrapper(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn blur_slider_handle_tracks_sigma(cx: &mut gpui::TestAppContext) {
     use crate::dither::BLUR_MAX;
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
 
@@ -174,7 +174,7 @@ fn backdrop_fade_tracks_the_tuning(cx: &mut gpui::TestAppContext) {
                     cell: 4,
                     fade: crate::dither::FADE_HEIGHTS[3],
                 },
-                Theme::for_id(ThemeId::Orbit),
+                Theme::for_id(ThemeKey::ORBIT),
             ))
     });
     let fade = cx.debug_bounds("backdrop-fade").expect("fade painted");
@@ -199,7 +199,7 @@ fn backdrop_fade_none_paints_no_gradient(cx: &mut gpui::TestAppContext) {
                     cell: 4,
                     fade: 0.,
                 },
-                Theme::for_id(ThemeId::Orbit),
+                Theme::for_id(ThemeKey::ORBIT),
             ))
     });
     assert!(
@@ -218,11 +218,11 @@ fn backdrop_fade_none_paints_no_gradient(cx: &mut gpui::TestAppContext) {
 fn new_task_backdrop_spans_the_composer_region(cx: &mut gpui::TestAppContext) {
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     });
     let _ = cx.draw(point(px(0.), px(0.)), size(px(1000.), px(700.)), |_, cx| {
-        let theme = Theme::for_id(ThemeId::Orbit);
+        let theme = Theme::for_id(ThemeKey::ORBIT);
         let backdrop = app.update(cx, |app, _| app.new_task_backdrop(theme, 0., true));
         div()
             .size_full()
@@ -284,7 +284,7 @@ fn new_task_backdrop_spans_the_composer_region(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn the_backdrop_clock_runs_only_on_the_new_task_page(cx: &mut gpui::TestAppContext) {
     let app = cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     });
     // Not on screen: the heartbeat must not even start the clock.
@@ -323,7 +323,7 @@ fn the_backdrop_clock_runs_only_on_the_new_task_page(cx: &mut gpui::TestAppConte
     // Reduce Motion freezes it on the frame it was showing.
     let frozen = cx.update(|cx| app.read(cx).backdrop_phase);
     cx.update(|cx| {
-        let mut theme = Theme::for_id(ThemeId::Orbit);
+        let mut theme = Theme::for_id(ThemeKey::ORBIT);
         theme.ui.reduce_motion = true;
         cx.set_global(theme);
     });
@@ -345,11 +345,11 @@ fn the_backdrop_clock_runs_only_on_the_new_task_page(cx: &mut gpui::TestAppConte
 fn new_task_backdrop_is_absent_on_a_session(cx: &mut gpui::TestAppContext) {
     let cx = cx.add_empty_window();
     cx.update(|_, cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         let app = cx.new(OrbitApp::new);
         assert!(
             app.update(cx, |app, _| app.new_task_backdrop(
-                Theme::for_id(ThemeId::Orbit),
+                Theme::for_id(ThemeKey::ORBIT),
                 0.,
                 false
             ))
@@ -376,7 +376,7 @@ fn provider_name_column_has_a_real_width(cx: &mut gpui::TestAppContext) {
     struct CardHeaderTestView;
     impl Render for CardHeaderTestView {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            let theme = Theme::for_id(ThemeId::Orbit);
+            let theme = Theme::for_id(ThemeKey::ORBIT);
             // One 3-column grid cell's worth of width.
             div()
                 .w(px(320.))
@@ -465,7 +465,7 @@ fn settings_cards_stay_inside_the_content_column(cx: &mut gpui::TestAppContext) 
     struct SettingsCardTestView;
     impl Render for SettingsCardTestView {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            let theme = Theme::for_id(ThemeId::Orbit);
+            let theme = Theme::for_id(ThemeKey::ORBIT);
             let card = div()
                     .id("settings-card")
                     .debug_selector(|| "settings-card".to_string())
@@ -587,7 +587,7 @@ fn provider_grid_columns_fit_inside_the_content_column(cx: &mut gpui::TestAppCon
     struct ProviderGridTestView;
     impl Render for ProviderGridTestView {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            let theme = Theme::for_id(ThemeId::Orbit);
+            let theme = Theme::for_id(ThemeKey::ORBIT);
             let card = |i: usize| {
                 let name = NAMES[i];
                 div()

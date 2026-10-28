@@ -177,11 +177,7 @@ const RECENT_COMMITS_RESERVE: usize = 8 * 1024;
 
 /// Generate a conventional commit message for `options.scope` at `cwd`.
 /// Blocking; call on the background executor.
-pub fn generate(
-    cwd: &Path,
-    options: &Options<'_>,
-    rows: &[StatusRow],
-) -> Result<String, String> {
+pub fn generate(cwd: &Path, options: &Options<'_>, rows: &[StatusRow]) -> Result<String, String> {
     let patch = options.scope.patch(cwd)?;
     let mut changes = collect_changes(cwd, &patch, rows, options.scope);
     // The file list grows with the change set, so it is charged against the
@@ -631,8 +627,9 @@ fn prepare(changes: &mut Vec<Change>, budget: Budget) -> usize {
         if let Some(head) = change.head.take() {
             let allowance = original_share.min(MAX_ORIGINAL_BYTES).min(original_budget);
             if allowance < MIN_ORIGINAL_BYTES {
-                change.head =
-                    Some("// (original code omitted to stay inside the prompt budget)\n".to_string());
+                change.head = Some(
+                    "// (original code omitted to stay inside the prompt budget)\n".to_string(),
+                );
             } else {
                 let excerpt = original_excerpt(&head, &ranges, allowance);
                 original_budget = original_budget.saturating_sub(excerpt.len());
@@ -1054,7 +1051,8 @@ mod tests {
 
     #[test]
     fn reads_the_old_line_ranges_of_a_hunk() {
-        let diff = "diff --git a/a.rs b/a.rs\n@@ -12,4 +12,5 @@\n-old\n+new\n@@ -40 +41,0 @@\n-gone\n";
+        let diff =
+            "diff --git a/a.rs b/a.rs\n@@ -12,4 +12,5 @@\n-old\n+new\n@@ -40 +41,0 @@\n-gone\n";
         assert_eq!(hunk_old_ranges(diff), vec![(12, 15), (40, 40)]);
     }
 
@@ -1064,8 +1062,14 @@ mod tests {
         let diff = "diff --git a/big.rs b/big.rs\n@@ -200,3 +200,3 @@\n-old\n+new\n";
         let excerpt = original_excerpt(&head, &hunk_old_ranges(diff), MAX_ORIGINAL_BYTES);
         assert!(excerpt.contains("200: line 200"), "{excerpt}");
-        assert!(excerpt.contains("176: line 176"), "context before: {excerpt}");
-        assert!(excerpt.contains("226: line 226"), "context after: {excerpt}");
+        assert!(
+            excerpt.contains("176: line 176"),
+            "context before: {excerpt}"
+        );
+        assert!(
+            excerpt.contains("226: line 226"),
+            "context after: {excerpt}"
+        );
         assert!(
             !excerpt.contains("1: line 1\n"),
             "the file head is not the change: {excerpt}"
@@ -1085,7 +1089,9 @@ mod tests {
     fn long_diffs_keep_the_first_and_last_hunks() {
         let mut diff = String::from("diff --git a/big.rs b/big.rs\n");
         for hunk in 0..40 {
-            diff.push_str(&format!("@@ -{hunk},1 +{hunk},1 @@\n-old {hunk}\n+new {hunk}\n"));
+            diff.push_str(&format!(
+                "@@ -{hunk},1 +{hunk},1 @@\n-old {hunk}\n+new {hunk}\n"
+            ));
         }
         let shortened = truncate_diff(&diff, 400);
         assert!(shortened.len() < diff.len());
@@ -1191,9 +1197,20 @@ mod tests {
         );
 
         // Everything is still named, and the prompt says why the tail is short.
-        let prompt = user_prompt("orbit", Some("main"), &rows_text, &changes, &RecentCommits::default(), dropped, &Options::default());
+        let prompt = user_prompt(
+            "orbit",
+            Some("main"),
+            &rows_text,
+            &changes,
+            &RecentCommits::default(),
+            dropped,
+            &Options::default(),
+        );
         for file in 0..120 {
-            assert!(prompt.contains(&format!("M f{file}.rs")), "f{file}.rs is listed");
+            assert!(
+                prompt.contains(&format!("M f{file}.rs")),
+                "f{file}.rs is listed"
+            );
         }
         assert!(
             prompt.contains("have no diff excerpt here"),
@@ -1205,7 +1222,9 @@ mod tests {
     fn big_diff(hunks: usize) -> String {
         let mut diff = String::from("diff --git a/big.rs b/big.rs\n");
         for line in 0..hunks {
-            diff.push_str(&format!("@@ -{line},1 +{line},1 @@\n-old {line}\n+new {line}\n"));
+            diff.push_str(&format!(
+                "@@ -{line},1 +{line},1 @@\n-old {line}\n+new {line}\n"
+            ));
         }
         diff
     }

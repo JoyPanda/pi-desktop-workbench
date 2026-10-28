@@ -159,7 +159,7 @@ fn spawn_heartbeat(cx: &mut App, app: &Entity<OrbitApp>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
     use gpui::TestAppContext;
 
     /// Regression for #63: after the window closes the app is still alive, so
@@ -172,7 +172,7 @@ mod tests {
     #[gpui::test]
     fn reopening_reuses_the_parked_shell(cx: &mut TestAppContext) {
         cx.update(|cx| {
-            cx.set_global(Theme::for_id(ThemeId::Orbit));
+            cx.set_global(Theme::for_id(ThemeKey::ORBIT));
             let first = shell(cx).entity_id();
 
             assert_eq!(

@@ -2058,9 +2058,9 @@ mod tests {
     /// keeps `picker::two_line_entry_height` instead.
     #[gpui::test]
     fn capped_list_keeps_rows_at_the_two_line_token_height(cx: &mut gpui::TestAppContext) {
-        use crate::theme::ThemeId;
+        use crate::theme::ThemeKey;
 
-        cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
         let cx = cx.add_empty_window();
         let models: Vec<ModelEntry> = (0..12)
             .map(|ix| {
@@ -2097,7 +2097,7 @@ mod tests {
             |_, _| selector.clone(),
         );
 
-        let theme = Theme::for_id(ThemeId::Orbit);
+        let theme = Theme::for_id(ThemeKey::ORBIT);
         let expected = picker::two_line_entry_height(&theme);
         // Row 0 is the provider header; the first model row is row 1.
         for (ix, selector) in ["picker-row-1", "picker-row-6", "picker-row-12"]
@@ -2116,12 +2116,12 @@ mod tests {
     /// same dispatch node, and gpui breaks the depth tie by registration
     /// order, so the later `Picker` bindings must win.
     fn bind_picker_arrows(cx: &mut gpui::TestAppContext) {
-        use crate::theme::ThemeId;
+        use crate::theme::ThemeKey;
         use crate::{Down, PickerSelectNext, PickerSelectPrev, Up};
         use gpui::KeyBinding;
 
         cx.update(|cx| {
-            cx.set_global(Theme::for_id(ThemeId::Orbit));
+            cx.set_global(Theme::for_id(ThemeKey::ORBIT));
             cx.bind_keys([
                 KeyBinding::new("up", Up, Some("Composer")),
                 KeyBinding::new("down", Down, Some("Composer")),
@@ -2332,10 +2332,10 @@ mod tests {
     /// context stack would win over `PickerSelectNext`/`Prev`.
     #[gpui::test]
     fn arrow_keys_work_with_the_real_keymap(cx: &mut gpui::TestAppContext) {
-        use crate::theme::ThemeId;
+        use crate::theme::ThemeKey;
 
         cx.update(|cx| {
-            cx.set_global(Theme::for_id(ThemeId::Orbit));
+            cx.set_global(Theme::for_id(ThemeKey::ORBIT));
             crate::bind_keys(cx);
         });
         let cx = cx.add_empty_window();
@@ -2396,9 +2396,9 @@ mod tests {
     /// the last row under the fold.
     #[gpui::test]
     fn popover_width_rhythm_and_footer_are_stable(cx: &mut gpui::TestAppContext) {
-        use crate::theme::ThemeId;
-        cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
-        let theme = Theme::for_id(ThemeId::Orbit);
+        use crate::theme::ThemeKey;
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+        let theme = Theme::for_id(ThemeKey::ORBIT);
         let metrics = ListMetrics::new(&theme);
         let line = f32::from(BufferLineHeight::Comfortable.resolve(TextSize::Small.px(&theme)));
 

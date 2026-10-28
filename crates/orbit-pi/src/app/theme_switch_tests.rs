@@ -4,12 +4,12 @@
 //! a window recreation.
 
 use super::*;
-use crate::theme::{Theme, ThemeId, ThemeMode};
+use crate::theme::{Theme, ThemeKey, ThemeMode};
 use gpui::size;
 
 fn test_app(cx: &mut gpui::TestAppContext) -> Entity<OrbitApp> {
     cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::OrbitAzure));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT_AZURE));
         cx.new(OrbitApp::new)
     })
 }
@@ -30,7 +30,7 @@ fn switching_the_palette_repaints_every_surface(cx: &mut gpui::TestAppContext) {
     cx.update(|_, cx| {
         // The settings control ends here; so does a system appearance change.
         let ui = theme::get(cx).ui;
-        cx.set_global(Theme::for_id(ThemeId::OrbitAzureLight).with_ui(ui));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT_AZURE_LIGHT).with_ui(ui));
         assert_eq!(theme::get(cx).mode, ThemeMode::Light);
     });
 
@@ -46,7 +46,7 @@ fn switching_the_palette_repaints_every_surface(cx: &mut gpui::TestAppContext) {
 fn operational_dark_and_light_paint_the_same_workbench(cx: &mut gpui::TestAppContext) {
     let app = test_app(cx);
     let cx = cx.add_empty_window();
-    for id in [ThemeId::Operational, ThemeId::OperationalLight] {
+    for id in [ThemeKey::OPERATIONAL, ThemeKey::OPERATIONAL_LIGHT] {
         cx.update(|_, cx| {
             let ui = theme::get(cx).ui;
             cx.set_global(Theme::for_id(id).with_ui(ui));

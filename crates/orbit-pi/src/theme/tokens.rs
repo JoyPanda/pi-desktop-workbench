@@ -42,7 +42,7 @@ use gpui::{
     DefiniteLength, Hsla, Pixels, Styled,
 };
 
-use super::{DesignSystem, Theme, ThemeMode};
+use super::{Chrome, Theme, ThemeMode};
 
 // ── Units (`ui/src/styles/units.rs`) ────────────────────────────────────
 
@@ -87,7 +87,7 @@ impl Radius {
         // Restrained Operational Minimalism uses a tighter, fixed radius ramp:
         // 6px buttons/inputs, 8px panels, 10px dialogs. Classic keeps the
         // existing rem-based Zed scale.
-        if theme.design_system == DesignSystem::Operational {
+        if theme.chrome == Chrome::Flat {
             return match self {
                 Self::None => px(0.),
                 Self::XSmall => px(2.),
@@ -273,7 +273,7 @@ impl TextSize {
             Self::Default => theme.ui_px(14.),
             Self::Small => theme.ui_px(12.),
             Self::XSmall => {
-                if theme.design_system == DesignSystem::Operational {
+                if theme.chrome == Chrome::Flat {
                     theme.ui_px(11.)
                 } else {
                     theme.ui_px(10.)
@@ -1007,9 +1007,9 @@ pub mod input {
     /// existing 16px composer silhouette; Operational uses the standard input
     /// radius so every field shares one corner value.
     pub fn composer_radius(theme: &Theme) -> Pixels {
-        match theme.design_system {
-            DesignSystem::Classic => Radius::XXLarge.px(theme),
-            DesignSystem::Operational => RADIUS.px(theme),
+        match theme.chrome {
+            Chrome::Classic => Radius::XXLarge.px(theme),
+            Chrome::Flat => RADIUS.px(theme),
         }
     }
 }
@@ -1038,7 +1038,7 @@ impl ElevationIndex {
         // Operational keeps floating surfaces defined by their hairline: one
         // tight contact layer for popovers, one restrained modal layer. No
         // broad ambient shadows.
-        if theme.design_system == DesignSystem::Operational {
+        if theme.chrome == Chrome::Flat {
             return match self {
                 Self::ElevatedSurface => vec![drop_shadow(1., 2., 0.10)],
                 Self::ModalSurface => vec![drop_shadow(2., 6., 0.16)],
@@ -1149,7 +1149,7 @@ pub fn raised_fill(color: Hsla) -> Background {
 /// page, not over it (menus and modals use [`ElevationIndex`]).
 pub fn button_shadow(theme: &Theme) -> Vec<BoxShadow> {
     // Operational buttons are flat: the fill and border carry the affordance.
-    if theme.design_system == DesignSystem::Operational {
+    if theme.chrome == Chrome::Flat {
         return Vec::new();
     }
     let mut contact = theme.shadow_contact;
@@ -1384,7 +1384,7 @@ mod tests {
         assert!(close(panel::RADIUS.px(&classic), 12.));
         assert!(close(input::composer_radius(&classic), 16.));
 
-        let operational = Theme::for_id(crate::theme::ThemeId::Operational);
+        let operational = Theme::for_id(crate::theme::ThemeKey::OPERATIONAL);
         assert!(close(panel::RADIUS.px(&operational), 8.));
         assert!(close(input::composer_radius(&operational), 6.));
         assert_eq!(
@@ -1396,7 +1396,7 @@ mod tests {
 
     #[test]
     fn operational_geometry_is_tighter_and_flatter() {
-        let theme = Theme::for_id(crate::theme::ThemeId::Operational);
+        let theme = Theme::for_id(crate::theme::ThemeKey::OPERATIONAL);
         assert!(close(Radius::Small.px(&theme), 4.));
         assert!(close(Radius::Medium.px(&theme), 5.));
         assert!(close(Radius::Large.px(&theme), 6.));

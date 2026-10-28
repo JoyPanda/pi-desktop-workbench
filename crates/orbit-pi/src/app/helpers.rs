@@ -1254,7 +1254,7 @@ mod tests {
     fn header_radius_tracks_the_button_scale() {
         for theme in [
             Theme::dark(),
-            Theme::for_id(crate::theme::ThemeId::Operational),
+            Theme::for_id(crate::theme::ThemeKey::OPERATIONAL),
         ] {
             assert_eq!(
                 header_ctrl_radius(&theme),

@@ -2,12 +2,12 @@
 //! stays hidden once dismissed.
 
 use super::*;
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeKey};
 
 #[gpui::test]
 fn howto_card_shows_until_dismissed(cx: &mut gpui::TestAppContext) {
     let app = cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     });
     let cx = cx.add_empty_window();
@@ -35,7 +35,7 @@ fn howto_card_shows_until_dismissed(cx: &mut gpui::TestAppContext) {
 #[gpui::test]
 fn howto_card_fits_the_page_column(cx: &mut gpui::TestAppContext) {
     let app = cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     });
     let cx = cx.add_empty_window();

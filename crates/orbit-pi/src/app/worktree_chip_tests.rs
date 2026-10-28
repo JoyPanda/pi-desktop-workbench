@@ -8,7 +8,7 @@
 //! lives in the top bar's "…" menu, so nothing is stranded by hiding the chip.
 
 use super::*;
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeKey};
 use crate::worktree::Worktree;
 
 /// A `git worktree list` entry, with only the fields these tests read set.
@@ -31,7 +31,7 @@ fn worktree(path: &str, name: &str, is_main: bool) -> Worktree {
 #[gpui::test]
 fn the_work_in_chip_is_absent_at_the_main_checkout(cx: &mut gpui::TestAppContext) {
     let app = cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     });
     let cx = cx.add_empty_window();

@@ -32,9 +32,9 @@ fn long_pastes_pill_and_short_ones_stay_inline(_cx: &mut gpui::TestAppContext) {
 /// never shows the first one's text.
 #[gpui::test]
 fn drafts_follow_their_session(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
 
@@ -76,9 +76,9 @@ fn drafts_follow_their_session(cx: &mut gpui::TestAppContext) {
 /// blank entry behind (and a stale draft can never resurrect old text).
 #[gpui::test]
 fn empty_composers_park_no_draft(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let path = PathBuf::from("/tmp/orbit-draft-empty.jsonl");
@@ -98,9 +98,9 @@ fn empty_composers_park_no_draft(cx: &mut gpui::TestAppContext) {
 /// slot — typing there then opening a session must not leak it.
 #[gpui::test]
 fn the_new_task_draft_has_its_own_slot(cx: &mut gpui::TestAppContext) {
-    use crate::theme::{Theme, ThemeId};
+    use crate::theme::{Theme, ThemeKey};
 
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let path = PathBuf::from("/tmp/orbit-draft-task.jsonl");

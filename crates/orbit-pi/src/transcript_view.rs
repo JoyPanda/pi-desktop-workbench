@@ -139,13 +139,13 @@ const EDIT_DIFF_PAINT_LINES: usize = 400;
 
 type ExpandedActivities = Rc<RefCell<HashMap<(usize, usize), bool>>>;
 type ExpandedTools = Rc<RefCell<HashSet<(usize, usize)>>>;
-type CopiedSections = Rc<RefCell<HashMap<(usize, usize, u8), Instant>>>;
+pub(crate) type CopiedSections = Rc<RefCell<HashMap<(usize, usize, u8), Instant>>>;
 /// Tool detail sections expanded past their collapsed preview, keyed
 /// `(message_ix, flat_tool_ix, section)`.
 type ExpandedSections = Rc<RefCell<HashSet<(usize, usize, u8)>>>;
 /// Code blocks expanded past their collapsed preview, keyed
 /// `(message_ix, prose_salt, block_ix)`.
-type ExpandedBlocks = Rc<RefCell<HashSet<(usize, u64, usize)>>>;
+pub(crate) type ExpandedBlocks = Rc<RefCell<HashSet<(usize, u64, usize)>>>;
 /// Persistent scroll handles for expandable "Thought" cards, keyed
 /// `(message_ix, step_ix)`. The handle lets the card read its own
 /// offset/limit so a wheel that no longer scrolls the card can be chained
@@ -1920,6 +1920,7 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
                     ix,
                     4096,
                     theme,
+                    theme.output_prose,
                     paint.copied_sections.clone(),
                     paint.expanded_blocks.clone(),
                     true,
@@ -2001,17 +2002,18 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint, cx: &gpui::App) -
                 div()
                     .max_w(px(USER_BUBBLE_MAX_WIDTH))
                     .rounded(panel::RADIUS.px(&theme))
-                    .bg(theme.surface_elevated)
-                    .text_color(theme.text_primary)
+                    .bg(theme.output_user_bg)
+                    .text_color(theme.output_user_fg)
                     .px(DynamicSpacing::Base12.px(&theme))
                     .py(DynamicSpacing::Base08.px(&theme))
-                    .text_size(TextSize::Default.px(&theme))
+                    .text_size(theme.body_px())
                     .whitespace_normal()
                     .child(render_prose(
                         body,
                         ix,
                         0,
                         theme,
+                        theme.output_user_fg,
                         paint.copied_sections.clone(),
                         paint.expanded_blocks.clone(),
                         true,
@@ -2227,6 +2229,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                         ix,
                         (step_ix as u64 + 1) * 4096,
                         theme,
+                        theme.output_prose,
                         paint.copied_sections.clone(),
                         paint.expanded_blocks.clone(),
                         !paint.live,
@@ -2924,8 +2927,8 @@ fn render_thinking_body(
                     }
                 })
                 .font_family(theme::code_font_family())
-                .text_size(theme.code_px(12.))
-                .line_height(theme.code_px(18.))
+                .text_size(theme.aside_px())
+                .line_height(theme.aside_line_px())
                 .text_color(theme.text_secondary)
                 .whitespace_normal()
                 .child({
@@ -3374,7 +3377,8 @@ fn render_activity_card(
                                 .items_center()
                                 .gap(DynamicSpacing::Base06.px(&theme))
                                 .font_family(theme::code_font_family())
-                                .text_size(theme.code_px(12.))
+                                .text_size(theme.aside_px())
+                                .line_height(theme.aside_line_px())
                                 .child(div().flex_none().text_color(theme.text_muted).child("$"))
                                 .child(
                                     div().min_w_0().overflow_hidden().whitespace_nowrap().child(
@@ -3737,12 +3741,12 @@ fn render_tool_detail(
         // One recessed terminal surface holds every section, divided by a
         // hairline: a command reads top-to-bottom — input, then output — the
         // way a shell transcript does, instead of two blocks whose only
-        // boundary is a gap. The surface is a code plane (`code_bg`), the
-        // same treatment a markdown code block takes.
+        // boundary is a gap. The surface is the code plane, the same
+        // treatment a markdown code block takes.
         let mut surface = div()
             .w_full()
             .min_w_0()
-            .bg(theme.code_bg)
+            .bg(theme.output_code_bg)
             .flex()
             .flex_col()
             // The surface is always the card's last child, so it carries the
@@ -3898,8 +3902,8 @@ fn render_detail_section(
                         div()
                             .flex_none()
                             .font_family(theme::code_font_family())
-                            .text_size(theme.term_px(13.))
-                            .line_height(theme.term_px(20.))
+                            .text_size(theme.aside_px())
+                            .line_height(theme.aside_line_px())
                             .text_color(theme.text_muted)
                             .child("$"),
                     )
@@ -3991,9 +3995,9 @@ fn render_detail_body(
         .flex_1()
         .min_w_0()
         .font_family(theme::code_font_family())
-        .text_size(theme.term_px(13.))
-        .line_height(theme.term_px(20.))
-        .text_color(theme.code_text)
+        .text_size(theme.aside_px())
+        .line_height(theme.aside_line_px())
+        .text_color(theme.output_code_fg)
         .whitespace_normal()
         .flex()
         .flex_col()
@@ -4012,7 +4016,7 @@ fn render_detail_body(
                     .and_then(|lines| lines.get(line_ix))
                     .map(Vec::as_slice),
                 line_id,
-                theme.code_text,
+                theme.output_code_fg,
                 theme,
             ))
         }))
@@ -5487,12 +5491,13 @@ fn inline_runs(
                 FontStyle::Normal
             };
         }
-        // Only links take the accent — they are the interactive token. Inline
-        // code keeps the body ink and is marked by the mono face and its wash
-        // instead; tinting it too made a code-heavy answer a field of accent
-        // (violating DESIGN.md's One Accent Rule) and blurred it into links.
+        // Only links take the output link color — they are the interactive
+        // token. Inline code keeps the surrounding ink unless the theme sets
+        // its own inline foreground, and is marked by the mono face and wash.
         let color = if span.link.is_some() {
-            theme.accent_text
+            theme.output_link
+        } else if span.code {
+            theme.output_inline_fg.unwrap_or(base_color)
         } else {
             base_color
         };
@@ -5576,8 +5581,9 @@ fn ui_font() -> Font {
 /// selectable and links resolve through the panel's mouse handlers; outside
 /// it (the skills viewer) the plain clickable [`InteractiveText`] is kept.
 ///
-/// Line height must clear inline-code backgrounds: a tight 14/22 measure let
-/// the next wrapped line (and the next block) paint through the previous one.
+/// Line height must clear inline-code backgrounds. GPUI paints a run
+/// background at the line box height, so 14/24 stays inside the line. 14/22
+/// let the next wrapped line paint through the previous wash.
 fn paragraph_text(
     text: &str,
     size: f32,
@@ -5612,7 +5618,7 @@ fn paragraph_text(
                     links,
                     Some(scope),
                 )
-                .with_marks(marks, theme.accent_text, IconSize::Small.px(&theme)),
+                .with_marks(marks, theme.output_link, IconSize::Small.px(&theme)),
             )
             .into_any_element()
     } else {
@@ -6171,7 +6177,7 @@ struct TableBreakout {
     column_width: Pixels,
 }
 
-/// Markdown: 14px/22px body. Spacing is graded by block pair rather
+/// Markdown body uses the theme's conversation measure. Spacing is graded by block pair rather
 /// than one uniform gap, so a heading reads as a section start, a list hugs
 /// the paragraph that introduces it, and consecutive paragraphs breathe.
 ///
@@ -6185,6 +6191,7 @@ fn render_prose(
     ix: usize,
     salt: u64,
     theme: Theme,
+    ink: Hsla,
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
@@ -6236,6 +6243,7 @@ fn render_prose(
                         salt,
                         block_ix,
                         theme,
+                        ink,
                         copied_sections.clone(),
                         expanded_blocks.clone(),
                         collapsible,
@@ -6261,6 +6269,7 @@ pub(crate) fn render_markdown_document(text: &str, theme: Theme) -> impl IntoEle
         0,
         0,
         theme,
+        theme.output_prose,
         copied,
         expanded,
         false,
@@ -6299,6 +6308,7 @@ fn render_block(
     salt: u64,
     block_ix: usize,
     theme: Theme,
+    ink: Hsla,
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
@@ -6308,28 +6318,28 @@ fn render_block(
     match block {
         Block::Paragraph(lines) => paragraph_text(
             &lines.join(" "),
-            14.,
-            26.,
+            theme.type_scale.body,
+            theme.type_scale.body_line,
             FontWeight::NORMAL,
-            theme.assistant_text,
+            ink,
             md_id(ix, salt, block_ix, 0),
             theme,
         )
         .into_any_element(),
         Block::Heading(level, text) => {
-            let (size, line_height, color) = match level {
-                1 => (20., 30., theme.text_primary),
-                2 => (18., 28., theme.text_primary),
-                3 => (16., 26., theme.text_primary),
-                4 => (15., 24., theme.text_primary),
-                _ => (14., 24., theme.text_secondary),
+            let scale = theme.type_scale;
+            let (size, line_height) = match level {
+                1 => (scale.h1, scale.h1_line),
+                2 => (scale.h2, scale.h2_line),
+                3 => (scale.h3, scale.h3_line),
+                _ => (scale.h4, scale.h4_line),
             };
             paragraph_text(
                 text,
                 size,
                 line_height,
                 FontWeight::SEMIBOLD,
-                color,
+                theme.output_heading,
                 md_id(ix, salt, block_ix, 0),
                 theme,
             )
@@ -6351,14 +6361,14 @@ fn render_block(
         .into_any_element(),
         Block::Rule => div().w_full().h(px(1.)).bg(theme.border).into_any_element(),
         Block::Alert(kind, lines) => {
-            render_alert(*kind, lines, ix, salt, block_ix, theme).into_any_element()
+            render_alert(*kind, lines, ix, salt, block_ix, ink, theme).into_any_element()
         }
         Block::Quote(lines) => div()
             .w_full()
             .min_w_0()
             .border_l_2()
-            .border_color(theme.text_muted)
-            .bg(theme.overlay)
+            .border_color(theme.output_quote_border)
+            .bg(theme.output_quote_bg)
             .rounded_r(Radius::Large.px(&theme))
             .pl(px(14.))
             .pr(DynamicSpacing::Base12.px(&theme))
@@ -6373,10 +6383,10 @@ fn render_block(
                     salt,
                     block_ix,
                     sub,
-                    14.,
-                    26.,
+                    theme.type_scale.body,
+                    theme.type_scale.body_line,
                     FontWeight::NORMAL,
-                    theme.text_secondary,
+                    theme.output_quote_fg,
                     theme,
                 )
             }))
@@ -6387,18 +6397,15 @@ fn render_block(
             .flex()
             .flex_col()
             .gap(DynamicSpacing::Base08.px(&theme))
-            .children(
-                items
-                    .iter()
-                    .enumerate()
-                    .map(move |(sub, item)| render_list_item(item, ix, salt, block_ix, sub, theme)),
-            )
+            .children(items.iter().enumerate().map(move |(sub, item)| {
+                render_list_item(item, ix, salt, block_ix, sub, ink, theme)
+            }))
             .into_any_element(),
         Block::Table {
             header,
             rows,
             aligns,
-        } => render_table(header, rows, aligns, ix, salt, block_ix, theme).into_any_element(),
+        } => render_table(header, rows, aligns, ix, salt, block_ix, ink, theme).into_any_element(),
         Block::Image { alt, url } => {
             render_markdown_image(alt, url, ix, salt, block_ix, 0, theme).into_any_element()
         }
@@ -6474,6 +6481,7 @@ fn render_alert(
     ix: usize,
     salt: u64,
     block_ix: usize,
+    ink: Hsla,
     theme: Theme,
 ) -> impl IntoElement {
     let color = kind.color(theme);
@@ -6509,10 +6517,10 @@ fn render_alert(
                 salt,
                 block_ix,
                 sub,
-                14.,
-                26.,
+                theme.type_scale.body,
+                theme.type_scale.body_line,
                 FontWeight::NORMAL,
-                theme.assistant_text,
+                ink,
                 theme,
             )
         }))
@@ -6558,6 +6566,7 @@ fn render_list_item(
     salt: u64,
     block_ix: usize,
     sub: usize,
+    ink: Hsla,
     theme: Theme,
 ) -> AnyElement {
     let marker: AnyElement = match item.checked {
@@ -6569,8 +6578,8 @@ fn render_list_item(
                 "•".to_string()
             };
             div()
-                .text_size(TextSize::Default.px(&theme))
-                .line_height(theme.ui_px(26.))
+                .text_size(theme.body_px())
+                .line_height(theme.body_line_px())
                 .text_color(if item.ordered {
                     theme.text_primary
                 } else {
@@ -6584,7 +6593,7 @@ fn render_list_item(
     let text_color = if item.checked == Some(true) {
         theme.text_secondary
     } else {
-        theme.assistant_text
+        ink
     };
     div()
         .w_full()
@@ -6607,8 +6616,8 @@ fn render_list_item(
             salt,
             block_ix,
             sub,
-            14.,
-            26.,
+            theme.type_scale.body,
+            theme.type_scale.body_line,
             FontWeight::NORMAL,
             text_color,
             theme,
@@ -6711,7 +6720,7 @@ fn render_code_block(
         .flex()
         .items_center()
         .gap(DynamicSpacing::Base08.px(&theme))
-        .bg(theme.overlay)
+        .bg(theme.output_code_header_bg)
         // The title strip is the card's first child; gpui clips children to a
         // rectangle, so the strip carries the card's top radius itself.
         .rounded_t(panel::RADIUS.px(&theme))
@@ -6725,7 +6734,7 @@ fn render_code_block(
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(15.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_muted)
+                .text_color(theme.output_code_header_fg)
                 .child(label),
         )
         .child(copy_button);
@@ -6746,7 +6755,7 @@ fn render_code_block(
         .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.code_bg)
+        .bg(theme.output_code_bg)
         .overflow_hidden()
         .child(header)
         .child(code_lines_body(
@@ -6892,9 +6901,9 @@ fn code_lines_body(
                 .pt(DynamicSpacing::Base08.px(&theme))
                 .pb(DynamicSpacing::Base12.px(&theme))
                 .font_family(theme::code_font_family())
-                .text_size(theme.code_px(13.))
-                .line_height(theme.code_px(21.))
-                .text_color(theme.code_text)
+                .text_size(theme.code_block_px())
+                .line_height(theme.code_block_line_px())
+                .text_color(theme.output_code_fg)
                 .children(lines.iter().enumerate().map(|(line_ix, line)| {
                     let line_id = ElementId::NamedInteger(
                         "code-line".into(),
@@ -6953,7 +6962,7 @@ fn render_mermaid_block(
         .flex()
         .items_center()
         .gap(DynamicSpacing::Base08.px(&theme))
-        .bg(theme.overlay)
+        .bg(theme.output_code_header_bg)
         .rounded_t(panel::RADIUS.px(&theme))
         .border_b_1()
         .border_color(theme.border)
@@ -6965,7 +6974,7 @@ fn render_mermaid_block(
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(15.))
                 .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_muted)
+                .text_color(theme.output_code_header_fg)
                 .child(tr!("transcript_view.mermaid_diagram")),
         )
         .child(copy_button);
@@ -7046,7 +7055,7 @@ fn render_mermaid_block(
         .rounded(panel::RADIUS.px(&theme))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.code_bg)
+        .bg(theme.output_code_bg)
         .overflow_hidden()
         .child(header)
         .child(body)
@@ -7080,7 +7089,7 @@ fn code_line(text: &str, tokens: Option<&[Token]>, key: ElementId, theme: Theme)
     div()
         .flex_none()
         .whitespace_nowrap()
-        .child(syntax_line(text, tokens, key, theme.code_text, theme))
+        .child(syntax_line(text, tokens, key, theme.output_code_fg, theme))
         .into_any_element()
 }
 
@@ -7210,6 +7219,7 @@ fn render_table(
     ix: usize,
     salt: u64,
     block_ix: usize,
+    ink: Hsla,
     theme: Theme,
 ) -> AnyElement {
     let widths = table_column_widths(header, rows);
@@ -7234,14 +7244,14 @@ fn render_table(
             .text_align(align.text_align())
             .child(paragraph_text(
                 text,
-                13.,
-                22.,
+                theme.type_scale.body,
+                theme.type_scale.body_line,
                 if strong {
                     FontWeight::SEMIBOLD
                 } else {
                     FontWeight::NORMAL
                 },
-                theme.assistant_text,
+                ink,
                 // Table cells get their own id namespace: `md_id`'s 8-bit
                 // `sub` overflows for taller tables and would collide with
                 // other blocks (selection keys depend on unique ids).
@@ -7801,6 +7811,26 @@ fn starts_followup_turn(messages: &[ChatMessage], ix: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversation_measure_keeps_aside_on_the_ui_scale() {
+        let theme = Theme::dark().with_ui(crate::theme::UiPrefs {
+            ui_font_size: 14.,
+            editor_font_size: 16.,
+            ..crate::theme::UiPrefs::default()
+        });
+        // Body, headings, and aside ride UI size. Code fences ride Editor Size.
+        assert_eq!(theme.body_px(), gpui::px(14.));
+        assert_eq!(theme.body_line_px(), gpui::px(24.));
+        assert_eq!(theme.aside_px(), gpui::px(12.));
+        assert_eq!(theme.aside_line_px(), gpui::px(18.));
+        assert_eq!(theme.code_block_px(), gpui::px(16.));
+        let code_line = f32::from(theme.code_block_line_px());
+        assert!((code_line - 20. * 16. / 13.).abs() < 0.05, "{code_line}");
+        let (h1, h1_line) = theme.heading_px(1);
+        assert_eq!(h1, gpui::px(18.));
+        assert_eq!(h1_line, gpui::px(26.));
+    }
 
     #[test]
     fn fold_label_falls_back_without_elapsed() {
@@ -8738,14 +8768,14 @@ mod tests {
     #[gpui::test]
     fn a_mermaid_fence_paints_a_diagram(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
 
         struct DiagramDocView;
         impl gpui::Render for DiagramDocView {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
                 div().w(px(360.)).child(render_markdown_document(
                     "```mermaid\ngraph TD\n  A[Ask] --> B{Ready?}\n  B -->|yes| C[Ship]\n  B -->|no| A\n```",
-                    theme::Theme::for_id(theme::ThemeId::Orbit),
+                    theme::Theme::for_id(theme::ThemeKey::ORBIT),
                 ))
             }
         }
@@ -8782,13 +8812,13 @@ mod tests {
         // yet, and laying one out per heartbeat would trade a frame for a
         // flicker. The same fence upgrades as soon as the row settles.
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let settled = Rc::new(Cell::new(false));
 
         struct StreamingView(Rc<Cell<bool>>);
         impl gpui::Render for StreamingView {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
-                let theme = theme::Theme::for_id(theme::ThemeId::Orbit);
+                let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
                 div().w(px(360.)).child(render_code_block(
                     Some("mermaid"),
                     &["graph TD".to_string(), "  A --> B".to_string()],
@@ -9103,7 +9133,7 @@ mod tests {
                 state: self.selection.clone(),
                 message_ix: 0,
             });
-            let theme = theme::Theme::for_id(theme::ThemeId::Orbit);
+            let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
             div().w_full().child(paragraph_text(
                 "PR created: https://github.com/imrj05/orbit/pull/36",
                 14.,
@@ -9528,15 +9558,19 @@ mod tests {
                 state: self.selection.clone(),
                 message_ix: 0,
             });
-            div().w_full().child(render_table(
-                &self.header,
-                &self.rows,
-                &[],
-                0,
-                0,
-                0,
-                theme::Theme::for_id(theme::ThemeId::Orbit),
-            ))
+            div().w_full().child({
+                let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
+                render_table(
+                    &self.header,
+                    &self.rows,
+                    &[],
+                    0,
+                    0,
+                    0,
+                    theme.output_prose,
+                    theme,
+                )
+            })
         }
     }
 
@@ -9690,7 +9724,7 @@ mod tests {
         }
 
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
         let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![ChatMessage {
             user: true,
@@ -9820,7 +9854,7 @@ mod tests {
         }
 
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
         let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![ChatMessage {
             user: true,
@@ -9862,7 +9896,7 @@ mod tests {
     #[gpui::test]
     fn summary_cards_render_collapsed_and_expanded(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let boundary = |branch: bool, summary: &str, tokens: Option<u64>| ChatMessage {
             user: false,
             summary: Some(SummaryRow {
@@ -9907,7 +9941,7 @@ mod tests {
     #[gpui::test]
     fn tables_fit_their_content_without_filling_the_strip_or_pane(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
         let messages = test_messages();
         let prose = "Normal prose keeps its centered reading width. "
@@ -9992,7 +10026,7 @@ mod tests {
     #[gpui::test]
     fn transcript_table_viewport_breaks_out_of_the_prose_strip(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
         let messages = test_messages();
         let before = "Before the table, prose keeps its reading width. "
@@ -10087,7 +10121,7 @@ mod tests {
     #[gpui::test]
     fn expanded_activity_stays_inside_the_original_message_column(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
         let messages = test_messages();
         let prose = "A wrapping paragraph before the next activity group. "
@@ -10193,7 +10227,7 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
         let messages = test_messages();
         messages.borrow_mut().truncate(1);
@@ -10261,7 +10295,7 @@ mod tests {
                 // padding belongs below the indicator, never per-row
                 // accumulation.
                 let row_bottom_pad =
-                    DynamicSpacing::Base24.px(&theme::Theme::for_id(theme::ThemeId::Orbit));
+                    DynamicSpacing::Base24.px(&theme::Theme::for_id(theme::ThemeKey::ORBIT));
                 assert_eq!(
                     height - indicator.bottom(),
                     row_bottom_pad,
@@ -10312,7 +10346,7 @@ mod tests {
     #[gpui::test]
     fn transcript_drag_selects_across_paragraphs(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
         let messages = test_messages();
         let scroller = MessageScrollerState::new(messages.borrow().len());
@@ -10436,7 +10470,7 @@ mod tests {
         let cx = cx.add_empty_window();
         let requested = Arc::new(std::sync::Mutex::new(Vec::new()));
         cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.set_http_client(Arc::new(PngHttpClient {
                 requested: requested.clone(),
             }));
@@ -10451,7 +10485,7 @@ mod tests {
                     .debug_selector(|| "image-doc".to_string())
                     .child(render_markdown_document(
                         "<img width=\"1450\" height=\"932\" alt=\"Image\" src=\"https://example.com/shot.png\" />",
-                        theme::Theme::for_id(theme::ThemeId::Orbit),
+                        theme::Theme::for_id(theme::ThemeKey::ORBIT),
                     ))
             }
         }
@@ -10500,7 +10534,7 @@ mod tests {
         let cx = cx.add_empty_window();
         let requested = Arc::new(std::sync::Mutex::new(Vec::new()));
         cx.update(|_, cx| {
-            cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit));
+            cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT));
             cx.set_http_client(Arc::new(PngHttpClient {
                 requested: requested.clone(),
             }));
@@ -10511,7 +10545,7 @@ mod tests {
             fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
                 div().id("reply-doc").w(px(240.)).child(render_markdown_document(
                     "> ### What happened?\n> <img alt=\"Image\" width=\"1450\" height=\"932\" src=\"https://private-user-images.githubusercontent.com/74659438/656345150-69f721c8-e025-44cd-8242-4e87eef54f7e.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.expired\">\n> ### Steps to reproduce\n> 1. Open OrbitPI on windows\n",
-                    theme::Theme::for_id(theme::ThemeId::Orbit),
+                    theme::Theme::for_id(theme::ThemeKey::ORBIT),
                 ))
             }
         }
@@ -10587,7 +10621,7 @@ mod tests {
         }
 
         let cx = cx.add_empty_window();
-        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeId::Orbit)));
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
 
         // One turn that has worked but not yet spoken, so the group has work
         // to fold. No answer text: that is what makes a group "live" — the

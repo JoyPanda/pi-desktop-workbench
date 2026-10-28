@@ -67,6 +67,8 @@ RestartApplications=no
 [Files]
 Source: "{#SourceDir}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+; Same directory the loader reads: current_exe().parent()/themes
+Source: "..\..\crates\orbit-pi\themes\*"; DestDir: "{app}\themes"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

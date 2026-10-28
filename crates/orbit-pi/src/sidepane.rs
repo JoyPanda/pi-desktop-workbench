@@ -2379,12 +2379,12 @@ impl Render for DragGhost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::ThemeId;
+    use crate::theme::ThemeKey;
     use gpui::point;
 
     fn pane(cx: &mut gpui::TestAppContext) -> Entity<SidePane> {
         cx.update(|cx| {
-            cx.set_global(Theme::for_id(ThemeId::Orbit));
+            cx.set_global(Theme::for_id(ThemeKey::ORBIT));
             cx.new(SidePane::new)
         })
     }
@@ -2584,7 +2584,7 @@ mod tests {
     /// render time.
     #[gpui::test]
     fn every_view_mode_draws(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
         let cx = cx.add_empty_window();
         let pane = cx.update(|_, cx| cx.new(SidePane::new));
         cx.update(|_, cx| {
@@ -2627,7 +2627,7 @@ mod tests {
     /// stay at the viewport's edges while only the code pans sideways beneath.
     #[gpui::test]
     fn unwrapped_file_header_stays_fixed_while_code_pans(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
         let cx = cx.add_empty_window();
         let pane = cx.update(|_, cx| cx.new(SidePane::new));
         let long = "x".repeat(200);

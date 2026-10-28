@@ -243,7 +243,7 @@ mod tests {
         // look like the same kind of row. The header owns the accent-hued,
         // body-bright ink (or its own hue); session titles sit a step below at
         // secondary.
-        for id in crate::theme::ThemeId::ALL {
+        for id in crate::theme::bundled_keys() {
             let theme = crate::theme::Theme::for_id(id);
             let default_ink = default_label_ink(&theme);
             assert_ne!(

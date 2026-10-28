@@ -749,10 +749,10 @@ mod tests {
     /// regression guard for a modal that paints nothing (a 0-size flex bug).
     #[gpui::test]
     fn select_dialog_lays_out_a_card(cx: &mut gpui::TestAppContext) {
-        use crate::theme::{Theme, ThemeId};
+        use crate::theme::{Theme, ThemeKey};
         use gpui::size;
 
-        cx.update(|cx| cx.set_global(Theme::for_id(ThemeId::Orbit)));
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
         let cx = cx.add_empty_window();
         let request = DialogRequest {
             id: "d1".into(),

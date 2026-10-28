@@ -6,7 +6,7 @@
 use super::*;
 use crate::app::composer_ops::CompletionIntent;
 use crate::composer_send::SendMode;
-use crate::theme::{Theme, ThemeId};
+use crate::theme::{Theme, ThemeKey};
 
 /// Put the composer on `text` with the completion menu open on a single known
 /// file. The catalog is seeded directly and stamped as belonging to the
@@ -24,7 +24,7 @@ fn open_menu_on(app: &mut OrbitApp, text: &str, cx: &mut Context<OrbitApp>) {
 
 fn app(cx: &mut gpui::TestAppContext) -> Entity<OrbitApp> {
     cx.update(|cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     })
 }
@@ -191,7 +191,7 @@ fn a_partial_mention_is_still_completed(cx: &mut gpui::TestAppContext) {
 fn clicking_outside_closes_the_menu_immediately(cx: &mut gpui::TestAppContext) {
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| {
-        cx.set_global(Theme::for_id(ThemeId::Orbit));
+        cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     });
     cx.update(|window, cx| {

@@ -121,7 +121,9 @@ fn fit(width: u32, height: u32, max_edge: u32) -> (u32, u32) {
     }
     let scale = max_edge as f64 / longest as f64;
     let w = ((width as f64) * scale).round().clamp(1.0, max_edge as f64) as u32;
-    let h = ((height as f64) * scale).round().clamp(1.0, max_edge as f64) as u32;
+    let h = ((height as f64) * scale)
+        .round()
+        .clamp(1.0, max_edge as f64) as u32;
     (w, h)
 }
 
@@ -138,7 +140,9 @@ fn encode_jpeg_capped(image: &DynamicImage) -> Option<Vec<u8>> {
         if base64_len(buf.len()) <= MAX_BASE64_BYTES || quality <= JPEG_QUALITY_MIN {
             return Some(buf);
         }
-        quality = quality.saturating_sub(JPEG_QUALITY_STEP).max(JPEG_QUALITY_MIN);
+        quality = quality
+            .saturating_sub(JPEG_QUALITY_STEP)
+            .max(JPEG_QUALITY_MIN);
     }
 }
 
@@ -248,7 +252,10 @@ mod tests {
         let decoded = image::load_from_memory(&out.bytes).unwrap();
         assert!(decoded.width() <= MAX_EDGE);
         assert!(decoded.height() <= MAX_EDGE);
-        assert!(out.bytes.len() < png.len(), "compression must shrink the payload");
+        assert!(
+            out.bytes.len() < png.len(),
+            "compression must shrink the payload"
+        );
     }
 
     #[test]
