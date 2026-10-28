@@ -6295,6 +6295,60 @@ pub(crate) fn render_markdown_document(text: &str, theme: Theme) -> impl IntoEle
     )
 }
 
+/// Markdown for one subagent message. Code folds use [`crate::subagent_status::FOLD_SALT`]
+/// so the pane can turn a click back into a content hash. The dummy scroller
+/// has no rows: a fold click must not move the main transcript.
+pub(crate) fn render_subagent_markdown(
+    text: &str,
+    message_ix: usize,
+    theme: Theme,
+    expanded: ExpandedBlocks,
+    copied: CopiedSections,
+) -> impl IntoElement + use<> {
+    render_prose(
+        text,
+        subagent_message_ix(message_ix),
+        crate::subagent_status::FOLD_SALT,
+        theme,
+        theme.output_prose,
+        copied,
+        expanded,
+        true,
+        true,
+        MessageScrollerState::new(0),
+        None,
+    )
+}
+
+/// Code fences in `text`, as `(message index, block index, content hash)`.
+/// The block index matches the one [`render_prose`] uses for fold keys.
+pub(crate) fn markdown_code_sites(text: &str, message_ix: usize) -> Vec<(usize, usize, u64)> {
+    parse_blocks(text)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(block_ix, block)| match block {
+            Block::Code(language, lines) => {
+                let hash = code_block_hash(language.as_deref(), &lines.join("\n"));
+                Some((subagent_message_ix(message_ix), block_ix, hash))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Above any transcript row index, so a subagent code fold does not share an
+/// element id with a message in the main session.
+fn subagent_message_ix(message_ix: usize) -> usize {
+    message_ix.saturating_add(1_000_000)
+}
+
+fn code_block_hash(language: Option<&str>, body: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    language.unwrap_or("").hash(&mut hasher);
+    body.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Vertical space to place *above* `next`, given `prev`. More room above a
 /// heading than below it, tight joins for lists and their introducer, and a
 /// clear break around code and tables (the brief's rhythm table).

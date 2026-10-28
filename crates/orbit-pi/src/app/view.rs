@@ -327,6 +327,7 @@ impl Render for OrbitApp {
             .or_else(|| std::env::current_dir().ok());
         // The rail gates on the main area's width (872px transcript
         // container), which excludes the sessions sidebar when visible.
+        self.place_subagent_scroll();
         let viewport = window.viewport_size();
         // The right side pane is hidden while settings/onboarding own the
         // main area (same rule as the sessions sidebar).
@@ -390,8 +391,19 @@ impl Render for OrbitApp {
         // a change rebuilds the tree off-thread. The Explorer and the Review
         // pane are mutually exclusive right docks: while Review is open the
         // tree stays closed.
-        let explorer_visible =
-            self.project_panel.read(cx).is_open() && !self.settings_open && !pane_open;
+        // Subagent output, Review, and Project share one right dock. The
+        // subagent pane yields when Review is open; Project yields to it too,
+        // so a stale pair of flags never paints two docks.
+        let subagent_visible = self.subagents.is_open()
+            && !self.settings_open
+            && !self.usage_open
+            && self.dependencies_ready()
+            && !pane_open
+            && !pane_full;
+        let explorer_visible = self.project_panel.read(cx).is_open()
+            && !self.settings_open
+            && !pane_open
+            && !subagent_visible;
         let explorer_width = if explorer_visible {
             self.project_panel.read(cx).width()
         } else {
@@ -417,6 +429,11 @@ impl Render for OrbitApp {
         } else {
             px(0.)
         };
+        let subagent_width = if subagent_visible {
+            self.subagent_pane_width()
+        } else {
+            px(0.)
+        };
         let main_width = viewport.width
             - if sidebar_shown {
                 self.sidebar_width
@@ -424,6 +441,7 @@ impl Render for OrbitApp {
                 px(0.)
             }
             - explorer_width
+            - subagent_width
             - pane_width;
         // Composer toolbar compaction: below this column width the access
         // pill drops out and the model label clamps (Send stays reachable).
@@ -442,7 +460,8 @@ impl Render for OrbitApp {
         // +/− chip (Review already shows the same stats).
         // The top bar spans the whole main area, so the docks do not squeeze
         // it — compact only when the main area itself is tight.
-        let compact_chrome = f32::from(main_width + explorer_width + pane_width) < 720.;
+        let compact_chrome =
+            f32::from(main_width + explorer_width + subagent_width + pane_width) < 720.;
         // While a feature card is open, its title moves up into the shared top
         // bar (see `GitPanel::top_bar_leading` / `UsagePage::top_bar_leading`);
         // the card's own chrome (branch selector, filters) stays with the view
@@ -1023,6 +1042,7 @@ impl Render for OrbitApp {
                                         // Extension `setWidget` blocks placed
                                         // above the editor.
                                         .children(self.extension_widgets_above(cx))
+                                        .children(self.subagent_list(cx))
                                         // composer box — the picker popups are
                                         // anchored above their own chips
                                         .child(
@@ -1161,6 +1181,7 @@ impl Render for OrbitApp {
                                 explorer_visible
                                     .then(|| self.project_panel.clone().into_any_element()),
                             )
+                            .children(subagent_visible.then(|| self.subagent_pane(cx)))
                             .children(
                                 pane_visible.then(|| self.sidepane.clone().into_any_element()),
                             ),
@@ -1311,6 +1332,24 @@ impl Render for OrbitApp {
                     let width = event.bounds.size.width - pane - event.event.position.x;
                     app.project_panel
                         .update(cx, |panel, cx| panel.set_width(width, cx));
+                },
+            ))
+            .on_drag_move(cx.listener(
+                |app: &mut Self,
+                 event: &DragMoveEvent<super::subagent_ui::SubagentResize>,
+                 _: &mut Window,
+                 cx: &mut Context<Self>| {
+                    // The dock hugs the window's right edge while Review is
+                    // closed, so its width is the pointer's distance to that edge.
+                    let width = (event.bounds.size.width - event.event.position.x).clamp(
+                        px(super::subagent_ui::SUBAGENT_MIN_W),
+                        px(super::subagent_ui::SUBAGENT_MAX_W),
+                    );
+                    if width != app.subagent_width {
+                        app.subagent_width = width;
+                        crate::layout::set_subagent_width(f32::from(width));
+                        cx.notify();
+                    }
                 },
             ))
             .on_drag_move(cx.listener(

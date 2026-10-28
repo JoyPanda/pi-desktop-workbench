@@ -91,6 +91,18 @@ impl OrbitApp {
                     .collect()
             })
             .unwrap_or_default();
+        if crate::subagent_status::is_inspect_widget(key, &lines) {
+            // Emit-then-retract. An empty retract keeps the buffered body.
+            self.subagents.apply_inspect_lines(&lines);
+            self.after_subagent_board(cx);
+            return;
+        }
+        if crate::subagent_status::is_async_widget(key, &lines) {
+            self.extension_widgets.retain(|widget| widget.key != key);
+            self.subagents.apply_async_lines(&lines);
+            self.after_subagent_board(cx);
+            return;
+        }
         if let Some(ix) = self.extension_widgets.iter().position(|w| w.key == key) {
             if lines.is_empty() {
                 self.extension_widgets.remove(ix);

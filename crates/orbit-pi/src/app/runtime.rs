@@ -194,6 +194,12 @@ impl OrbitApp {
         self.prompt_in_flight = None;
         // Extension widgets belonged to the departing process.
         self.extension_widgets.clear();
+        self.subagents = crate::subagent_status::SubagentBoard::default();
+        self.subagent_scrolls.clear();
+        self.subagent_list_scroll = ScrollHandle::new();
+        self.subagent_scroll_placed = 0;
+        self.subagent_list_rows = 0;
+        self.clear_subagent_folds();
         // So did every custom UI surface: its extension is gone with the
         // process, so nothing can answer it (issue #76).
         self.custom_ui.clear();

@@ -1118,6 +1118,12 @@ impl OrbitApp {
                 self.session_usage = None;
                 // Widgets belong to the process that sent them.
                 self.extension_widgets.clear();
+                self.subagents = crate::subagent_status::SubagentBoard::default();
+                self.subagent_scrolls.clear();
+                self.subagent_list_scroll = ScrollHandle::new();
+                self.subagent_scroll_placed = 0;
+                self.subagent_list_rows = 0;
+                self.clear_subagent_folds();
                 self.reset_turns(cx);
                 self.reset_queue();
                 self.sync_review_context(cx);

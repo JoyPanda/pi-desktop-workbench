@@ -184,6 +184,15 @@ struct ParkedSession {
     /// Extension `setWidget` blocks live at park time, so switching back to a
     /// warm session restores them (a parked process never re-emits).
     widgets: Vec<ExtensionWidget>,
+    /// Subagent list, open transcript, and per-leaf read position. The live
+    /// process does not re-emit the snapshot on resume, so this parks with
+    /// the session the same way `widgets` does.
+    subagents: crate::subagent_status::SubagentBoard,
+    /// Scroll handles for each leaf's transcript, parked so switching back
+    /// restores the pixel offset the anchor describes.
+    subagent_scrolls: HashMap<String, ScrollHandle>,
+    /// The list above the composer, parked with the session.
+    subagent_list_scroll: ScrollHandle,
     /// The session's pending steering / follow-up queue at park time. pi only
     /// emits `queue_update` when the queue changes, so a warm resume would
     /// otherwise show nothing — and a stale restore would show messages pi
@@ -458,6 +467,23 @@ pub struct OrbitApp {
     /// Extension `setWidget` text blocks (above/below the composer), keyed by
     /// the extension's `widgetKey`. Per-session, so it parks with the session.
     extension_widgets: Vec<ExtensionWidget>,
+    /// Background subagent list and the open transcript. Per-session.
+    subagents: crate::subagent_status::SubagentBoard,
+    subagent_scrolls: HashMap<String, ScrollHandle>,
+    subagent_list_scroll: ScrollHandle,
+    /// Width of the subagent dock. Review and Project keep their own.
+    subagent_width: Pixels,
+    /// Last scroll epoch placed into the open transcript, so a render does
+    /// not pull the reader back to the anchor they are already on.
+    subagent_scroll_placed: u64,
+    /// Row count last applied to the subagent list's scroll.
+    subagent_list_rows: usize,
+    /// Per-leaf code-fold widget state. The remembered hashes live on
+    /// `subagents` so they park with the session; this map is only the
+    /// painted keys.
+    subagent_folds: HashMap<String, subagent_ui::SubagentFoldUi>,
+    /// Leaf whose fold keys `subagent_folds` last painted.
+    subagent_fold_owner: Option<String>,
     /// Live `ctx.ui.custom()` surfaces, newest (last) owning focus; multiple
     /// may be open when a component nests.
     custom_ui: CustomUiSurfaces,
@@ -1864,6 +1890,14 @@ impl OrbitApp {
             ask_focus: cx.focus_handle(),
             ask_focus_pending: false,
             extension_widgets: Vec::new(),
+            subagents: crate::subagent_status::SubagentBoard::default(),
+            subagent_scrolls: HashMap::new(),
+            subagent_list_scroll: ScrollHandle::new(),
+            subagent_width: px(crate::layout::subagent_width().unwrap_or(460.)),
+            subagent_scroll_placed: 0,
+            subagent_list_rows: 0,
+            subagent_folds: HashMap::new(),
+            subagent_fold_owner: None,
             custom_ui: CustomUiSurfaces::default(),
             custom_ui_focus_pending: false,
             custom_ui_supported: false,
@@ -2142,6 +2176,7 @@ impl OrbitApp {
                 review_sidepane.update(cx, |pane, cx| pane.show_file(path, cx));
                 let _ = review_app.update(cx, |app, cx| {
                     app.git_open = false;
+                    app.subagents.yield_dock();
                     cx.notify();
                 });
             }));
@@ -3413,6 +3448,7 @@ mod session;
 mod settings;
 mod sidebar;
 mod skills_ui;
+mod subagent_ui;
 mod temp_ui;
 mod toast_ui;
 mod updater_ui;

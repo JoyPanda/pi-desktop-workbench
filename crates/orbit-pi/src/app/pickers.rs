@@ -488,9 +488,10 @@ impl OrbitApp {
                 cx.notify();
             }
             CommandId::ToggleSidePanel => {
-                // Opening Review replaces the Git page, which shares the window.
+                // Opening Review replaces the Git page and the subagent dock.
                 if !self.sidepane.read(cx).is_open() {
                     self.close_git_for_review(cx);
+                    self.subagents.yield_dock();
                 }
                 self.sidepane.update(cx, |pane, cx| pane.toggle(cx));
             }

@@ -437,6 +437,10 @@ impl OrbitApp {
         let busy = self.busy || self.transcript.is_streaming();
         let transcript = std::mem::replace(&mut self.transcript, Transcript::new());
         let widgets = std::mem::take(&mut self.extension_widgets);
+        let subagents = std::mem::take(&mut self.subagents);
+        let subagent_scrolls = std::mem::take(&mut self.subagent_scrolls);
+        let subagent_list_scroll =
+            std::mem::replace(&mut self.subagent_list_scroll, ScrollHandle::new());
         let parked = ParkedSession {
             client,
             transcript,
@@ -445,6 +449,9 @@ impl OrbitApp {
             removed: self.removed,
             mcp_stamp: self.mcp_stamp,
             widgets,
+            subagents,
+            subagent_scrolls,
+            subagent_list_scroll,
             queue: self.queue.clone(),
             parked_at: Instant::now(),
             turns: std::mem::take(&mut self.turns),
@@ -453,6 +460,7 @@ impl OrbitApp {
             Some(path) => self.park(path, parked),
             None => self.pending_parks.push(parked),
         }
+        self.clear_subagent_folds();
     }
 
     /// Keep the next checkpoint ref numbered past any ref already stored.
@@ -1244,6 +1252,17 @@ impl OrbitApp {
             self.added = parked.added;
             self.removed = parked.removed;
             self.extension_widgets = parked.widgets;
+            self.subagents = parked.subagents;
+            self.subagent_scrolls = parked.subagent_scrolls;
+            self.subagent_list_scroll = parked.subagent_list_scroll;
+            self.subagent_scroll_placed = self.subagents.scroll_epoch();
+            self.subagent_list_rows = self.subagents.rows().len();
+            self.clear_subagent_folds();
+            // Parked sessions cancel extension UI, including the inspect
+            // reply that was in flight. The restored board would otherwise
+            // wait for a request id that never comes.
+            self.subagents.drop_inflight();
+            self.dispatch_subagent_inspects();
             // pi re-emits `queue_update` only on a change, so a warm resume
             // restores the pending bar from the drained mirror instead.
             self.queue = parked.queue;
@@ -1257,6 +1276,12 @@ impl OrbitApp {
             // transcript from disk in the same frame so the switch never waits
             // on pi boot. `get_messages` supersedes it moments later.
             self.extension_widgets.clear();
+            self.subagents = crate::subagent_status::SubagentBoard::default();
+            self.subagent_scrolls.clear();
+            self.subagent_list_scroll = ScrollHandle::new();
+            self.subagent_scroll_placed = 0;
+            self.subagent_list_rows = 0;
+            self.clear_subagent_folds();
             self.preview_session_transcript(session.path.clone(), cx);
             if !session.cwd.is_dir() {
                 // The session's workspace is gone (a removed worktree, a
@@ -1594,6 +1619,7 @@ impl OrbitApp {
     /// Open Review (⌘⇧R and the palette), replacing the Git page.
     pub(super) fn open_review(&mut self, cx: &mut Context<Self>) {
         self.close_git_for_review(cx);
+        self.subagents.yield_dock();
         self.sidepane.update(cx, |pane, cx| pane.show_review(cx));
     }
 
@@ -2775,8 +2801,13 @@ impl OrbitApp {
     pub(super) fn toggle_side_pane(&mut self, cx: &mut Context<Self>) {
         let pane_open = self.sidepane.read(cx).is_open();
         if !pane_open {
-            // Opening Review replaces the Git page, which shares the window.
+            // Opening Review replaces the Git page, which shares the window,
+            // and the subagent dock, which shares the right column.
             self.close_git_for_review(cx);
+            self.subagents.yield_dock();
+        } else {
+            let free = !self.project_panel.read(cx).is_open();
+            self.subagents.consider_auto_open(free);
         }
         let dirty = self.added > 0 || self.removed > 0;
         self.sidepane.update(cx, |pane, cx| {
@@ -2874,9 +2905,13 @@ impl OrbitApp {
         let opening = !self.project_panel.read(cx).is_open();
         self.project_panel.update(cx, |panel, cx| panel.toggle(cx));
         if opening {
-            // The Explorer and the Review pane are mutually exclusive right
-            // docks: opening the tree closes Review.
+            // The Explorer, Review, and the subagent transcript share one
+            // right dock: opening the tree closes the other two.
             self.sidepane.update(cx, |pane, cx| pane.close(cx));
+            self.subagents.yield_dock();
+        } else {
+            let free = !self.sidepane.read(cx).is_open();
+            self.subagents.consider_auto_open(free);
         }
         cx.notify();
     }
@@ -3097,6 +3132,7 @@ impl OrbitApp {
             let _ = app.update(cx, |app, cx| {
                 app.push_turn_records(cx);
                 app.close_git_for_review(cx);
+                app.subagents.yield_dock();
                 latest = app.turns.latest;
             });
             pane.update(cx, |pane, cx| pane.show_review_turn(latest, cx));
