@@ -1,9 +1,10 @@
 //! Composer autocomplete — `/` command and `@` file mentions.
 //!
-//! Typing `/` at the very start of the composer (with the caret inside that
-//! first word) opens a slash-command menu fed by pi's `get_commands`; typing
-//! `@` after whitespace (or at the start) opens a workspace file menu. Both
-//! are filtered live by the text between the sigil and the caret.
+//! Typing `/` at the start of a word (the beginning of the composer, or right
+//! after whitespace, with the caret still inside that word) opens a
+//! slash-command menu fed by pi's `get_commands`; typing `@` after whitespace
+//! (or at the start) opens a workspace file menu. Both are filtered live by
+//! the text between the sigil and the caret.
 //!
 //! The trigger lives entirely in the composer's text: detection is a pure
 //! function of (content, cursor), so the popup opens/closes by itself as the
@@ -19,7 +20,7 @@ use std::rc::Rc;
 /// Which surface the active trigger opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerKind {
-    /// `/command` — caret is inside the first word of the composer.
+    /// `/command` — caret is inside a command token at a word boundary.
     Slash,
     /// `@file` — the token ends at the caret, starts after whitespace.
     At,
@@ -37,23 +38,23 @@ pub struct Trigger {
 
 /// Detect an autocomplete trigger at `cursor` in `content`.
 ///
-/// - Slash: content starts with `/` and the caret sits before the first
-///   whitespace — the whole first word is the token.
+/// - Slash: the word under the caret starts with `/`, and that `/` sits at
+///   the start of the message or right after whitespace. The caret must still
+///   be inside the word. The token runs to the next whitespace (so a caret in
+///   the middle of `/review` replaces the whole word); `query` is only the
+///   text between the sigil and the caret.
 /// - At: an `@` preceded by line start or whitespace, with no whitespace
-///   between it and the caret — `@query` is the token.
+///   between it and the caret — `@query` is the token. A `/` inside
+///   `@src/main.rs` stays part of the file token.
+///
+/// The menu is looser than paint. Any `/` at a word boundary opens it; a
+/// path like `/usr/local` still does, and the menu stays shut when the query
+/// matches no command. [`tokenize_mentions`] only colors names that look like
+/// commands.
 pub fn detect_trigger(content: &str, cursor: usize) -> Option<Trigger> {
     let cursor = cursor.min(content.len());
-    // Slash only opens at the very start of the message.
-    if let Some(rest) = content.strip_prefix('/') {
-        let token_end = 1 + rest.find(char::is_whitespace).unwrap_or(rest.len());
-        if cursor <= token_end {
-            return Some(Trigger {
-                kind: TriggerKind::Slash,
-                start: 0,
-                end: token_end,
-                query: content[1..cursor].to_string(),
-            });
-        }
+    if let Some(trigger) = detect_slash(content, cursor) {
+        return Some(trigger);
     }
     // At: last `@` before the caret; must start a token and run unbroken
     // (no whitespace) to the caret.
@@ -74,10 +75,41 @@ pub fn detect_trigger(content: &str, cursor: usize) -> Option<Trigger> {
     })
 }
 
+/// Slash trigger for the word containing `cursor`, if that word is a `/…`
+/// token at a boundary (message start or whitespace).
+fn detect_slash(content: &str, cursor: usize) -> Option<Trigger> {
+    let start = token_start_at(content, cursor)?;
+    if !content[start..cursor].starts_with('/') {
+        return None;
+    }
+    let query = &content[start + 1..cursor];
+    let rest = &content[start + 1..];
+    let end = start + 1 + rest.find(char::is_whitespace).unwrap_or(rest.len());
+    Some(Trigger {
+        kind: TriggerKind::Slash,
+        start,
+        end,
+        query: query.to_string(),
+    })
+}
+
+/// Byte index where the token containing `cursor` begins.
+///
+/// `None` when the caret sits on the boundary itself, so there is no token
+/// under it yet (including a caret parked before the first character).
+fn token_start_at(content: &str, cursor: usize) -> Option<usize> {
+    let start = content[..cursor]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map_or(0, |(index, ch)| index + ch.len_utf8());
+    (start < cursor).then_some(start)
+}
+
 /// Which composer token a span paints as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MentionKind {
-    /// `/command` — the leading token of a message.
+    /// `/command` — a command token at a word boundary.
     Command,
     /// `@file` — a workspace reference.
     File,
@@ -91,29 +123,33 @@ pub struct MentionSpan {
     pub kind: MentionKind,
 }
 
-/// Locate the tokens the composer paints in their own color: a leading
-/// `/command` and every `@file` mention. Pure, sorted and non-overlapping,
-/// so the editor's caret/selection model is untouched — this is paint only.
+/// Locate the tokens the composer paints in their own color: every `/command`
+/// at a word boundary and every `@file` mention. Pure, sorted and
+/// non-overlapping, so the editor's caret/selection model is untouched — this
+/// is paint only.
 ///
-/// The rules mirror [`detect_trigger`]: a slash token only opens at the very
-/// start of the message and must look like a command name (a path like
-/// `/usr/local` stays plain); an `@` must sit at a token boundary and runs
-/// unbroken to the next whitespace.
+/// The rules mirror [`detect_trigger`]: a slash token opens at the start of
+/// the message or right after whitespace, and must look like a command name
+/// (a path like `/usr/local` stays plain); an `@` must sit at a token boundary
+/// and runs unbroken to the next whitespace.
 pub fn tokenize_mentions(content: &str) -> Vec<MentionSpan> {
     let mut spans = Vec::new();
 
-    // Leading `/command`: the whole first word, only when every character
-    // after the sigil reads as a command name.
-    if content.starts_with('/') {
-        let word_end = content.find(char::is_whitespace).unwrap_or(content.len());
-        let name = &content[1..word_end];
-        if !name.is_empty()
-            && name
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'))
-        {
+    // `/command`: the whole word, only when every character after the sigil
+    // reads as a command name. A `/` glued to the previous word (`http://`,
+    // `please/review`) is not a command.
+    for (slash, _) in content.match_indices('/') {
+        if slash != 0 && !content[..slash].ends_with(char::is_whitespace) {
+            continue;
+        }
+        let end = content[slash..]
+            .find(char::is_whitespace)
+            .map(|off| slash + off)
+            .unwrap_or(content.len());
+        let name = &content[slash + 1..end];
+        if is_command_name(name) {
             spans.push(MentionSpan {
-                range: 0..word_end,
+                range: slash..end,
                 kind: MentionKind::Command,
             });
         }
@@ -136,7 +172,17 @@ pub fn tokenize_mentions(content: &str) -> Vec<MentionSpan> {
         }
     }
 
+    spans.sort_by_key(|span| span.range.start);
     spans
+}
+
+/// A `/command` name: non-empty, and only the characters pi command names use.
+/// A slash or other punctuation (`/usr/local`) keeps the word plain text.
+fn is_command_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':'))
 }
 
 /// Where a `/` command comes from — the scope badge shown on its row.
@@ -688,22 +734,78 @@ mod tests {
     }
 
     #[test]
-    fn slash_triggers_only_at_start_before_whitespace() {
+    fn slash_triggers_at_a_word_boundary_before_whitespace() {
         let t = detect_trigger("/rev", 4).unwrap();
         assert_eq!(t.kind, TriggerKind::Slash);
         assert_eq!(t.query, "rev");
         assert_eq!(t.start, 0);
         assert_eq!(t.end, 4);
-        // Query cut at the caret.
-        assert_eq!(detect_trigger("/rev", 2).unwrap().query, "r");
-        // Caret past the first word closes the trigger.
+        // Query cut at the caret; the replacement still covers the whole word.
+        let mid = detect_trigger("/review", 3).unwrap();
+        assert_eq!(mid.query, "re");
+        assert_eq!(mid.start, 0);
+        assert_eq!(mid.end, 7);
+        // Caret past the word closes the trigger.
         assert!(detect_trigger("/rev ", 5).is_none());
-        // `/` not at the start is plain text.
-        assert!(detect_trigger("run /rev", 8).is_none());
+        // A slash after whitespace opens on that token, not only at column 0.
+        let inline = detect_trigger("run /rev", 8).unwrap();
+        assert_eq!(inline.kind, TriggerKind::Slash);
+        assert_eq!(inline.query, "rev");
+        assert_eq!(inline.start, 4);
+        assert_eq!(inline.end, 8);
+        // Leading space and a new line are boundaries too.
+        assert_eq!(detect_trigger(" /rev", 5).unwrap().start, 1);
+        assert_eq!(detect_trigger("done\n/re", 8).unwrap().query, "re");
+        // No whitespace before the slash keeps it plain text.
+        assert!(detect_trigger("please/review", 13).is_none());
+        assert!(detect_trigger("http://example", 14).is_none());
+        // Caret moved into a later word closes the menu.
+        assert!(detect_trigger("请看 /skill 这里", "请看 /skill 这里".len()).is_none());
         // Empty query right after the sigil still triggers.
         assert_eq!(detect_trigger("/", 1).unwrap().query, "");
+        assert_eq!(detect_trigger("see /", 5).unwrap().query, "");
         // Trigger survives command names with trailing content later on.
-        assert!(detect_trigger("/review focus on app.rs", 2).is_some());
+        let leading = detect_trigger("/review focus on app.rs", 2).unwrap();
+        assert_eq!(leading.kind, TriggerKind::Slash);
+        assert_eq!(leading.query, "r");
+        assert_eq!(leading.end, 7);
+        // A `/` inside an @file stays a file mention.
+        let file = detect_trigger("look at @src/comp", 17).unwrap();
+        assert_eq!(file.kind, TriggerKind::At);
+        assert_eq!(file.query, "src/comp");
+        // The caret in a later @ token does not reopen the earlier slash.
+        let later = detect_trigger("see /cmd @fi", 12).unwrap();
+        assert_eq!(later.kind, TriggerKind::At);
+        assert_eq!(later.query, "fi");
+    }
+
+    #[test]
+    fn slash_trigger_respects_caret_edges() {
+        // Caret before a leading slash is not inside the token. The old
+        // detector sliced `content[1..0]` here.
+        assert!(detect_trigger("/rev", 0).is_none());
+        // Caret sitting on the space before `/` has not entered the token.
+        assert!(detect_trigger("run /rev", 4).is_none());
+        // Tab is whitespace, same as a space or a newline.
+        let tab = detect_trigger("a\t/re", 5).unwrap();
+        assert_eq!(tab.kind, TriggerKind::Slash);
+        assert_eq!(tab.start, 2);
+        assert_eq!(tab.query, "re");
+        // Ideographic space is whitespace too.
+        let wide = detect_trigger("a\u{3000}/re", 7).unwrap();
+        assert_eq!(wide.start, 4);
+        assert_eq!(wide.query, "re");
+        // Caret mid-word still replaces through the end of that word.
+        let mid = detect_trigger("please /review notes", 10).unwrap();
+        assert_eq!(mid.kind, TriggerKind::Slash);
+        assert_eq!(mid.query, "re");
+        assert_eq!(mid.start, 7);
+        assert_eq!(mid.end, 14);
+        // A later @file that itself contains `/` stays a file mention.
+        let file = detect_trigger("/cmd @src/ma", 12).unwrap();
+        assert_eq!(file.kind, TriggerKind::At);
+        assert_eq!(file.start, 5);
+        assert_eq!(file.query, "src/ma");
     }
 
     #[test]
@@ -751,12 +853,34 @@ mod tests {
 
     #[test]
     fn tokenize_leaves_paths_and_emails_plain() {
-        // A leading path is not a command; a mid-word `@` is not a mention.
+        // A path is not a command, even after whitespace; a mid-word `@` is
+        // not a mention. `http://` and `please/review` have no word boundary.
         assert!(tokenize_mentions("/usr/local/bin").is_empty());
+        assert!(tokenize_mentions("see /usr/local/bin").is_empty());
         assert!(tokenize_mentions("mail me at a@b.com").is_empty());
+        assert!(tokenize_mentions("see http://example.com").is_empty());
+        assert!(tokenize_mentions("please/review").is_empty());
         // A lone sigil has no payload yet.
         assert!(tokenize_mentions("/").is_empty());
         assert!(tokenize_mentions("@").is_empty());
+    }
+
+    #[test]
+    fn tokenize_colors_inline_commands_in_order() {
+        let content = "see @src/main.rs then /skill:impeccable";
+        let spans = tokenize_mentions(content);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].kind, MentionKind::File);
+        assert_eq!(&content[spans[0].range.clone()], "@src/main.rs");
+        assert_eq!(spans[1].kind, MentionKind::Command);
+        assert_eq!(&content[spans[1].range.clone()], "/skill:impeccable");
+        // A command on its own line is colored too.
+        let multiline = tokenize_mentions("done\n/review");
+        assert_eq!(multiline[0].range, 5..12);
+        assert_eq!(multiline[0].kind, MentionKind::Command);
+        let tabbed = tokenize_mentions("done\t/review");
+        assert_eq!(tabbed[0].range, 5..12);
+        assert_eq!(tabbed[0].kind, MentionKind::Command);
     }
 
     #[test]
