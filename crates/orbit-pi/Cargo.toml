@@ -42,6 +42,10 @@ orbit-rpc = { path = "../orbit-rpc" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 unicode-segmentation = "1"
+# CommonMark + the GFM bits the transcript draws (tables, strikethrough,
+# task lists, GitHub alerts). Default features stay off: the html and simd
+# extras are unused, and the parser is the only API we call.
+pulldown-cmark = { version = "0.13", default-features = false }
 include_dir = "0.7"
 # The Explorer's workspace walker. Ripgrep's recursive walker already exists
 # transitively (via `notify`/`globset`), so naming it adds no new package; it

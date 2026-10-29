@@ -1,7 +1,8 @@
 //! Transcript paint — transcript layout, honest Orbit data.
 //!
-//! Rows are plain GPUI flex trees (no component library): user turns are
-//! End-aligned neutral bubbles, assistant turns are Start-aligned prose. A
+//! Rows are plain GPUI flex trees (no component library): a user turn's text
+//! fills the same reading column as assistant prose, assistant turns are
+//! Start-aligned prose. A
 //! ghost copy/timestamp footer reveals on row hover. Settled: **Worked for**
 //! fold → thinking/tool cards → answer → files → copy footer. Live: thinking
 //! and activity cards → answer → files → **Working for** — work stays in
@@ -59,6 +60,10 @@ use crate::theme::tokens::{
 use crate::theme::{self, Theme, ThemeMode};
 use crate::transcript::{ChatMessage, Step, SummaryRow, ToolCall, ToolFacts};
 
+use crate::markdown::{
+    parse_blocks, AlertKind, Block, InlineSpan, ListItem, MdBlock, RichText, TableAlign,
+};
+
 /// Opens the changed-files Review in the side pane (see `sidepane.rs`) —
 /// handed down from the app so the transcript's Review buttons can point
 /// at it without knowing the pane exists.
@@ -77,7 +82,8 @@ pub(crate) type ForkOpener = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 /// break out to the transcript pane's width; their scroll viewport must not
 /// inherit this cap.
 const CONTENT_MAX_WIDTH: f32 = 960.0;
-/// User-bubble max width.
+/// Attachment tiles and file chips stay compact. The typed prompt itself
+/// spans the reading column (see `render_user_bubble`).
 const USER_BUBBLE_MAX_WIDTH: f32 = 540.0;
 /// Message-footer action button size; the footer row, its timestamp, and
 /// its usage metric share the button's height.
@@ -1129,22 +1135,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let show_rail = user_turns.len() >= 2
         && view.main_width >= px(NAVIGATION_RAIL_MIN_MAIN_WIDTH)
         && scroller.is_scrollable();
-    // Reserve the rail's gutter only from spare space outside the normal
-    // text strip, so expanding a table never makes it narrower than prose.
-    let table_inset = if show_rail {
-        ((view.main_width - px(40. + CONTENT_MAX_WIDTH)) / 2.).clamp(
-            px(0.),
-            px(NAVIGATION_RAIL_LEFT + NAVIGATION_RAIL_WIDTH + NAVIGATION_RAIL_CONTENT_GAP - 20.),
-        )
-    } else {
-        px(0.)
-    };
-    let available_width = (view.main_width - px(40.)).max(px(0.));
-    let column_width = available_width.min(px(CONTENT_MAX_WIDTH));
-    let table_breakout = TableBreakout {
-        max_width: (available_width - table_inset * 2.).max(column_width),
-        column_width,
-    };
+    let table_breakout = table_breakout_for(view.main_width, show_rail);
     // The one-time rail hint shows while the rail is up, until the reader
     // uses it (tick click or turn jump) or its TTL lapses. While it shows,
     // it takes the preview card's slot so the two never stack.
@@ -1943,16 +1934,28 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
                     true,
                     true,
                     paint.scroller.clone(),
-                    Some(paint.table_breakout),
+                    // The card clips overflow and is already inset from the
+                    // reading column. Fit the table to that interior so a
+                    // wide table scrolls inside the card instead of breaking
+                    // out into the pane and getting clipped.
+                    Some({
+                        let pad = f32::from(DynamicSpacing::Base12.px(&theme));
+                        let inner =
+                            (paint.table_breakout.column_width - px(pad * 2. + 2.)).max(px(0.));
+                        TableBreakout {
+                            max_width: inner,
+                            column_width: inner,
+                        }
+                    }),
                 )),
         );
     }
     card.into_any_element()
 }
 
-/// End-aligned user row: neutral raised bubble, persistent quiet
-/// footer below. Attached images render as a tile grid above the text
-/// bubble.
+/// User row: the typed prompt is a raised bar whose outer edges match the
+/// reading column. The quiet footer stays end-aligned under it. Attached
+/// images render as a tile grid above the text.
 fn render_user_bubble(message: &ChatMessage, paint: &RowPaint, cx: &gpui::App) -> impl IntoElement {
     let theme = paint.theme;
     let ix = paint.ix;
@@ -2017,7 +2020,8 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint, cx: &gpui::App) -
         .when(!body.trim().is_empty(), |column| {
             column.child(
                 div()
-                    .max_w(px(USER_BUBBLE_MAX_WIDTH))
+                    .w_full()
+                    .min_w_0()
                     .rounded(panel::RADIUS.px(&theme))
                     .bg(theme.output_user_bg)
                     .text_color(theme.output_user_fg)
@@ -5272,197 +5276,6 @@ type InlineRuns = (
     Vec<Range<usize>>,
 );
 
-/// One styled inline span produced by [`parse_inline`].
-#[derive(Clone, Default)]
-struct InlineSpan {
-    text: String,
-    bold: bool,
-    italic: bool,
-    strikethrough: bool,
-    code: bool,
-    link: Option<String>,
-    /// A bare URL the parser recognized, as opposed to a `[label](url)`
-    /// link. Autolinks get an external-link mark in the rendered text.
-    autolink: bool,
-}
-
-fn flush_span(spans: &mut Vec<InlineSpan>, current: &mut InlineSpan) {
-    if !current.text.is_empty() {
-        spans.push(std::mem::take(current));
-    }
-}
-
-/// The end index (exclusive) of a bare `http://` or `https://` URL starting
-/// at `start`, or `None` when the text there is not a URL. The scan stops at
-/// whitespace, `<`, and `>`; trailing sentence punctuation, emphasis markers,
-/// and closing brackets with no opener inside the URL are left for the prose.
-fn autolink_end(chars: &[char], start: usize) -> Option<usize> {
-    let tail = &chars[start..];
-    if !tail.starts_with(&['h', 't', 't', 'p', 's', ':', '/', '/'])
-        && !tail.starts_with(&['h', 't', 't', 'p', ':', '/', '/'])
-    {
-        return None;
-    }
-    let mut end = start;
-    while end < chars.len() && !chars[end].is_whitespace() && chars[end] != '<' && chars[end] != '>'
-    {
-        end += 1;
-    }
-    while end > start {
-        let last = chars[end - 1];
-        let trim = matches!(
-            last,
-            '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '*' | '_' | '~'
-        ) || (matches!(last, ')' | ']' | '}') && {
-            let opener = match last {
-                ')' => '(',
-                ']' => '[',
-                _ => '{',
-            };
-            let opens = chars[start..end].iter().filter(|&&c| c == opener).count();
-            let closes = chars[start..end].iter().filter(|&&c| c == last).count();
-            closes > opens
-        });
-        if !trim {
-            break;
-        }
-        end -= 1;
-    }
-    (end > start).then_some(end)
-}
-
-/// Parse GFM inline syntax: `` `code` ``, `**bold**`, `*italic*`, `_italic_`,
-/// `~~strike~~`, `[links](url)`, and bare `http(s)://` URLs. `\*`-style
-/// escapes render literally.
-fn parse_inline(text: &str) -> Vec<InlineSpan> {
-    let mut spans: Vec<InlineSpan> = Vec::new();
-    let mut current = InlineSpan::default();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let ch = chars[i];
-        match ch {
-            '\\' if i + 1 < chars.len() && "*_`~[]".contains(chars[i + 1]) => {
-                current.text.push(chars[i + 1]);
-                i += 2;
-            }
-            '`' => match (i + 1..chars.len()).find(|&j| chars[j] == '`') {
-                Some(close) => {
-                    flush_span(&mut spans, &mut current);
-                    spans.push(InlineSpan {
-                        text: chars[i + 1..close].iter().collect(),
-                        code: true,
-                        bold: current.bold,
-                        ..InlineSpan::default()
-                    });
-                    i = close + 1;
-                }
-                None => {
-                    current.text.push('`');
-                    i += 1;
-                }
-            },
-            '*' if i + 1 < chars.len() && chars[i + 1] == '*' => {
-                flush_span(&mut spans, &mut current);
-                current.bold = !current.bold;
-                i += 2;
-            }
-            '_' if i + 1 < chars.len()
-                && chars[i + 1] == '_'
-                && (i == 0 || !chars[i - 1].is_alphanumeric()) =>
-            {
-                flush_span(&mut spans, &mut current);
-                current.bold = !current.bold;
-                i += 2;
-            }
-            '~' if i + 1 < chars.len() && chars[i + 1] == '~' => {
-                flush_span(&mut spans, &mut current);
-                current.strikethrough = !current.strikethrough;
-                i += 2;
-            }
-            '*' => {
-                // Italic: an opening `*` needs a non-space next char, a
-                // closing one a non-space previous char.
-                let opens = i + 1 < chars.len() && !chars[i + 1].is_whitespace();
-                let closes = i > 0 && !chars[i - 1].is_whitespace();
-                if (current.italic && closes) || (!current.italic && opens) {
-                    flush_span(&mut spans, &mut current);
-                    current.italic = !current.italic;
-                } else {
-                    current.text.push('*');
-                }
-                i += 1;
-            }
-            '_' if i == 0 || !chars[i - 1].is_alphanumeric() => {
-                let opens = i + 1 < chars.len() && !chars[i + 1].is_whitespace();
-                let closes = i > 0 && !chars[i - 1].is_whitespace();
-                if (current.italic && closes) || (!current.italic && opens) {
-                    flush_span(&mut spans, &mut current);
-                    current.italic = !current.italic;
-                } else {
-                    current.text.push('_');
-                }
-                i += 1;
-            }
-            '[' => {
-                // Try `[label](url)` — fall back to a literal `[`.
-                let mut label_end = None;
-                let mut j = i + 1;
-                while j < chars.len() && chars[j] != '\n' {
-                    if chars[j] == ']' && j + 1 < chars.len() && chars[j + 1] == '(' {
-                        label_end = Some(j);
-                        break;
-                    }
-                    j += 1;
-                }
-                let mut matched = false;
-                if let Some(label_end) = label_end {
-                    if let Some(close) = (label_end + 2..chars.len())
-                        .take_while(|&k| chars[k] != '\n')
-                        .find(|&k| chars[k] == ')')
-                    {
-                        flush_span(&mut spans, &mut current);
-                        let mut span = current.clone();
-                        span.text = chars[i + 1..label_end].iter().collect();
-                        span.link = Some(chars[label_end + 2..close].iter().collect());
-                        spans.push(span);
-                        i = close + 1;
-                        matched = true;
-                    }
-                }
-                if !matched {
-                    current.text.push('[');
-                    i += 1;
-                }
-            }
-            'h' => {
-                // A bare URL is a link even without `[label](url)` syntax.
-                if let Some(end) = autolink_end(&chars, i) {
-                    // Capture the surrounding style before the flush resets
-                    // it, so a URL inside `**bold**` stays bold.
-                    let mut span = current.clone();
-                    flush_span(&mut spans, &mut current);
-                    span.text = chars[i..end].iter().collect();
-                    span.link = Some(span.text.clone());
-                    span.autolink = true;
-                    spans.push(span);
-                    i = end;
-                } else {
-                    current.text.push(ch);
-                    i += 1;
-                }
-            }
-            other => {
-                current.text.push(other);
-                i += 1;
-            }
-        }
-    }
-    flush_span(&mut spans, &mut current);
-    spans
-}
-
 /// Build `(text, runs, links)` for a [`StyledText`] from inline spans. Each
 /// link is a `(byte range, url)` pair into the flattened body.
 fn inline_runs(
@@ -5601,7 +5414,7 @@ fn ui_font() -> Font {
 /// background at the line box height, so 14/24 stays inside the line. 14/22
 /// let the next wrapped line paint through the previous wash.
 fn paragraph_text(
-    text: &str,
+    text: &RichText,
     size: f32,
     line_height: f32,
     weight: FontWeight,
@@ -5609,8 +5422,7 @@ fn paragraph_text(
     key: ElementId,
     theme: Theme,
 ) -> impl IntoElement {
-    let spans = parse_inline(text);
-    let (body, runs, links, marks) = inline_runs(&spans, weight, color, theme);
+    let (body, runs, links, marks) = inline_runs(&text.spans, weight, color, theme);
     let wrapper = div()
         .w_full()
         .min_w_0()
@@ -5661,41 +5473,6 @@ fn md_id(ix: usize, salt: u64, block_ix: usize, sub: usize) -> ElementId {
     )
 }
 
-// ── block model ─────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-enum Block {
-    Paragraph(Vec<String>),
-    Heading(u8, String),
-    Code(Option<String>, Vec<String>),
-    List(Vec<ListItem>),
-    Quote(Vec<String>),
-    /// GitHub-style alert (`> [!NOTE]` …): a labeled, tinted callout.
-    Alert(AlertKind, Vec<String>),
-    Rule,
-    Table {
-        header: Vec<String>,
-        rows: Vec<Vec<String>>,
-        aligns: Vec<TableAlign>,
-    },
-    /// A standalone image: a Markdown `![alt](url)` line or an HTML
-    /// `<img src="…">` tag. GitHub issue screenshots usually land on their
-    /// own line, so the block model is enough to render them inline.
-    Image {
-        alt: String,
-        url: String,
-    },
-}
-
-/// GFM column alignment parsed from a table's delimiter row.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum TableAlign {
-    #[default]
-    Left,
-    Center,
-    Right,
-}
-
 impl TableAlign {
     fn text_align(self) -> TextAlign {
         match self {
@@ -5704,17 +5481,6 @@ impl TableAlign {
             Self::Right => TextAlign::Right,
         }
     }
-}
-
-/// Kinds of GitHub alert blockquote (`> [!WARNING]` …). Each maps to one
-/// semantic token color and one icon, so the family stays consistent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AlertKind {
-    Note,
-    Tip,
-    Important,
-    Warning,
-    Caution,
 }
 
 impl AlertKind {
@@ -5746,424 +5512,19 @@ impl AlertKind {
     }
 }
 
-#[derive(Clone)]
-struct ListItem {
-    depth: usize,
-    ordered: bool,
-    number: u64,
-    /// GFM task-list state: `Some(true)` checked, `Some(false)` open, `None`
-    /// a plain item. Task items drop the bullet/number for a checkbox.
-    checked: Option<bool>,
-    text: String,
-}
-
-fn flush_paragraph(paragraph: &mut Vec<String>, blocks: &mut Vec<Block>) {
-    if !paragraph.is_empty() {
-        blocks.push(Block::Paragraph(std::mem::take(paragraph)));
-    }
-}
-
-fn heading_line(trimmed: &str) -> Option<(u8, String)> {
-    let level = trimmed.chars().take_while(|&c| c == '#').count();
-    if (1..=6).contains(&level) {
-        if let Some(body) = trimmed[level..].strip_prefix(' ') {
-            let body = body.trim();
-            if !body.is_empty() {
-                // Keep the real level; the renderer gives h4+ a smaller step
-                // rather than flattening everything past h3 to one size.
-                return Some((level as u8, body.to_string()));
-            }
-        }
-    }
-    None
-}
-
-fn is_rule(trimmed: &str) -> bool {
-    let compact: String = trimmed.chars().filter(|c| !c.is_whitespace()).collect();
-    match compact.chars().next() {
-        Some(first @ ('-' | '*' | '_')) => {
-            compact.len() >= 3 && compact.chars().all(|c| c == first)
-        }
-        _ => false,
-    }
-}
-
-/// Parse a line that is solely an image into `(alt, url)`.
-///
-/// Handles Markdown `![alt](url "title")` (with optional `<…>` wrapping) and
-/// the HTML `<img src="…">` form GitHub sometimes stores. Returns `None` for
-/// a line that merely contains an image among other text, so prose is never
-/// split mid-sentence.
-fn image_line(trimmed: &str) -> Option<(String, String)> {
-    let t = trimmed.trim();
-    if let Some(rest) = t.strip_prefix("![") {
-        let close = rest.find("](")?;
-        let alt = rest[..close].to_string();
-        let after = &rest[close + 2..];
-        let end = after.find(')')?;
-        // A title follows the URL after whitespace; the URL itself may be
-        // wrapped in angle brackets (Markdown's escape for spaces).
-        let raw = after[..end].trim();
-        let url = raw
-            .strip_prefix('<')
-            .and_then(|rest| rest.split('>').next())
-            .unwrap_or_else(|| raw.split_whitespace().next().unwrap_or(""));
-        if !url.is_empty() {
-            return Some((alt, normalize_image_url(url)));
-        }
-        return None;
-    }
-    if t.starts_with("<img") {
-        let src = html_attr(t, "src")?;
-        if !src.is_empty() {
-            return Some((
-                html_attr(t, "alt").unwrap_or_default(),
-                normalize_image_url(&src),
-            ));
-        }
-    }
-    None
-}
-
-/// Rewrite GitHub's signed `private-user-images` CDN URL to the durable
-/// `user-attachments` URL for the same asset.
-///
-/// A screenshot pasted into a comment is stored as
-/// `private-user-images.githubusercontent.com/<user>/<asset>-<uuid>.<ext>?jwt=…`.
-/// That JWT expires within minutes, and GitHub re-signs the URL only when it
-/// renders the page itself — so the stored URL 404s for Orbit and the reply
-/// shows the alt-text fallback. The durable URL is the same asset and never
-/// expires: it is the form the issue/PR body itself uses.
-fn normalize_image_url(url: &str) -> String {
-    const SIGNED_HOST: &str = "https://private-user-images.githubusercontent.com/";
-    let Some(rest) = url.strip_prefix(SIGNED_HOST) else {
-        return url.to_string();
-    };
-    let path = rest.split(['?', '#']).next().unwrap_or(rest);
-    let file = path.rsplit('/').next().unwrap_or(path);
-    // `<asset id>-<uuid>.<ext>`: the UUID half names the durable asset.
-    let Some((_, stem)) = file.split_once('-') else {
-        return url.to_string();
-    };
-    let uuid = stem.rsplit_once('.').map_or(stem, |(stem, _)| stem);
-    if !is_uuid(uuid) {
-        return url.to_string();
-    }
-    format!("https://github.com/user-attachments/assets/{uuid}")
-}
-
-/// `8-4-4-4-12` hex, the shape of GitHub's asset IDs.
-fn is_uuid(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 36
-        && bytes.iter().enumerate().all(|(ix, byte)| match ix {
-            8 | 13 | 18 | 23 => *byte == b'-',
-            _ => byte.is_ascii_hexdigit(),
-        })
-}
-
-/// Read `name="value"` (single or double quoted) from a tag's source text.
-fn html_attr(tag: &str, name: &str) -> Option<String> {
-    let lower = tag.to_ascii_lowercase();
-    let key = format!("{name}=");
-    let start = lower.find(&key)? + key.len();
-    let rest = &tag[start..];
-    let quote = rest.chars().next()?;
-    if quote != '"' && quote != '\'' {
-        return None;
-    }
-    let rest = &rest[1..];
-    let end = rest.find(quote)?;
-    Some(rest[..end].to_string())
-}
-
-fn list_item_line(line: &str) -> Option<(usize, bool, u64, Option<bool>, String)> {
-    let indent = line.len() - line.trim_start().len();
-    let t = line.trim_start();
-    let (ordered, number, body) = if let Some(rest) = t
-        .strip_prefix("- ")
-        .or_else(|| t.strip_prefix("* "))
-        .or_else(|| t.strip_prefix("+ "))
-    {
-        (false, 0u64, rest)
-    } else {
-        let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
-        if digits == 0 {
-            return None;
-        }
-        let after = t[digits..]
-            .strip_prefix(". ")
-            .or_else(|| t[digits..].strip_prefix(") "))?;
-        (true, t[..digits].parse().ok()?, after)
-    };
-    let (checked, body) = match task_status(body) {
-        Some((checked, rest)) => (Some(checked), rest),
-        None => (None, body),
-    };
-    Some((
-        indent.div_ceil(2).min(2),
-        ordered,
-        number,
-        checked,
-        body.to_string(),
-    ))
-}
-
-/// Strip a leading GFM task marker (`[ ] `, `[x] `, `[X] `) from an item's
-/// body, returning its state and the remaining text.
-fn task_status(body: &str) -> Option<(bool, &str)> {
-    let rest = body.strip_prefix('[')?;
-    let mut chars = rest.chars();
-    let checked = match chars.next()? {
-        ' ' => false,
-        'x' | 'X' => true,
-        _ => return None,
-    };
-    let after = &rest[1..];
-    let after = after.strip_prefix(']')?;
-    Some((checked, after.strip_prefix(' ').unwrap_or(after)))
-}
-
-fn split_table_row(line: &str) -> Vec<String> {
-    let s = line.trim();
-    let s = s.strip_prefix('|').unwrap_or(s);
-    let s = s.strip_suffix('|').unwrap_or(s);
-    s.split('|').map(|cell| cell.trim().to_string()).collect()
-}
-
-/// Parse a GFM delimiter row (`| --- | :--: | ---: |`) into per-column
-/// alignment; `None` when the line is not a delimiter row.
-fn table_aligns(trimmed: &str) -> Option<Vec<TableAlign>> {
-    if !trimmed.contains('-') || !trimmed.contains('|') {
-        return None;
-    }
-    if !trimmed.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
-        return None;
-    }
-    let cells = split_table_row(trimmed);
-    if cells.is_empty() {
-        return None;
-    }
-    Some(
-        cells
-            .iter()
-            .map(|cell| {
-                let left = cell.starts_with(':');
-                let right = cell.ends_with(':');
-                match (left, right) {
-                    (true, true) => TableAlign::Center,
-                    (false, true) => TableAlign::Right,
-                    _ => TableAlign::Left,
-                }
-            })
-            .collect(),
-    )
-}
-
-/// GitHub alert marker on the first quoted line, e.g. `[!WARNING]`.
-fn alert_marker(body: &[String]) -> Option<AlertKind> {
-    let first = body.first()?.trim();
-    let inner = first.strip_prefix("[!")?.strip_suffix(']')?;
-    Some(match inner.trim().to_ascii_uppercase().as_str() {
-        "NOTE" => AlertKind::Note,
-        "TIP" => AlertKind::Tip,
-        "IMPORTANT" => AlertKind::Important,
-        "WARNING" => AlertKind::Warning,
-        "CAUTION" => AlertKind::Caution,
-        _ => return None,
-    })
-}
-
-fn parse_blocks(text: &str) -> Vec<Block> {
-    let mut blocks: Vec<Block> = Vec::new();
-    let mut paragraph: Vec<String> = Vec::new();
-    let lines: Vec<&str> = text.lines().collect();
-    let mut i = 0;
-
-    while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim_start();
-
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            flush_paragraph(&mut paragraph, &mut blocks);
-            let marker = &trimmed[..trimmed.len().min(3)];
-            // The fence info string's first token is the language hint
-            // (```rust, ```text, …) — it becomes the code block's chip.
-            let language = trimmed[3..]
-                .split_whitespace()
-                .next()
-                .filter(|lang| !lang.is_empty())
-                .map(str::to_string);
-            let mut body = Vec::new();
-            i += 1;
-            while i < lines.len() && !lines[i].trim_start().starts_with(marker) {
-                body.push(lines[i].to_string());
-                i += 1;
-            }
-            i += 1; // closing fence (or EOF)
-            blocks.push(Block::Code(language, body));
-            continue;
-        }
-
-        if trimmed.is_empty() {
-            flush_paragraph(&mut paragraph, &mut blocks);
-            i += 1;
-            continue;
-        }
-
-        if let Some((level, body)) = heading_line(trimmed) {
-            flush_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(Block::Heading(level, body));
-            i += 1;
-            continue;
-        }
-
-        if is_rule(trimmed) {
-            flush_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(Block::Rule);
-            i += 1;
-            continue;
-        }
-
-        // A line that is only an image becomes its own block, so a screenshot
-        // pasted under a heading actually paints instead of rendering as a
-        // stray `!` and a link.
-        if let Some((alt, url)) = image_line(trimmed) {
-            flush_paragraph(&mut paragraph, &mut blocks);
-            blocks.push(Block::Image { alt, url });
-            i += 1;
-            continue;
-        }
-
-        if trimmed.contains('|') {
-            if let Some(aligns) = lines
-                .get(i + 1)
-                .and_then(|separator| table_aligns(separator.trim()))
-            {
-                flush_paragraph(&mut paragraph, &mut blocks);
-                let header = split_table_row(trimmed);
-                i += 2;
-                let mut rows = Vec::new();
-                while i < lines.len() {
-                    let row_line = lines[i].trim();
-                    if row_line.is_empty() || !row_line.contains('|') {
-                        break;
-                    }
-                    rows.push(split_table_row(row_line));
-                    i += 1;
-                }
-                blocks.push(Block::Table {
-                    header,
-                    rows,
-                    aligns,
-                });
-                continue;
-            }
-        }
-
-        if trimmed.starts_with('>') {
-            flush_paragraph(&mut paragraph, &mut blocks);
-            let mut body = Vec::new();
-            while i < lines.len() {
-                match lines[i].trim_start().strip_prefix('>') {
-                    Some(rest) => {
-                        body.push(rest.strip_prefix(' ').unwrap_or(rest).to_string());
-                        i += 1;
-                    }
-                    None => break,
-                }
-            }
-            match alert_marker(&body) {
-                Some(kind) => {
-                    body.remove(0);
-                    // Drop the blank separator line GitHub allows after the
-                    // marker so the callout body starts on real content.
-                    while body.first().is_some_and(|line| line.trim().is_empty()) {
-                        body.remove(0);
-                    }
-                    blocks.push(Block::Alert(kind, body));
-                }
-                None => blocks.push(Block::Quote(body)),
-            }
-            continue;
-        }
-
-        if let Some((depth, ordered, number, checked, body)) = list_item_line(line) {
-            flush_paragraph(&mut paragraph, &mut blocks);
-            let mut items = Vec::new();
-            let mut pending = ListItem {
-                depth,
-                ordered,
-                number,
-                checked,
-                text: body,
-            };
-            i += 1;
-            while i < lines.len() {
-                let l = lines[i];
-                if l.trim().is_empty() {
-                    // A blank line keeps the list open only when another
-                    // item follows (loose list).
-                    let mut look = i + 1;
-                    while look < lines.len() && lines[look].trim().is_empty() {
-                        look += 1;
-                    }
-                    if look < lines.len() && list_item_line(lines[look]).is_some() {
-                        i = look;
-                        continue;
-                    }
-                    break;
-                }
-                if let Some((depth, ordered, number, checked, body)) = list_item_line(l) {
-                    // A marker-type change starts a new list.
-                    if ordered != pending.ordered {
-                        break;
-                    }
-                    items.push(std::mem::replace(
-                        &mut pending,
-                        ListItem {
-                            depth,
-                            ordered,
-                            number,
-                            checked,
-                            text: body,
-                        },
-                    ));
-                    i += 1;
-                } else if l.starts_with("  ") || l.starts_with('\t') {
-                    // Indented continuation of the pending item.
-                    pending.text.push(' ');
-                    pending.text.push_str(l.trim());
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-            items.push(pending);
-            blocks.push(Block::List(items));
-            continue;
-        }
-
-        paragraph.push(line.trim().to_string());
-        i += 1;
-    }
-    flush_paragraph(&mut paragraph, &mut blocks);
-    blocks
-}
-
 thread_local! {
     /// Memoized markdown block parses, keyed by content hash. Every visible
     /// row re-renders on each heartbeat while a run streams (the live clock
     /// alone repaints at ~11 Hz); parsing is pure over the source text, so
     /// each distinct text parses once and rows share the blocks.
-    static BLOCK_PARSE_CACHE: RefCell<HashMap<u64, Rc<Vec<Block>>>> =
+    static BLOCK_PARSE_CACHE: RefCell<HashMap<u64, Rc<Vec<MdBlock>>>> =
         RefCell::new(HashMap::new());
 }
 
 /// Parse markdown into blocks, memoized by content. The cache is small and
 /// cleared when full — a stale-entry miss costs one reparse, never a wrong
 /// render (keyed by the text's full 64-bit hash).
-fn parse_blocks_cached(text: &str) -> Rc<Vec<Block>> {
+fn parse_blocks_cached(text: &str) -> Rc<Vec<MdBlock>> {
     let key = {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         std::hash::Hash::hash(text, &mut hasher);
@@ -6189,8 +5550,29 @@ fn parse_blocks_cached(text: &str) -> Rc<Vec<Block>> {
 /// negative layout margins affecting its siblings' intrinsic measurements.
 #[derive(Clone, Copy)]
 struct TableBreakout {
+    /// Pane width a top-level table may occupy, including margins outside the
+    /// reading column. Columns are fitted to this, not to a character guess.
     max_width: Pixels,
     column_width: Pixels,
+}
+
+/// The rail's gutter comes only out of spare space outside the reading
+/// column, so a wide table never makes that column narrower than prose.
+fn table_breakout_for(main_width: Pixels, show_rail: bool) -> TableBreakout {
+    let table_inset = if show_rail {
+        ((main_width - px(40. + CONTENT_MAX_WIDTH)) / 2.).clamp(
+            px(0.),
+            px(NAVIGATION_RAIL_LEFT + NAVIGATION_RAIL_WIDTH + NAVIGATION_RAIL_CONTENT_GAP - 20.),
+        )
+    } else {
+        px(0.)
+    };
+    let available_width = (main_width - px(40.)).max(px(0.));
+    let column_width = available_width.min(px(CONTENT_MAX_WIDTH));
+    TableBreakout {
+        max_width: (available_width - table_inset * 2.).max(column_width),
+        column_width,
+    }
 }
 
 /// Markdown body uses the theme's conversation measure. Spacing is graded by block pair rather
@@ -6223,7 +5605,7 @@ fn render_prose(
             if i == 0 {
                 0.0
             } else {
-                block_gap(&blocks[i - 1], block)
+                block_gap(&blocks[i - 1].kind, &block.kind)
             }
         })
         .collect();
@@ -6231,40 +5613,49 @@ fn render_prose(
         blocks
             .iter()
             .enumerate()
-            .map(move |(block_ix, block)| {
-                let gap = gaps[block_ix];
+            .map(move |(position, block)| {
+                let gap = gaps[position];
+                let block_ix = block.index as usize;
+                // One plan for the wrapper and the cells. Measuring twice
+                // could disagree once widths come from shaped text.
+                let plan = match &block.kind {
+                    Block::Table { header, rows, .. } => Some(plan_table(
+                        header,
+                        rows,
+                        table_breakout.map(|breakout| f32::from(breakout.max_width)),
+                        theme,
+                    )),
+                    _ => None,
+                };
                 div()
                     .w_full()
                     .min_w_0()
                     .when_some(table_breakout, |node, breakout| {
-                        if let Block::Table { header, rows, .. } = block {
-                            // Fit the capped column widths, not the strip or
-                            // pane. Small tables align with prose; larger ones
+                        if let Some(plan) = plan.as_ref() {
+                            // Small tables stay with the prose. Wider ones
                             // extend equally into its margins, up to the pane.
-                            let natural_width =
-                                px(table_column_widths(header, rows).iter().sum::<f32>() + 2.);
-                            let width = natural_width.min(breakout.max_width);
+                            let width = px(plan.outer);
                             let left = ((breakout.column_width - width) / 2.).min(px(0.));
                             node.flex_none().w(width).relative().left(left)
                         } else {
-                            // Only tables override their width; ordinary prose
-                            // inherits the assistant's reading column.
                             node
                         }
                     })
                     .when(gap > 0.0, |node| node.mt(px(gap)))
                     .child(render_block(
-                        block,
+                        &block.kind,
                         ix,
                         salt,
                         block_ix,
                         theme,
+                        ink,
                         ink,
                         copied_sections.clone(),
                         expanded_blocks.clone(),
                         collapsible,
                         settled,
                         scroller.clone(),
+                        plan,
                     ))
             })
             .collect::<Vec<_>>(),
@@ -6323,17 +5714,24 @@ pub(crate) fn render_subagent_markdown(
 /// Code fences in `text`, as `(message index, block index, content hash)`.
 /// The block index matches the one [`render_prose`] uses for fold keys.
 pub(crate) fn markdown_code_sites(text: &str, message_ix: usize) -> Vec<(usize, usize, u64)> {
-    parse_blocks(text)
-        .into_iter()
-        .enumerate()
-        .filter_map(|(block_ix, block)| match block {
+    let mut sites = Vec::new();
+    collect_code_sites(&parse_blocks(text), message_ix, &mut sites);
+    sites
+}
+
+fn collect_code_sites(blocks: &[MdBlock], message_ix: usize, sites: &mut Vec<(usize, usize, u64)>) {
+    for block in blocks {
+        match &block.kind {
             Block::Code(language, lines) => {
                 let hash = code_block_hash(language.as_deref(), &lines.join("\n"));
-                Some((subagent_message_ix(message_ix), block_ix, hash))
+                sites.push((subagent_message_ix(message_ix), block.index as usize, hash));
             }
-            _ => None,
-        })
-        .collect()
+            Block::Quote(children) | Block::Alert(_, children) => {
+                collect_code_sites(children, message_ix, sites);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Above any transcript row index, so a subagent code fold does not share an
@@ -6379,15 +5777,17 @@ fn render_block(
     block_ix: usize,
     theme: Theme,
     ink: Hsla,
+    body_ink: Hsla,
     copied_sections: CopiedSections,
     expanded_blocks: ExpandedBlocks,
     collapsible: bool,
     settled: bool,
     scroller: MessageScrollerState,
+    table_plan: Option<TablePlan>,
 ) -> AnyElement {
     match block {
-        Block::Paragraph(lines) => paragraph_text(
-            &lines.join(" "),
+        Block::Paragraph(text) => paragraph_text(
+            text,
             theme.type_scale.body,
             theme.type_scale.body_line,
             FontWeight::NORMAL,
@@ -6430,10 +5830,25 @@ fn render_block(
         )
         .into_any_element(),
         Block::Rule => div().w_full().h(px(1.)).bg(theme.border).into_any_element(),
-        Block::Alert(kind, lines) => {
-            render_alert(*kind, lines, ix, salt, block_ix, ink, theme).into_any_element()
-        }
-        Block::Quote(lines) => div()
+        Block::Alert(kind, children) => render_alert(
+            *kind,
+            render_children(
+                children,
+                ix,
+                salt,
+                theme,
+                body_ink,
+                body_ink,
+                copied_sections,
+                expanded_blocks,
+                collapsible,
+                settled,
+                scroller,
+            ),
+            theme,
+        )
+        .into_any_element(),
+        Block::Quote(children) => div()
             .w_full()
             .min_w_0()
             .border_l_2()
@@ -6446,20 +5861,19 @@ fn render_block(
             .flex()
             .flex_col()
             .gap(DynamicSpacing::Base04.px(&theme))
-            .children(lines.iter().enumerate().map(move |(sub, line)| {
-                render_container_line(
-                    line,
-                    ix,
-                    salt,
-                    block_ix,
-                    sub,
-                    theme.type_scale.body,
-                    theme.type_scale.body_line,
-                    FontWeight::NORMAL,
-                    theme.output_quote_fg,
-                    theme,
-                )
-            }))
+            .children(render_children(
+                children,
+                ix,
+                salt,
+                theme,
+                theme.output_quote_fg,
+                body_ink,
+                copied_sections,
+                expanded_blocks,
+                collapsible,
+                settled,
+                scroller,
+            ))
             .into_any_element(),
         Block::List(items) => div()
             .w_full()
@@ -6475,7 +5889,11 @@ fn render_block(
             header,
             rows,
             aligns,
-        } => render_table(header, rows, aligns, ix, salt, block_ix, ink, theme).into_any_element(),
+        } => {
+            let plan = table_plan.unwrap_or_else(|| plan_table(header, rows, None, theme));
+            render_table(header, rows, aligns, ix, salt, block_ix, ink, theme, &plan)
+                .into_any_element()
+        }
         Block::Image { alt, url } => {
             render_markdown_image(alt, url, ix, salt, block_ix, 0, theme).into_any_element()
         }
@@ -6542,18 +5960,58 @@ fn markdown_image_fallback(alt: &str, theme: Theme) -> AnyElement {
         .into_any_element()
 }
 
+/// Paint `children` with their own preorder indices.
+///
+/// `ink` is the color for ordinary children (quote foreground inside a quote).
+/// `body_ink` is the document body color. An alert keeps it even when a quote
+/// is nested inside another quote; passing the quote's own ink would tint the
+/// alert with the quote foreground.
+#[allow(clippy::too_many_arguments)]
+fn render_children(
+    children: &[MdBlock],
+    ix: usize,
+    salt: u64,
+    theme: Theme,
+    ink: Hsla,
+    body_ink: Hsla,
+    copied_sections: CopiedSections,
+    expanded_blocks: ExpandedBlocks,
+    collapsible: bool,
+    settled: bool,
+    scroller: MessageScrollerState,
+) -> Vec<AnyElement> {
+    children
+        .iter()
+        .map(|child| {
+            let child_ink = if matches!(child.kind, Block::Alert(..)) {
+                body_ink
+            } else {
+                ink
+            };
+            render_block(
+                &child.kind,
+                ix,
+                salt,
+                child.index as usize,
+                theme,
+                child_ink,
+                body_ink,
+                copied_sections.clone(),
+                expanded_blocks.clone(),
+                collapsible,
+                settled,
+                scroller.clone(),
+                None,
+            )
+        })
+        .collect()
+}
+
 /// A GitHub-style callout: a tinted, rounded container with a semantic
 /// icon + label and readable body copy. Deliberately no accent bar — the
 /// tint, icon, and label carry the meaning without a heavy left edge.
-fn render_alert(
-    kind: AlertKind,
-    lines: &[String],
-    ix: usize,
-    salt: u64,
-    block_ix: usize,
-    ink: Hsla,
-    theme: Theme,
-) -> impl IntoElement {
+
+fn render_alert(kind: AlertKind, body: Vec<AnyElement>, theme: Theme) -> impl IntoElement {
     let color = kind.color(theme);
     div()
         .w_full()
@@ -6580,52 +6038,7 @@ fn render_alert(
                         .child(kind.label()),
                 ),
         )
-        .children(lines.iter().enumerate().map(move |(sub, line)| {
-            render_container_line(
-                line,
-                ix,
-                salt,
-                block_ix,
-                sub,
-                theme.type_scale.body,
-                theme.type_scale.body_line,
-                FontWeight::NORMAL,
-                ink,
-                theme,
-            )
-        }))
-}
-
-/// Render one line inside a quote or alert. A standalone image line (GitHub
-/// quotes a bug report whose screenshot was pasted as a raw `<img>` tag) paints
-/// as an image instead of showing the tag as text.
-#[allow(clippy::too_many_arguments)]
-fn render_container_line(
-    line: &str,
-    ix: usize,
-    salt: u64,
-    block_ix: usize,
-    sub: usize,
-    size: f32,
-    line_height: f32,
-    weight: FontWeight,
-    color: Hsla,
-    theme: Theme,
-) -> AnyElement {
-    if let Some((alt, url)) = image_line(line) {
-        return render_markdown_image(&alt, &url, ix, salt, block_ix, sub, theme)
-            .into_any_element();
-    }
-    paragraph_text(
-        line,
-        size,
-        line_height,
-        weight,
-        color,
-        md_id(ix, salt, block_ix, sub),
-        theme,
-    )
-    .into_any_element()
+        .children(body)
 }
 
 /// `ml-5` bullet / numbered item with a hanging indent on wrap. GFM task
@@ -6680,16 +6093,13 @@ fn render_list_item(
                 .justify_start()
                 .child(marker),
         )
-        .child(div().min_w_0().flex_1().child(render_container_line(
+        .child(div().min_w_0().flex_1().child(paragraph_text(
             &item.text,
-            ix,
-            salt,
-            block_ix,
-            sub,
             theme.type_scale.body,
             theme.type_scale.body_line,
             FontWeight::NORMAL,
             text_color,
+            md_id(ix, salt, block_ix, sub),
             theme,
         )))
         .into_any_element()
@@ -7258,47 +6668,198 @@ fn mono_font() -> Font {
     }
 }
 
-/// Shared sizing policy for both the cells and the strip-breakout decision.
-/// Columns follow their content, with a readable baseline and a wrapping cap.
-fn table_column_widths(header: &[String], rows: &[Vec<String>]) -> Vec<f32> {
-    let columns = header
-        .len()
-        .max(rows.iter().map(Vec::len).max().unwrap_or(0));
-    let mut widths = vec![96f32; columns];
-    for (col, width) in widths.iter_mut().enumerate() {
-        let mut longest = 4usize;
-        if let Some(cell) = header.get(col) {
-            longest = longest.max(cell.chars().count());
-        }
-        for row in rows {
-            if let Some(cell) = row.get(col) {
-                longest = longest.max(cell.chars().count());
-            }
-        }
-        *width = (longest as f32 * 6.8 + 28.).clamp(96., 340.);
+/// Column widths for one table, in pixels, plus the border-box outer width.
+///
+/// `cols[i]` is the cell's border box (text plus horizontal padding). The
+/// text wraps in `cols[i] - 2 * pad`. `outer` is `sum(cols) + 2` for the
+/// border, capped at `available` when the caller has a pane width.
+#[derive(Clone, Debug)]
+struct TablePlan {
+    cols: Vec<f32>,
+    outer: f32,
+}
+
+/// Fit already-measured column boxes into `budget` (the pane width minus the
+/// 2px border). `None` keeps the content widths. Columns never grow past
+/// their content, and never shrink below `floor`.
+fn fit_columns(content: &[i32], floor: i32, budget: Option<i32>) -> Vec<i32> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+    let Some(budget) = budget else {
+        return content.to_vec();
+    };
+    if budget <= 0 {
+        return vec![floor; content.len()];
+    }
+    let sum: i32 = content.iter().sum();
+    if sum <= budget {
+        return content.to_vec();
+    }
+    let floors = floor.saturating_mul(content.len() as i32);
+    if floors >= budget {
+        return vec![floor; content.len()];
+    }
+    let excess = sum - budget;
+    let shrinkable: Vec<i32> = content.iter().map(|width| (width - floor).max(0)).collect();
+    let total: i32 = shrinkable.iter().sum();
+    let mut widths: Vec<i32> = content
+        .iter()
+        .zip(&shrinkable)
+        .map(|(width, slack)| {
+            let share =
+                (excess as i64 * i64::from(*slack) + i64::from(total) - 1) / i64::from(total);
+            width - share as i32
+        })
+        .collect();
+    let mut remainder = budget - widths.iter().sum::<i32>();
+    while remainder > 0 {
+        let Some(index) = widths
+            .iter()
+            .zip(content)
+            .zip(&shrinkable)
+            .enumerate()
+            .filter(|(_, ((width, cap), _))| *width < *cap)
+            .max_by_key(|(_, ((_, _), slack))| *slack)
+            .map(|(index, _)| index)
+        else {
+            break;
+        };
+        widths[index] += 1;
+        remainder -= 1;
     }
     widths
 }
 
-/// GFM table: outer border, semibold header, dividers, content-weighted
-/// columns (`th`/`td` markdown-table styling).
+/// Longest unwrapped line in a cell, in pixels. Newlines are measured apart:
+/// the shaper rejects them, and a `<br>` must not widen the column.
+fn cell_line_width(text: &RichText, weight: FontWeight, theme: Theme) -> f32 {
+    let size = f32::from(theme.ui_px(theme.type_scale.body));
+    let (body, runs, _, _) = inline_runs(&text.spans, weight, theme.output_prose, theme);
+    line_group_width(body.as_ref(), &runs, size)
+}
+
+fn line_group_width(body: &str, runs: &[TextRun], size: f32) -> f32 {
+    if body.is_empty() {
+        return 0.0;
+    }
+    let mut max_width = 0.0f32;
+    let mut byte = 0usize;
+    let mut run_ix = 0usize;
+    let mut run_off = 0usize;
+    while byte <= body.len() {
+        let rest = body.get(byte..).unwrap_or("");
+        let newline = rest.find('\n');
+        let line_len = newline.unwrap_or(rest.len());
+        let line = rest.get(..line_len).unwrap_or("");
+        let mut line_runs = Vec::new();
+        let mut need = line_len;
+        while need > 0 && run_ix < runs.len() {
+            let run = &runs[run_ix];
+            let avail = run.len.saturating_sub(run_off);
+            let take = avail.min(need);
+            if take > 0 {
+                line_runs.push(TextRun {
+                    len: take,
+                    ..run.clone()
+                });
+            }
+            need -= take;
+            run_off += take;
+            if run_off >= run.len {
+                run_ix += 1;
+                run_off = 0;
+            }
+        }
+        if !line.is_empty() {
+            max_width = max_width.max(crate::text_measure::line_width_runs(line, size, &line_runs));
+        }
+        if newline.is_none() {
+            break;
+        }
+        // The newline byte belongs to whichever run covered it.
+        if run_ix < runs.len() {
+            run_off += 1;
+            if run_off >= runs[run_ix].len {
+                run_ix += 1;
+                run_off = 0;
+            }
+        }
+        byte += line_len + 1;
+        if byte > body.len() {
+            break;
+        }
+    }
+    max_width
+}
+
+fn plan_table(
+    header: &[RichText],
+    rows: &[Vec<RichText>],
+    available: Option<f32>,
+    theme: Theme,
+) -> TablePlan {
+    let columns = header
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0));
+    if columns == 0 {
+        return TablePlan {
+            cols: Vec::new(),
+            outer: 0.0,
+        };
+    }
+    let pad = f32::from(DynamicSpacing::Base12.px(&theme));
+    let em = f32::from(theme.ui_px(theme.type_scale.body));
+    let floor = (2.0 * pad + 4.0 * em).ceil() as i32;
+    let mut content = Vec::with_capacity(columns);
+    for col in 0..columns {
+        let mut longest = 0.0f32;
+        if let Some(cell) = header.get(col) {
+            longest = longest.max(cell_line_width(cell, FontWeight::SEMIBOLD, theme));
+        }
+        for row in rows {
+            if let Some(cell) = row.get(col) {
+                longest = longest.max(cell_line_width(cell, FontWeight::NORMAL, theme));
+            }
+        }
+        let measured = (longest.ceil() + 2.0 * pad + 1.0).ceil() as i32;
+        content.push(measured.max(floor));
+    }
+    let budget = available.map(|width| (width - 2.0).floor() as i32);
+    let fitted = fit_columns(&content, floor, budget);
+    let sum: i32 = fitted.iter().sum();
+    let outer = match available {
+        Some(width) => ((sum as f32) + 2.0).min(width.max(0.0)),
+        None => (sum as f32) + 2.0,
+    };
+    TablePlan {
+        cols: fitted.into_iter().map(|width| width as f32).collect(),
+        outer,
+    }
+}
+
+/// GFM table: outer border, semibold header, dividers, columns fitted to the
+/// pane from shaped text (`th`/`td` markdown-table styling).
+#[allow(clippy::too_many_arguments)]
 fn render_table(
-    header: &[String],
-    rows: &[Vec<String>],
+    header: &[RichText],
+    rows: &[Vec<RichText>],
     aligns: &[TableAlign],
     ix: usize,
     salt: u64,
     block_ix: usize,
     ink: Hsla,
     theme: Theme,
+    plan: &TablePlan,
 ) -> AnyElement {
-    let widths = table_column_widths(header, rows);
+    let widths = &plan.cols;
     let columns = widths.len();
     if columns == 0 {
         return div().into_any_element();
     }
     let table_width: f32 = widths.iter().sum();
-    let make_cell = |text: &str,
+    let empty = RichText::default();
+    let make_cell = |text: &RichText,
                      col: usize,
                      strong: bool,
                      align: TableAlign,
@@ -7351,7 +6912,7 @@ fn render_table(
             .bg(theme.overlay)
             .children((0..columns).map(|col| {
                 make_cell(
-                    header.get(col).map(String::as_str).unwrap_or_default(),
+                    header.get(col).unwrap_or(&empty),
                     col,
                     true,
                     align_at(col),
@@ -7371,7 +6932,7 @@ fn render_table(
                 .border_color(theme.border)
                 .children((0..columns).map(|col| {
                     make_cell(
-                        row.get(col).map(String::as_str).unwrap_or_default(),
+                        row.get(col).unwrap_or(&empty),
                         col,
                         false,
                         align_at(col),
@@ -7383,7 +6944,7 @@ fn render_table(
         );
     }
     div()
-        .w(px(table_width + 2.))
+        .w(px(plan.outer))
         .max_w_full()
         .min_w_0()
         .overflow_hidden()
@@ -7881,6 +7442,7 @@ fn starts_followup_turn(messages: &[ChatMessage], ix: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::markdown::inline_spans;
 
     #[test]
     fn conversation_measure_keeps_aside_on_the_ui_scale() {
@@ -8777,57 +8339,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_inline_extracts_bold_code_and_links() {
-        let spans = parse_inline("plain **bold** and `code` and [x](https://a.b)");
-        assert_eq!(spans.len(), 6);
-        assert_eq!(spans[0].text, "plain ");
-        assert!(spans[1].bold);
-        assert_eq!(spans[1].text, "bold");
-        assert!(spans[3].code);
-        assert_eq!(spans[3].text, "code");
-        assert_eq!(spans[5].link.as_deref(), Some("https://a.b"));
-        assert_eq!(spans[5].text, "x");
-    }
-
-    #[test]
-    fn parse_inline_keeps_unmatched_markers_literal() {
-        let spans = parse_inline("a * b ` c [d");
-        let joined: String = spans.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined, "a * b ` c [d");
-        assert!(spans.iter().all(|s| !s.bold && !s.code && s.link.is_none()));
-    }
-
-    #[test]
-    fn parse_inline_escapes_render_literally() {
-        let spans = parse_inline(r"\*not bold\*");
-        let joined: String = spans.iter().map(|s| s.text.as_str()).collect();
-        assert_eq!(joined, "*not bold*");
-        assert!(spans.iter().all(|s| !s.bold));
-    }
-
-    #[test]
-    fn parse_blocks_splits_paragraphs_headings_and_fences() {
-        let blocks = parse_blocks("one\ntwo\n\n## Title\n\n```rs\nlet a = 1;\n```");
-        assert_eq!(blocks.len(), 3);
-        assert!(matches!(&blocks[0], Block::Paragraph(lines) if lines.join(" ") == "one two"));
-        assert!(matches!(&blocks[1], Block::Heading(2, title) if title == "Title"));
-        assert!(
-            matches!(&blocks[2], Block::Code(Some(lang), lines) if lang == "rs"
-            && lines == &["let a = 1;".to_string()])
-        );
-        // A bare fence carries no language; the chip is simply absent.
-        let bare = parse_blocks("```\nx\n```");
-        assert!(matches!(&bare[0], Block::Code(None, lines) if lines == &["x".to_string()]));
-    }
-
-    #[test]
     fn mermaid_fences_stay_copyable_code_blocks() {
         // D2 revised: a mermaid fence is still parsed as a code block — the
         // renderer upgrades it to a diagram only when it can lay one out, and
         // the source stays one click away. The fallback label is honest about
         // the case where it cannot.
         let blocks = parse_blocks("```mermaid\ngraph TD; A-->B;\n```");
-        assert!(matches!(&blocks[0], Block::Code(Some(lang), lines)
+        assert!(matches!(&blocks[0].kind, Block::Code(Some(lang), lines)
                 if lang == "mermaid" && lines == &["graph TD; A-->B;".to_string()]));
         assert_eq!(
             code_block_label(Some("Mermaid")),
@@ -8942,168 +8460,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_blocks_collects_loose_and_nested_lists() {
-        let blocks = parse_blocks("- a\n- b\n\n  - nested\n\n3. third\n4. fourth");
-        assert_eq!(blocks.len(), 2);
-        let Block::List(items) = &blocks[0] else {
-            panic!("expected list");
-        };
-        assert_eq!(items.len(), 3);
-        assert!(!items[0].ordered);
-        assert_eq!(items[2].depth, 1);
-        assert_eq!(items[2].text, "nested");
-        let Block::List(ordered) = &blocks[1] else {
-            panic!("expected ordered list");
-        };
-        assert!(ordered[0].ordered);
-        assert_eq!(ordered[0].number, 3);
-    }
-
-    #[test]
-    fn parse_blocks_handles_rules_quotes_and_tables() {
-        let blocks =
-            parse_blocks("---\n\n> quoted\n> lines\n\n| a | b |\n| --- | --- |\n| 1 | 2 |");
-        assert!(matches!(blocks[0], Block::Rule));
-        assert!(matches!(&blocks[1], Block::Quote(lines) if lines.len() == 2));
-        let Block::Table { header, rows, .. } = &blocks[2] else {
-            panic!("expected table");
-        };
-        assert_eq!(header, &["a", "b"]);
-        assert_eq!(rows, &[vec!["1".to_string(), "2".to_string()]]);
-    }
-
-    #[test]
-    fn parse_blocks_turns_standalone_images_into_image_blocks() {
-        // Markdown image on its own line, with a title and an angle-wrapped
-        // URL (GitHub's escape for spaces).
-        let blocks = parse_blocks(
-            "Screenshots or recordings\n\n![shot](<https://example.com/a b.png> \"title\")\n\n<img src=\"https://example.com/c.png\" alt=\"html\" />",
-        );
-        assert!(
-            matches!(&blocks[0], Block::Paragraph(lines) if lines == &["Screenshots or recordings".to_string()])
-        );
-        assert!(matches!(&blocks[1], Block::Image { alt, url }
-                if alt == "shot" && url == "https://example.com/a b.png"));
-        assert!(matches!(&blocks[2], Block::Image { alt, url }
-                if alt == "html" && url == "https://example.com/c.png"));
-    }
-
-    #[test]
-    fn parse_blocks_handles_github_pasted_image_tags() {
-        // GitHub stores a pasted screenshot as a raw `<img>` whose attributes
-        // are ordered `alt width height src`, without a self-closing slash.
-        let tag = "<img alt=\"Image\" width=\"1450\" height=\"932\" src=\"https://private-user-images.githubusercontent.com/1/2-a.png?jwt=eyJ0eXAi.eyJpc3Mi.OiJnaXRodWI\">";
-        let blocks = parse_blocks(&format!(
-            "### What happened?\n\n{tag}\n\n### Steps\n\n1. Open\n"
-        ));
-        assert!(
-            matches!(&blocks[1], Block::Image { alt, url }
-                if alt == "Image"
-                    && url.starts_with("https://private-user-images.githubusercontent.com/1/2-a.png?jwt=")),
-            "expected an image block at index 1"
-        );
-    }
-
-    #[test]
-    fn image_markdown_inside_prose_is_not_split() {
-        // A line that only *contains* an image stays prose; only a standalone
-        // image line becomes a block, so sentences are never cut in half.
-        let blocks = parse_blocks("see ![inline](https://example.com/x.png) here");
-        assert!(matches!(&blocks[0], Block::Paragraph(lines)
-                if lines.join(" ") == "see ![inline](https://example.com/x.png) here"));
-    }
-
-    #[test]
-    fn quoted_image_lines_are_recognized() {
-        // A quoted bug report keeps its `<img>` on a `> ` line; the block stays
-        // a Quote, but the line inside it must still parse as an image.
-        let blocks = parse_blocks(
-            "> ### What happened?\n> <img alt=\"Image\" width=\"1450\" height=\"932\" src=\"https://private-user-images.githubusercontent.com/1/2-a.png?jwt=eyJ0eXAi.eyJpc3Mi.OiJnaXRodWI\">\n> \n> ### Steps\n> 1. Open\n",
-        );
-        let Block::Quote(lines) = &blocks[0] else {
-            panic!("expected the blockquote to stay a Quote");
-        };
-        assert!(image_line(&lines[1]).is_some());
-        assert_eq!(
-            image_line(&lines[1]).unwrap().1,
-            "https://private-user-images.githubusercontent.com/1/2-a.png?jwt=eyJ0eXAi.eyJpc3Mi.OiJnaXRodWI"
-        );
-    }
-
-    #[test]
-    fn signed_cdn_urls_rewrite_to_the_durable_asset_url() {
-        // A screenshot pasted into a reply is stored as a signed
-        // `private-user-images` URL whose JWT expires within minutes; the same
-        // asset is served forever from `github.com/user-attachments/assets/…`.
-        let signed = "https://private-user-images.githubusercontent.com/74659438/656345150-69f721c8-e025-44cd-8242-4e87eef54f7e.png?jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.expired";
-        assert_eq!(
-            normalize_image_url(signed),
-            "https://github.com/user-attachments/assets/69f721c8-e025-44cd-8242-4e87eef54f7e"
-        );
-        // The durable form and other hosts are left exactly as written.
-        assert_eq!(
-            normalize_image_url(
-                "https://github.com/user-attachments/assets/69f721c8-e025-44cd-8242-4e87eef54f7e"
-            ),
-            "https://github.com/user-attachments/assets/69f721c8-e025-44cd-8242-4e87eef54f7e"
-        );
-        assert_eq!(
-            normalize_image_url("https://user-images.githubusercontent.com/1/2-a.png"),
-            "https://user-images.githubusercontent.com/1/2-a.png"
-        );
-        // A signed path without the asset-id–UUID shape stays untouched rather
-        // than guessing at a URL that may not exist.
-        assert_eq!(
-            normalize_image_url(
-                "https://private-user-images.githubusercontent.com/1/2-a.png?jwt=x"
-            ),
-            "https://private-user-images.githubusercontent.com/1/2-a.png?jwt=x"
-        );
-    }
-
-    #[test]
-    fn parse_blocks_reads_task_list_state() {
-        let blocks = parse_blocks("- [ ] open\n- [x] done\n- plain");
-        let Block::List(items) = &blocks[0] else {
-            panic!("expected list");
-        };
-        assert_eq!(items[0].checked, Some(false));
-        assert_eq!(items[0].text, "open");
-        assert_eq!(items[1].checked, Some(true));
-        assert_eq!(items[1].text, "done");
-        assert_eq!(items[2].checked, None);
-        assert_eq!(items[2].text, "plain");
-    }
-
-    #[test]
-    fn parse_blocks_reads_table_alignment() {
-        let blocks = parse_blocks("| a | b | c |\n| :-- | :-: | --: |\n| 1 | 2 | 3 |");
-        let Block::Table { aligns, .. } = &blocks[0] else {
-            panic!("expected table");
-        };
-        assert_eq!(
-            aligns,
-            &[TableAlign::Left, TableAlign::Center, TableAlign::Right]
-        );
-    }
-
-    #[test]
-    fn parse_blocks_detects_github_alerts() {
-        let blocks = parse_blocks("> [!WARNING]\n> This overwrites the file.");
-        let Block::Alert(kind, lines) = &blocks[0] else {
-            panic!("expected alert");
-        };
-        assert_eq!(*kind, AlertKind::Warning);
-        assert_eq!(lines, &["This overwrites the file.".to_string()]);
-        // A plain blockquote stays a quote.
-        let quote = parse_blocks("> just a quote");
-        assert!(matches!(&quote[0], Block::Quote(_)));
-        // An unknown marker is body text, not an alert.
-        let unknown = parse_blocks("> [!SOMETHING]\n> x");
-        assert!(matches!(&unknown[0], Block::Quote(_)));
-    }
-
-    #[test]
     fn code_block_label_prefers_friendly_names() {
         assert_eq!(code_block_label(Some("ts")), "TypeScript");
         assert_eq!(code_block_label(Some("rs")), "Rust");
@@ -9115,8 +8471,8 @@ mod tests {
 
     #[test]
     fn block_rhythm_separates_headings_more_than_paragraphs() {
-        let para = || Block::Paragraph(vec!["x".into()]);
-        let heading = || Block::Heading(2, "h".into());
+        let para = || Block::Paragraph(RichText::from_plain("x"));
+        let heading = || Block::Heading(2, RichText::from_plain("h"));
         let list = || Block::List(Vec::new());
         assert!(block_gap(&para(), &heading()) > block_gap(&para(), &para()));
         assert!(block_gap(&heading(), &para()) < block_gap(&para(), &heading()));
@@ -9124,9 +8480,148 @@ mod tests {
     }
 
     #[test]
+    fn table_columns_follow_shaped_text_and_share_the_pane() {
+        // Keep the estimate path even if another test installed the shaper.
+        crate::text_measure::uninstall();
+        let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
+        let word = "abcdefghijklmnopqrst";
+        let marked = parse_table(&format!("| **{word}** |\n| --- |\n| {word} |"));
+        let plain = parse_table(&format!("| {word} |\n| --- |\n| {word} |"));
+        let marked_line = cell_line_width(&marked.0[0], FontWeight::NORMAL, theme);
+        let plain_line = cell_line_width(&plain.0[0], FontWeight::NORMAL, theme);
+        let source_line = cell_line_width(
+            &RichText::from_plain(format!("**{word}**")),
+            FontWeight::NORMAL,
+            theme,
+        );
+        // The markers are not glyphs. Bold may be a hair wider than the
+        // plain word; it is not the width of the source `**...**`.
+        assert!(marked_line < source_line);
+        assert!((marked_line - plain_line).abs() < plain_line * 0.5);
+
+        let latin = cell_line_width(&RichText::from_plain("abcd"), FontWeight::NORMAL, theme);
+        let cjk = cell_line_width(&RichText::from_plain("汉字汉字"), FontWeight::NORMAL, theme);
+        assert!(cjk > latin);
+
+        let broken = cell_line_width(&RichText::from_plain("x\nyyy"), FontWeight::NORMAL, theme);
+        let longest = cell_line_width(&RichText::from_plain("yyy"), FontWeight::NORMAL, theme);
+        assert_eq!(broken, longest);
+        // A bold run that contains the newline has to be sliced per line.
+        let crossed = RichText {
+            spans: vec![
+                InlineSpan {
+                    text: "a\nb".into(),
+                    bold: true,
+                    ..InlineSpan::default()
+                },
+                InlineSpan {
+                    text: "c".into(),
+                    ..InlineSpan::default()
+                },
+            ],
+        };
+        let first_line = RichText {
+            spans: vec![InlineSpan {
+                text: "a".into(),
+                bold: true,
+                ..InlineSpan::default()
+            }],
+        };
+        let second_line = RichText {
+            spans: vec![
+                InlineSpan {
+                    text: "b".into(),
+                    bold: true,
+                    ..InlineSpan::default()
+                },
+                InlineSpan {
+                    text: "c".into(),
+                    ..InlineSpan::default()
+                },
+            ],
+        };
+        assert_eq!(
+            cell_line_width(&crossed, FontWeight::NORMAL, theme),
+            cell_line_width(&first_line, FontWeight::NORMAL, theme).max(cell_line_width(
+                &second_line,
+                FontWeight::NORMAL,
+                theme
+            ))
+        );
+
+        let code = cell_line_width(&first_paragraph("`word`"), FontWeight::NORMAL, theme);
+        let prose = cell_line_width(&RichText::from_plain("word"), FontWeight::NORMAL, theme);
+        assert!(code > prose);
+
+        let linked = cell_line_width(&first_paragraph("https://x.dev"), FontWeight::NORMAL, theme);
+        let bare = cell_line_width(
+            &RichText::from_plain("https://x.dev"),
+            FontWeight::NORMAL,
+            theme,
+        );
+        assert!(linked > bare);
+
+        let pad = f32::from(DynamicSpacing::Base12.px(&theme));
+        let floor = (2.0 * pad + 4.0 * f32::from(theme.ui_px(theme.type_scale.body))).ceil();
+        let short = plan_table(
+            &[RichText::from_plain("A"), RichText::from_plain("B")],
+            &[vec![RichText::from_plain("C"), RichText::from_plain("D")]],
+            Some(800.0),
+            theme,
+        );
+        assert!(short.cols.iter().all(|col| (*col - floor).abs() < 0.5));
+        assert!(short.outer < 800.0);
+        assert!((short.outer - (short.cols.iter().sum::<f32>() + 2.0)).abs() < 0.5);
+
+        let long = "A detailed explanation that should remain readable. ".repeat(8);
+        let wide = plan_table(
+            &[RichText::from_plain("One"), RichText::from_plain("Two")],
+            &[vec![
+                RichText::from_plain(&long),
+                RichText::from_plain(&long),
+            ]],
+            Some(500.0),
+            theme,
+        );
+        let budget = 498.0;
+        assert!((wide.cols.iter().sum::<f32>() - budget).abs() < 0.5);
+        assert!(wide.cols.iter().all(|col| *col + 0.5 >= floor));
+
+        let cramped = plan_table(
+            &(0..6)
+                .map(|ix| RichText::from_plain(format!("Col {ix}")))
+                .collect::<Vec<_>>(),
+            &[vec![RichText::from_plain("Value")]],
+            Some(300.0),
+            theme,
+        );
+        assert!(cramped.cols.iter().sum::<f32>() > 298.0);
+        assert!((cramped.outer - 300.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn fit_columns_keeps_an_exact_budget() {
+        assert_eq!(fit_columns(&[], 10, Some(100)), Vec::<i32>::new());
+        assert_eq!(fit_columns(&[50, 50], 10, Some(200)), vec![50, 50]);
+        assert_eq!(fit_columns(&[100, 80], 40, Some(120)), vec![64, 56]);
+        assert_eq!(fit_columns(&[10], 10, Some(5)), vec![10]);
+        let shared = fit_columns(&[80, 81, 90], 10, Some(100));
+        assert_eq!(shared.iter().sum::<i32>(), 100);
+        assert!(shared.iter().all(|width| *width >= 10));
+        let content = [80, 81, 90];
+        assert!(shared.iter().zip(content).all(|(width, cap)| *width <= cap));
+        // A column already at the floor keeps it; the others share the rest.
+        let mixed = fit_columns(&[40, 200, 200], 40, Some(200));
+        assert_eq!(mixed.iter().sum::<i32>(), 200);
+        assert_eq!(mixed[0], 40);
+        assert!(mixed[1] >= 40 && mixed[1] <= 200);
+        assert!(mixed[2] >= 40 && mixed[2] <= 200);
+    }
+
+    #[test]
     fn inline_runs_pairs_link_ranges_with_urls() {
         let theme = Theme::dark();
-        let spans = parse_inline("see [docs](https://pi.dev) now");
+        let spans = inline_spans("see [docs](https://pi.dev) now");
         let (body, runs, links, marks) =
             inline_runs(&spans, FontWeight::NORMAL, theme.text_primary, theme);
         assert_eq!(body.as_ref(), "see docs now");
@@ -9140,7 +8635,7 @@ mod tests {
 
     #[test]
     fn bare_urls_autolink_and_trim_trailing_punctuation() {
-        let spans = parse_inline("see https://pi.dev/docs. and http://a.b/(x) now");
+        let spans = inline_spans("see https://pi.dev/docs. and http://a.b/(x) now");
         let links: Vec<&str> = spans.iter().filter_map(|s| s.link.as_deref()).collect();
         assert_eq!(links, vec!["https://pi.dev/docs", "http://a.b/(x)"]);
         let autolinks: Vec<&str> = spans
@@ -9150,7 +8645,7 @@ mod tests {
             .collect();
         assert_eq!(autolinks, vec!["https://pi.dev/docs", "http://a.b/(x)"]);
         // A closing bracket with no opener inside the URL is prose.
-        let spans = parse_inline("(see https://x.dev/a)");
+        let spans = inline_spans("(see https://x.dev/a)");
         assert_eq!(
             spans
                 .iter()
@@ -9159,7 +8654,7 @@ mod tests {
             vec!["https://x.dev/a"]
         );
         // Angle brackets stay prose; the URL itself is the link.
-        let spans = parse_inline("<https://x.dev>");
+        let spans = inline_spans("<https://x.dev>");
         assert_eq!(
             spans
                 .iter()
@@ -9168,16 +8663,16 @@ mod tests {
             vec!["https://x.dev"]
         );
         // Markdown links are not autolinks, and code spans stay literal.
-        let spans = parse_inline("[docs](https://pi.dev)");
+        let spans = inline_spans("[docs](https://pi.dev)");
         assert!(spans.iter().all(|s| !s.autolink));
-        let spans = parse_inline("`https://pi.dev`");
+        let spans = inline_spans("`https://pi.dev`");
         assert!(spans.iter().all(|s| s.link.is_none()));
     }
 
     #[test]
     fn autolink_range_covers_the_rendered_url() {
         let theme = Theme::dark();
-        let spans = parse_inline("go https://pi.dev/x now");
+        let spans = inline_spans("go https://pi.dev/x now");
         let (body, runs, links, marks) =
             inline_runs(&spans, FontWeight::NORMAL, theme.text_primary, theme);
         assert_eq!(body.as_ref(), "go https://pi.dev/x \u{2197} now");
@@ -9204,8 +8699,14 @@ mod tests {
                 message_ix: 0,
             });
             let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
+            let rich = match &parse_blocks("PR created: https://github.com/imrj05/orbit/pull/36")[0]
+                .kind
+            {
+                Block::Paragraph(rich) => rich.clone(),
+                _ => RichText::from_plain(""),
+            };
             div().w_full().child(paragraph_text(
-                "PR created: https://github.com/imrj05/orbit/pull/36",
+                &rich,
                 14.,
                 26.,
                 FontWeight::NORMAL,
@@ -9411,7 +8912,7 @@ mod tests {
         // Same content, shared allocation — the streaming hot path must not
         // re-parse an unchanged message every frame.
         assert!(Rc::ptr_eq(&first, &second));
-        assert!(matches!(first[0], Block::Heading(1, _)));
+        assert!(matches!(first[0].kind, Block::Heading(1, _)));
         let third = parse_blocks_cached("# Title\n\nchanged\n");
         assert!(!Rc::ptr_eq(&first, &third));
     }
@@ -9616,9 +9117,38 @@ mod tests {
         }
     }
 
+    fn first_paragraph(text: &str) -> RichText {
+        parse_blocks(text)
+            .into_iter()
+            .find_map(|block| match block.kind {
+                Block::Paragraph(rich) => Some(rich),
+                _ => None,
+            })
+            .unwrap_or_else(|| RichText::from_plain(text))
+    }
+
+    fn parse_table(text: &str) -> (Vec<RichText>, Vec<Vec<RichText>>) {
+        let Block::Table { header, rows, .. } = &parse_blocks(text)[0].kind else {
+            panic!("expected table");
+        };
+        (header.clone(), rows.clone())
+    }
+
+    fn rich_cell(text: impl Into<String>) -> RichText {
+        let text = text.into();
+        parse_blocks(&text)
+            .into_iter()
+            .find_map(|block| match block.kind {
+                Block::Paragraph(rich) => Some(rich),
+                _ => None,
+            })
+            .unwrap_or_else(|| RichText::from_plain(text))
+    }
+
     struct TableTestView {
-        header: Vec<String>,
-        rows: Vec<Vec<String>>,
+        header: Vec<RichText>,
+        rows: Vec<Vec<RichText>>,
+        available: f32,
         selection: TextSelectionState,
     }
 
@@ -9631,6 +9161,7 @@ mod tests {
             });
             div().w_full().child({
                 let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
+                let plan = plan_table(&self.header, &self.rows, Some(self.available), theme);
                 render_table(
                     &self.header,
                     &self.rows,
@@ -9640,46 +9171,55 @@ mod tests {
                     0,
                     theme.output_prose,
                     theme,
+                    &plan,
                 )
             })
         }
     }
 
     #[gpui::test]
-    fn table_cells_keep_readable_wrapping_when_the_pane_narrows(cx: &mut gpui::TestAppContext) {
+    fn table_cells_wrap_more_when_the_pane_narrows(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
         let selection = Rc::new(RefCell::new(TextSelection::new()));
         let prose =
             "Long prose with **bold** and `inline code` should wrap inside its cell. ".repeat(6);
         let token = "long_unbroken_identifier_".repeat(16);
+        let header = vec![rich_cell("Description"), rich_cell("Identifier")];
+        let rows = vec![
+            vec![rich_cell(prose), rich_cell(token.clone())],
+            vec![rich_cell("Next row"), rich_cell("Short value")],
+        ];
         let view = cx.update(|_, cx| {
             cx.new(|_| TableTestView {
-                header: vec!["Description".into(), "Identifier".into()],
-                rows: vec![
-                    vec![prose, token.clone()],
-                    vec!["Next row".into(), "Short value".into()],
-                ],
+                header: header.clone(),
+                rows: rows.clone(),
+                available: 600.,
                 selection: selection.clone(),
             })
         });
+        let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
+        let pad = f32::from(DynamicSpacing::Base12.px(&theme));
         let mut narrow_height = None;
         for width in [300., 600.] {
+            cx.update(|_, cx| {
+                view.update(cx, |view, cx| {
+                    view.available = width;
+                    cx.notify();
+                })
+            });
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(width), px(1600.)),
                 |_, _| view.clone(),
             );
+            let plan = plan_table(&header, &rows, Some(width), theme);
             let state = selection.borrow();
             assert_eq!(state.blocks.len(), 6);
             let prose = &state.blocks[2];
             let identifier = &state.blocks[3];
-            for cell in [prose, identifier] {
+            for (index, cell) in [prose, identifier].into_iter().enumerate() {
                 assert!(cell.bounds.left() >= px(0.));
-                assert_eq!(
-                    cell.bounds.size.width,
-                    px(316.),
-                    "340 px column minus padding"
-                );
+                assert_eq!(cell.bounds.size.width, px(plan.cols[index] - 2.0 * pad));
                 assert!(cell.layout.wrapped_text().lines().count() > 1);
                 assert!(cell.bounds.size.height > px(22.));
                 assert!(state.blocks[4].bounds.top() >= cell.bounds.bottom());
@@ -9690,9 +9230,9 @@ mod tests {
                 "wrapping preserves copy text"
             );
             if let Some(height) = narrow_height {
-                assert_eq!(
-                    prose.bounds.size.height, height,
-                    "narrowing the viewport must not squeeze the columns"
+                assert!(
+                    prose.bounds.size.height < height,
+                    "a wider pane gives the prose cell fewer wrapped lines"
                 );
             } else {
                 narrow_height = Some(prose.bounds.size.height);
@@ -9701,30 +9241,47 @@ mod tests {
     }
 
     #[gpui::test]
-    fn five_prose_columns_overflow_instead_of_squeezing_into_the_chat(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn five_prose_columns_share_the_pane_when_they_can_fit(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
         let selection = Rc::new(RefCell::new(TextSelection::new()));
+        let header: Vec<_> = (0..5).map(|ix| rich_cell(format!("Column {ix}"))).collect();
+        let rows = vec![vec![
+            rich_cell(
+                "A detailed explanation that should remain readable even in a table with many columns. "
+                    .repeat(3),
+            );
+            5
+        ]];
         let view = cx.update(|_, cx| {
             cx.new(|_| TableTestView {
-                header: (0..5).map(|ix| format!("Column {ix}")).collect(),
-                rows: vec![vec!["A detailed explanation that should remain readable even in a table with many columns. ".repeat(3); 5]],
+                header: header.clone(),
+                rows: rows.clone(),
+                available: 600.,
                 selection: selection.clone(),
             })
         });
+        let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
         for width in [600., 960.] {
+            cx.update(|_, cx| {
+                view.update(cx, |view, cx| {
+                    view.available = width;
+                    cx.notify();
+                })
+            });
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(width), px(800.)),
                 |_, _| view.clone(),
             );
+            let plan = plan_table(&header, &rows, Some(width), theme);
             let state = selection.borrow();
             assert_eq!(state.blocks.len(), 10);
-            for cell in &state.blocks[5..] {
-                assert_eq!(cell.bounds.size.width, px(316.));
+            let pad = f32::from(DynamicSpacing::Base12.px(&theme));
+            for (index, cell) in state.blocks[5..].iter().enumerate() {
+                assert_eq!(cell.bounds.size.width, px(plan.cols[index] - 2.0 * pad));
             }
-            assert!(state.blocks[9].bounds.right() > px(width));
+            assert!(state.blocks[9].bounds.right() <= px(width + 1.));
+            assert!((plan.cols.iter().sum::<f32>() - (width - 2.0)).abs() < 1.0);
         }
     }
 
@@ -9734,9 +9291,10 @@ mod tests {
         let selection = Rc::new(RefCell::new(TextSelection::new()));
         let view = cx.update(|_, cx| {
             cx.new(|_| TableTestView {
-                header: (0..6).map(|ix| format!("Col {ix}")).collect(),
+                header: (0..6).map(|ix| rich_cell(format!("Col {ix}"))).collect(),
                 // Missing cells must not stretch earlier cells out of alignment.
-                rows: vec![vec!["Value".into()]],
+                rows: vec![vec![rich_cell("Value")]],
+                available: 300.,
                 selection: selection.clone(),
             })
         });
@@ -10009,6 +9567,55 @@ mod tests {
         }
     }
 
+    /// A short prompt still fills the reading column: its bubble's outer
+    /// edges (text bounds plus the bubble padding) match the prose column.
+    #[gpui::test]
+    fn user_prompt_outer_edge_matches_the_prose_column(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+        let messages = test_messages();
+        let prose = messages.borrow()[0].steps[0].text.clone();
+        let prompt = messages.borrow()[1].steps[0].text.clone();
+        let scroller = MessageScrollerState::new(messages.borrow().len());
+        let view = cx.update(|_, cx| {
+            cx.new(|_| SelectTestView {
+                messages: messages.clone(),
+                state: state.clone(),
+                scroller,
+                main_width: px(1400.),
+                open_work: false,
+                live: false,
+            })
+        });
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(1400.), px(900.)),
+            |_, _| view.clone(),
+        );
+        let selection = state.borrow();
+        let prose_bounds = selection
+            .blocks
+            .iter()
+            .find(|block| block.text.as_ref() == prose)
+            .unwrap()
+            .bounds;
+        let prompt_bounds = selection
+            .blocks
+            .iter()
+            .find(|block| block.text.as_ref() == prompt)
+            .unwrap()
+            .bounds;
+        let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
+        let pad = px(f32::from(DynamicSpacing::Base12.px(&theme)));
+        assert_eq!(prompt_bounds.left(), prose_bounds.left() + pad);
+        assert_eq!(prompt_bounds.right(), prose_bounds.right() - pad);
+        assert_eq!(
+            prose_bounds.size.width,
+            px(CONTENT_MAX_WIDTH.min(1400. - 40.))
+        );
+    }
+
     #[gpui::test]
     fn tables_fit_their_content_without_filling_the_strip_or_pane(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
@@ -10065,8 +9672,8 @@ mod tests {
             };
             let paragraph = bounds(&prose);
             assert_eq!(paragraph.size.width, px(CONTENT_MAX_WIDTH.min(width - 40.)));
-            // Both two-column prose tables and four-column short tables fit.
-            // Width depends on content, not merely the number of columns.
+            // Short tables stay with the prose. Width follows the shaped
+            // text, not the number of columns.
             for (first, last) in [("Repeated group", "New component"), ("One", "Four")] {
                 assert_eq!(bounds(first).left(), paragraph.left() + px(13.));
                 assert!(
@@ -10074,20 +9681,55 @@ mod tests {
                     "small tables must not stretch"
                 );
             }
-            // Four short columns need 4 × 96px; three prose columns cap at
-            // 3 × 340px. The measured text excludes 12px padding at each end.
-            assert_eq!(bounds("Four").right() - bounds("One").left(), px(360.));
+            let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
+            let pad = f32::from(DynamicSpacing::Base12.px(&theme));
+            let available = f32::from(table_breakout_for(px(width), false).max_width);
+            let short = plan_table(
+                &[
+                    RichText::from_plain("One"),
+                    RichText::from_plain("Two"),
+                    RichText::from_plain("Three"),
+                    RichText::from_plain("Four"),
+                ],
+                &[vec![
+                    RichText::from_plain("A"),
+                    RichText::from_plain("B"),
+                    RichText::from_plain("C"),
+                    RichText::from_plain("D"),
+                ]],
+                Some(available),
+                theme,
+            );
+            assert_eq!(
+                bounds("Four").right() - bounds("One").left(),
+                px(short.cols.iter().sum::<f32>() - 2.0 * pad)
+            );
+            let wide = plan_table(
+                &[
+                    RichText::from_plain("Skill"),
+                    RichText::from_plain("Strengths"),
+                    RichText::from_plain("Reservations"),
+                ],
+                &[vec![
+                    RichText::from_plain(&long_cell),
+                    RichText::from_plain(&long_cell),
+                    RichText::from_plain(&long_cell),
+                ]],
+                Some(available),
+                theme,
+            );
             assert_eq!(
                 bounds("Reservations").right() - bounds("Skill").left(),
-                px(996.)
+                px(wide.cols.iter().sum::<f32>() - 2.0 * pad)
             );
             if width > CONTENT_MAX_WIDTH + 40. {
                 assert!(bounds("Skill").left() < paragraph.left());
                 assert!(bounds("Reservations").right() > paragraph.right());
-                let table_left = bounds("Skill").left() - px(13.);
-                let table_right = bounds("Reservations").right() + px(13.);
-                assert_eq!(table_right - table_left, px(1022.));
-                assert_eq!(table_left, (px(width) - px(1022.)) / 2.);
+                let inset = px(pad + 1.);
+                let table_left = bounds("Skill").left() - inset;
+                let table_right = bounds("Reservations").right() + inset;
+                assert_eq!(table_right - table_left, px(wide.outer));
+                assert_eq!(table_left, (px(width) - px(wide.outer)) / 2.);
             }
         }
     }
