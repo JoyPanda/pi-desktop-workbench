@@ -681,10 +681,7 @@ mod tests {
             cx.set_global(Theme::for_id(ThemeKey::FLEXOKI).with_ui(ui));
             apply_system_appearance(cx, WindowAppearance::Light);
             assert_eq!(get(cx).theme_id, ThemeKey::ORBIT_AZURE_LIGHT);
-            assert_eq!(
-                get(cx).accent,
-                Theme::for_id(ThemeKey::ORBIT_LIGHT).accent
-            );
+            assert_eq!(get(cx).accent, Theme::for_id(ThemeKey::ORBIT_LIGHT).accent);
             assert_eq!(get(cx).ui, ui);
             apply_system_appearance(cx, WindowAppearance::Dark);
             assert_eq!(get(cx).theme_id, ThemeKey::FLEXOKI);
