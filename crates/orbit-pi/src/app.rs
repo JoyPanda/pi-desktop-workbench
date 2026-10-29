@@ -666,6 +666,13 @@ pub struct OrbitApp {
     sidebar_sort_menu: bool,
     /// The Show submenu of that view menu is open.
     sidebar_show_menu: bool,
+    /// Session whose hover card is visible. The card is pinned to that row,
+    /// not to the pointer.
+    session_card: Option<PathBuf>,
+    /// Session the pointer is on, while the hover delay has not elapsed.
+    session_card_wait: Option<PathBuf>,
+    /// Cancels a pending hover card when the pointer leaves the row.
+    session_card_task: gpui::Task<()>,
     /// Open row-actions menu on a workspace group header (which workspace's
     /// label + cwd). Mutually exclusive with `session_menu`.
     workspace_menu: Option<WorkspaceMenu>,
@@ -2011,6 +2018,9 @@ impl OrbitApp {
             sidebar_show: workspace_store.show,
             sidebar_sort_menu: false,
             sidebar_show_menu: false,
+            session_card: None,
+            session_card_wait: None,
+            session_card_task: gpui::Task::ready(()),
             workspace_menu: None,
             worktree_config,
             worktree_dir_input: worktree_dir_input.clone(),

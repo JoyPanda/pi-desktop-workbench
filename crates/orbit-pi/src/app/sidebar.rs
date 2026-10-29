@@ -6,8 +6,8 @@ use gpui::{point, Hsla, Pixels};
 use crate::sessions::cap_chars;
 use crate::shimmer::ShimmerText;
 use crate::theme::tokens::{
-    context_menu, list_item, picker, popover, BufferLineHeight, ButtonSize, DynamicSpacing,
-    IconSize, Radius, TextSize,
+    context_menu, list_item, picker, popover, tooltip, BufferLineHeight, ButtonSize,
+    DynamicSpacing, IconSize, Radius, StyledExt, TextSize,
 };
 use crate::workspace_mark::{self, WorkspaceMark};
 
@@ -160,15 +160,7 @@ pub(crate) fn build_sidebar_rows(
     review_paths: &HashSet<PathBuf>,
 ) -> Vec<SideRow> {
     let mut side_rows: Vec<SideRow> = Vec::new();
-    for (label, cwd, ixs) in sidebar_groups(
-        sessions,
-        workspaces,
-        sort,
-        added_at,
-        pinned,
-        active_path,
-        running_paths,
-    ) {
+    for (label, cwd, ixs) in sidebar_groups(sessions, workspaces, sort, added_at, pinned) {
         emit_workspace_group(
             &mut side_rows,
             sessions,
@@ -188,23 +180,15 @@ pub(crate) fn build_sidebar_rows(
     side_rows
 }
 
-/// Pinned sessions lead, followed by the open session, background runs, and
-/// other sessions. Within each rank the stable sort preserves activity order.
-/// Opening a session must not displace a deliberate pin.
-fn session_lead_rank(
-    path: &Path,
-    pinned: &HashSet<PathBuf>,
-    active_path: &Option<PathBuf>,
-    running_paths: &HashSet<PathBuf>,
-) -> u8 {
+/// Pinned sessions lead. Everything else keeps the store's newest-activity
+/// order (stable sort). Opening a session, or a run that has not written a
+/// message yet, must not move the row — only a new message changes
+/// [`SessionInfo::modified`].
+fn session_lead_rank(path: &Path, pinned: &HashSet<PathBuf>) -> u8 {
     if pinned.contains(path) {
         0
-    } else if active_path.as_deref() == Some(path) {
-        1
-    } else if running_paths.contains(path) {
-        2
     } else {
-        3
+        1
     }
 }
 
@@ -220,8 +204,6 @@ fn sidebar_groups(
     sort: WorkspaceSort,
     added_at: &HashMap<PathBuf, SystemTime>,
     pinned: &HashSet<PathBuf>,
-    active_path: &Option<PathBuf>,
-    running_paths: &HashSet<PathBuf>,
 ) -> Vec<(String, PathBuf, Vec<usize>)> {
     let mut groups: Vec<(String, PathBuf, Vec<usize>)> = Vec::new();
     for ws in workspaces {
@@ -240,16 +222,14 @@ fn sidebar_groups(
     // Order the groups for the active sort mode before any rows are laid out;
     // a group's own session order is independent (pinned-first, then recency).
     sort_workspace_groups(&mut groups, sessions, sort, added_at);
-    // Leading sessions rise to the top of their project group by rank — pins,
-    // then the open session, then live runs; recency order is preserved
-    // within each rank (the sort is stable). Doing this here rather than in
-    // `load_sessions` keeps an Orbit-owned preference out of the pi-store
-    // scan — and means a leading session can never be hidden by the
-    // per-group truncation below.
+    // Pins rise to the top of their project group. Recency order is preserved
+    // for everything else (the sort is stable). Doing this here rather than
+    // in `load_sessions` keeps an Orbit-owned preference out of the pi-store
+    // scan — and means a pin can never be hidden by the per-group truncation
+    // below. The open session and a live run stay where their last message
+    // put them.
     for (_, _, ixs) in groups.iter_mut() {
-        ixs.sort_by_key(|&ix| {
-            session_lead_rank(&sessions[ix].path, pinned, active_path, running_paths)
-        });
+        ixs.sort_by_key(|&ix| session_lead_rank(&sessions[ix].path, pinned));
     }
     groups
 }
@@ -345,22 +325,21 @@ fn emit_workspace_group(
 
 /// Build the flat sidebar list: every listed project's sessions in one
 /// ungrouped list, with no workspace headers, show-more, or collapse rows.
-/// Rows lead by rank — pins, then the open session, then live background
-/// runs — and the rest keep the store's newest-first order (the sort is
-/// stable). Used when the user turns workspace grouping off; the same
+/// Pins lead; the rest keep the store's newest-first order (the sort is
+/// stable). Opening a session or a run with no new message does not reorder.
+/// `active_path` and `running_paths` are accepted so callers stay aligned
+/// with [`build_sidebar_rows`]; they do not affect order.
+/// Used when the user turns workspace grouping off; the same
 /// `SideRow::Session` rows mean the render and keyboard paths are unchanged.
 pub(crate) fn build_flat_sidebar_rows(
     sessions: &[SessionInfo],
     pinned: &HashSet<PathBuf>,
-    active_path: &Option<PathBuf>,
-    running_paths: &HashSet<PathBuf>,
+    _active_path: &Option<PathBuf>,
+    _running_paths: &HashSet<PathBuf>,
 ) -> Vec<SideRow> {
     let mut ixs: Vec<usize> = (0..sessions.len()).collect();
-    // Stable: sessions rise by rank without disturbing the newest-first
-    // order within each rank.
-    ixs.sort_by_key(|&ix| {
-        session_lead_rank(&sessions[ix].path, pinned, active_path, running_paths)
-    });
+    // Stable: pins rise without disturbing the newest-first order of the rest.
+    ixs.sort_by_key(|&ix| session_lead_rank(&sessions[ix].path, pinned));
     ixs.into_iter().map(SideRow::Session).collect()
 }
 
@@ -706,16 +685,6 @@ pub(crate) fn clear_review_mark(
     open.is_some_and(|path| marks.remove(path).is_some())
 }
 
-/// One fact on a session row's metadata line: quiet, small, and never wider
-/// than it needs to be.
-fn meta_text(text: String, color: Hsla, theme: &Theme) -> impl IntoElement + use<> {
-    div()
-        .flex_none()
-        .text_size(TextSize::Small.px(theme))
-        .text_color(color)
-        .child(text)
-}
-
 /// A project's glyph, in precedence order: the user's picked mark, then an
 /// automatically detected logo, then `status_icon` (the workspace status resolved
 /// in `view.rs`: open / running / archived / plain folder), then the plain
@@ -772,6 +741,133 @@ fn project_icon(
         .into_any_element()
 }
 
+#[derive(Clone)]
+struct SessionTooltip {
+    title: SharedString,
+    shortcut: Option<SharedString>,
+    workspace: SharedString,
+    branch: Option<SharedString>,
+    ahead: Option<SharedString>,
+    behind: Option<SharedString>,
+    path: SharedString,
+    providers: Option<SharedString>,
+}
+
+/// Same wait as GPUI's own tooltips, so scrolling the list does not flash a
+/// card on every row the pointer crosses.
+const SESSION_CARD_DELAY: Duration = Duration::from_millis(500);
+
+/// The hover card. A definite width (not `max_w` around a nowrap title) is
+/// what keeps a long title inside the elevation background: the title wraps,
+/// and the metadata lines truncate inside that same width.
+fn session_card(hover: &SessionTooltip, theme: &Theme) -> impl IntoElement {
+    let meta = tooltip::META_TEXT.px(theme);
+    let icon_size = IconSize::XSmall.px(theme);
+    div()
+        .debug_selector(|| "session-tooltip".into())
+        .elevation_2(theme)
+        .font_family(crate::theme::ui_font_family())
+        .text_size(tooltip::TEXT.px(theme))
+        .text_color(theme.text_primary)
+        .py(tooltip::padding_y(theme))
+        .px(tooltip::padding_x(theme))
+        .w(tooltip::max_width(theme))
+        .flex()
+        .flex_col()
+        .gap(DynamicSpacing::Base04.px(theme))
+        .child(
+            div()
+                .w_full()
+                .whitespace_normal()
+                .font_weight(FontWeight::MEDIUM)
+                .child(hover.title.clone()),
+        )
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(DynamicSpacing::Base06.px(theme))
+                .child(icon("icons/branch.svg", icon_size, theme.syn_function))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(meta)
+                        .text_color(theme.text_secondary)
+                        .child(hover.workspace.clone()),
+                )
+                .when_some(hover.branch.clone(), |line, name| {
+                    line.child(
+                        div()
+                            .flex_none()
+                            .max_w(px(140.))
+                            .truncate()
+                            .text_size(meta)
+                            .text_color(theme.text_muted)
+                            .child(name),
+                    )
+                })
+                .when_some(hover.ahead.clone(), |line, ahead| {
+                    line.child(
+                        div()
+                            .flex_none()
+                            .text_size(meta)
+                            .text_color(theme.success)
+                            .child(ahead),
+                    )
+                })
+                .when_some(hover.behind.clone(), |line, behind| {
+                    line.child(
+                        div()
+                            .flex_none()
+                            .text_size(meta)
+                            .text_color(theme.warning)
+                            .child(behind),
+                    )
+                }),
+        )
+        .child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(DynamicSpacing::Base06.px(theme))
+                .child(icon("icons/folder.svg", icon_size, theme.text_muted))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(meta)
+                        .text_color(theme.text_muted)
+                        .child(hover.path.clone()),
+                ),
+        )
+        .when_some(hover.providers.clone(), |card, providers| {
+            card.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(meta)
+                    .text_color(theme.text_muted)
+                    .child(providers),
+            )
+        })
+        .when_some(hover.shortcut.clone(), |card, shortcut| {
+            card.child(
+                div()
+                    .w_full()
+                    .whitespace_normal()
+                    .text_size(meta)
+                    .text_color(theme.text_muted)
+                    .child(shortcut),
+            )
+        })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_side_row(
     rows: &Rc<Vec<SideRow>>,
@@ -787,8 +883,8 @@ pub(crate) fn render_side_row(
     // Sessions in the archive set — shown with a small archive glyph when the
     // filter includes them.
     archived_paths: &Rc<HashSet<PathBuf>>,
-    // Flat "one list" mode has no workspace headers, so each row names its
-    // workspace instead.
+    // Flat "one list" mode has no workspace headers, so the open session
+    // wears a "current" chip. The workspace name itself is on the hover card.
     show_workspace: bool,
     // Optional fields from the Show submenu. The title is always drawn.
     row_show: SidebarShow,
@@ -802,8 +898,8 @@ pub(crate) fn render_side_row(
     // frame alongside the list so a header row never re-derives it.
     workspace_icons: &Rc<HashMap<PathBuf, SharedString>>,
     logos: &Rc<HashMap<PathBuf, Arc<Image>>>,
-    // Branch per workspace, for the metadata line. Absent for a project that
-    // is not a git repository (or sits on a detached HEAD).
+    // Branch per workspace, shown on the hover card. Absent for a project
+    // that is not a git repository (or sits on a detached HEAD).
     branches: &Rc<HashMap<PathBuf, BranchLine>>,
     // Sessions whose last turn settled while the user was looking elsewhere.
     // An unread glyph (plus its "Needs review" label) remains until the
@@ -816,6 +912,9 @@ pub(crate) fn render_side_row(
     // Whether this row is the keyboard cursor (see `OrbitApp::sidebar_cursor`).
     // Painted with a focused surface, distinct from hover and selection.
     cursor: bool,
+    // Session whose hover card is open. The card is a child of that row, so
+    // it stays pinned to the row's top-right instead of the pointer.
+    card_path: Option<&Path>,
     theme: Theme,
 ) -> impl IntoElement {
     match &rows[row_ix] {
@@ -1155,7 +1254,24 @@ pub(crate) fn render_side_row(
                 .w_full()
                 .py(DynamicSpacing::Base02.px(&theme))
                 .cursor_pointer()
-                .when_some(shortcut_hint, |row, hint| row.tip(hint))
+                .on_hover({
+                    let path = session.path.clone();
+                    let this = this.clone();
+                    move |hovered, _, cx| {
+                        this.update(cx, |app, cx| {
+                            app.hover_session_card(path.clone(), *hovered, cx);
+                        });
+                    }
+                })
+                // Wheel and click do not synthesize a hover-leave, so the
+                // card (and a timer that has not fired yet) would stay on
+                // the row the pointer has already left.
+                .on_scroll_wheel({
+                    let this = this.clone();
+                    move |_, _, cx| {
+                        this.update(cx, |app, cx| app.clear_session_card(cx));
+                    }
+                })
                 // Right-click anywhere on the row opens its actions menu at
                 // the pointer. That context menu is the row's only action
                 // surface — there is no hover-revealed '…' to compete with
@@ -1185,12 +1301,14 @@ pub(crate) fn render_side_row(
                     this_for_row.update(cx, |app, cx| {
                         // A click is a mouse hand-off: leave keyboard nav and
                         // hand focus back to the composer so typing resumes.
+                        app.clear_session_card(cx);
                         app.sidebar_cursor = None;
                         app.on_open_session(session, cx);
                         app.input.read(cx).focus(window);
                     });
                 });
-            // Status sits beside the task; workspace and branch sit below it.
+            // Status sits beside the task. Workspace, branch, and providers
+            // live on the hover card, so a row with Summary off stays one line.
             let mut card = div()
                 .group("srow")
                 .relative()
@@ -1227,15 +1345,14 @@ pub(crate) fn render_side_row(
             // same sentence is cut, not redundant — the message line is the
             // only place the ask is readable.
             let message = session.first_message.trim().to_string();
-            // Flat list has no workspace headers — name the workspace on the
-            // row instead, with the workspace-status glyph the headers use
-            // (open / running / archived). This row's own run is the status
-            // lane's job, one column to the right.
+            // Workspace, branch, and providers are on the hover card. The
+            // row itself stays one line unless Summary is on.
             let workspace_label = sessions::workspace_label(&session.cwd);
-            let mark = marks.get(&session.cwd).cloned().unwrap_or_default();
-            let workspace_logo = logos.get(&session.cwd);
-            let workspace_icon = workspace_icons.get(&session.cwd);
-            let branch = branches.get(&session.cwd);
+            let branch = branches.get(&session.cwd).cloned();
+            let (ahead, behind) = branch
+                .as_ref()
+                .map(|branch| divergence_labels(branch.ahead_behind))
+                .unwrap_or((None, None));
             let providers = sessions::cached_session_providers(&session.path);
             let review = review_marks
                 .get(&session.path)
@@ -1263,19 +1380,20 @@ pub(crate) fn render_side_row(
                 meta_ink
             };
             let has_state = !matches!(lane, StatusLane::Idle | StatusLane::Unknown);
-            let row_slot = div()
-                .flex_none()
-                .max_w(px(110.))
-                .truncate()
-                .text_size(TextSize::XSmall.px(&theme))
-                .text_color(slot_ink)
-                .child(slot_words.unwrap_or_else(|| {
-                    if show_updated {
-                        age
-                    } else {
-                        String::new()
-                    }
-                }));
+            let row_slot =
+                div()
+                    .flex_none()
+                    .max_w(px(110.))
+                    .truncate()
+                    .text_size(TextSize::XSmall.px(&theme))
+                    .text_color(slot_ink)
+                    .child(slot_words.unwrap_or_else(|| {
+                        if show_updated {
+                            age
+                        } else {
+                            String::new()
+                        }
+                    }));
             let status_details = Some(
                 div()
                     .flex_none()
@@ -1358,154 +1476,10 @@ pub(crate) fn render_side_row(
                                     .text_size(TextSize::Small.px(&theme))
                                     .line_height(BufferLineHeight::Standard.relative())
                                     .text_color(theme.text_secondary)
-                                    .tip(message.clone())
                                     .child(message),
                             ),
                         )
-                    })
-                    // In the flat list, the workspace precedes the branch.
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap(DynamicSpacing::Base06.px(&theme))
-                            .when(show_workspace, |line| {
-                                line.child(
-                                    div()
-                                        .max_w(px(110.))
-                                        .min_w_0()
-                                        .flex()
-                                        .flex_shrink()
-                                        .items_center()
-                                        .gap(DynamicSpacing::Base04.px(&theme))
-                                        .child(project_icon(
-                                            &mark,
-                                            workspace_logo,
-                                            workspace_icon,
-                                            IconSize::XSmall,
-                                            &theme,
-                                        ))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .truncate()
-                                                .text_size(TextSize::XSmall.px(&theme))
-                                                .text_color(workspace_mark::label_ink(
-                                                    &theme,
-                                                    mark.tint.as_deref(),
-                                                ))
-                                                .tip(workspace_label.clone())
-                                                .child(workspace_label),
-                                        ),
-                                )
-                            })
-                            .when_some(branch, |line, branch| {
-                                let (ahead, behind) = divergence_labels(branch.ahead_behind);
-                                line.child(icon(
-                                    "icons/branch.svg",
-                                    IconSize::XSmall.px(&theme),
-                                    theme.syn_function,
-                                ))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(TextSize::XSmall.px(&theme))
-                                        .text_color(meta_ink)
-                                        .tip(branch.name.clone())
-                                        .child(branch.name.clone()),
-                                )
-                                // Colour is never the only signal: the arrow
-                                // says which way the counts point, and both
-                                // read as text before they read as hue.
-                                .when_some(ahead, |line, ahead| {
-                                    line.child(meta_text(ahead, theme.success, &theme))
-                                })
-                                .when_some(
-                                    behind,
-                                    |line, behind| {
-                                        line.child(meta_text(behind, theme.warning, &theme))
-                                    },
-                                )
-                            })
-                            .when(branch.is_none(), |line| line.child(div().flex_1()))
-                            .when(!providers.is_empty(), |line| {
-                                let remaining = providers.len().saturating_sub(3);
-                                let all_providers = providers
-                                    .iter()
-                                    .map(|entry| match &entry.model {
-                                        Some(model) => format!("{} · {model}", entry.provider),
-                                        None => entry.provider.clone(),
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                line.child(
-                                    div()
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .children(providers.iter().take(3).enumerate().map(
-                                            |(index, entry)| {
-                                                let tint = provider_mark_color(
-                                                    &entry.provider,
-                                                    &theme,
-                                                    meta_ink,
-                                                );
-                                                let label = match &entry.model {
-                                                    Some(model) => {
-                                                        format!("{} · {model}", entry.provider)
-                                                    }
-                                                    None => entry.provider.clone(),
-                                                };
-                                                let visible_count = providers.len().min(3);
-                                                // Each badge owns its exposed portion as a
-                                                // hover target; the last owns its full width.
-                                                div()
-                                                    .relative()
-                                                    .flex_none()
-                                                    .w(if index + 1 == visible_count {
-                                                        IconSize::Medium.square(&theme)
-                                                    } else {
-                                                        IconSize::Small.px(&theme)
-                                                    })
-                                                    .h(IconSize::Medium.square(&theme))
-                                                    .tip(label)
-                                                    .child(
-                                                        div()
-                                                            .absolute()
-                                                            .left_0()
-                                                            .top_0()
-                                                            .size(IconSize::Medium.square(&theme))
-                                                            .rounded_full()
-                                                            .bg(theme.surface)
-                                                            .border_1()
-                                                            .border_color(tint.opacity(0.35))
-                                                            .flex()
-                                                            .items_center()
-                                                            .justify_center()
-                                                            .child(icon_dyn(
-                                                                provider_icon(&entry.provider),
-                                                                IconSize::Small.px(&theme),
-                                                                tint,
-                                                            )),
-                                                    )
-                                            },
-                                        ))
-                                        .when(remaining > 0, |icons| {
-                                            icons.child(
-                                                div()
-                                                    .tip(all_providers)
-                                                    .text_size(TextSize::XSmall.px(&theme))
-                                                    .text_color(meta_ink)
-                                                    .child(format!("+{remaining}")),
-                                            )
-                                        }),
-                                )
-                            }),
-                    ),
+                    }),
             );
             // Row actions live on the right-click context menu — the same
             // gesture the rest of the app uses for row actions — so there is
@@ -1521,6 +1495,43 @@ pub(crate) fn render_side_row(
                     .size(px(0.))
                     .child(session_menu_popup(menu, this_for_menu.clone(), theme))
             }));
+            let provider_line = if providers.is_empty() {
+                None
+            } else {
+                Some(
+                    providers
+                        .iter()
+                        .map(|entry| match &entry.model {
+                            Some(model) => format!("{} · {model}", entry.provider),
+                            None => entry.provider.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                        .into(),
+                )
+            };
+            let hover = SessionTooltip {
+                title: session.title.clone().into(),
+                shortcut: shortcut_hint.map(Into::into),
+                workspace: workspace_label.into(),
+                branch: branch.map(|branch| branch.name.into()),
+                ahead: ahead.map(Into::into),
+                behind: behind.map(Into::into),
+                path: session.cwd.display().to_string().into(),
+                providers: provider_line,
+            };
+            if card_path == Some(session.path.as_path()) {
+                card = card.child(
+                    div().absolute().top_0().right_0().size(px(0.)).child(
+                        anchored()
+                            .position_mode(AnchoredPositionMode::Local)
+                            .anchor(Corner::TopLeft)
+                            .offset(point(tooltip::offset_x(&theme), px(0.)))
+                            .snap_to_window_with_margin(popover::WINDOW_MARGIN)
+                            .child(deferred(session_card(&hover, &theme))),
+                    ),
+                );
+            }
             row = row.child(card);
             row.into_any_element()
         }
@@ -1554,7 +1565,6 @@ fn session_title(
             .line_height(line_height)
             .font_weight(weight)
             .text_color(color)
-            .tip(title.clone())
             .child(title)
             .into_any_element();
     }
@@ -2527,7 +2537,7 @@ pub(crate) fn sidebar_options_popup(
                         true,
                         move |app, cx| app.set_sidebar_archived_filter(option, cx),
                     )
-                }))
+                })),
         );
 
     anchored()
@@ -2641,6 +2651,57 @@ pub(crate) fn empty_sessions_state(theme: Theme) -> impl IntoElement + use<> {
 
 // ── controller ────────────────────────────────────────────────────
 impl OrbitApp {
+    /// Drop the hover card and cancel a timer that has not fired yet.
+    fn clear_session_card(&mut self, cx: &mut Context<Self>) {
+        self.session_card_wait = None;
+        self.session_card_task = gpui::Task::ready(());
+        if self.session_card.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Show the session hover card after the tooltip delay, pinned to that
+    /// row. Leaving the row drops it at once. The card is not itself a hover
+    /// target, so moving onto it counts as leaving.
+    pub(super) fn hover_session_card(
+        &mut self,
+        path: PathBuf,
+        hovered: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if hovered {
+            if self.session_menu.is_some()
+                || self.workspace_menu.is_some()
+                || self.sidebar_sort_menu
+                || self.sidebar_show_menu
+            {
+                return;
+            }
+            if self.session_card_wait.as_ref() == Some(&path) {
+                return;
+            }
+            self.session_card_wait = Some(path.clone());
+            if self.session_card.as_ref() != Some(&path) && self.session_card.take().is_some() {
+                cx.notify();
+            }
+            self.session_card_task = cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(SESSION_CARD_DELAY).await;
+                let _ = this.update(cx, |app, cx| {
+                    if app.session_card_wait.as_ref() == Some(&path) {
+                        app.session_card = Some(path);
+                        cx.notify();
+                    }
+                });
+            });
+        } else if self.session_card_wait.as_ref() == Some(&path) {
+            self.session_card_wait = None;
+            self.session_card_task = gpui::Task::ready(());
+            if self.session_card.take().is_some() {
+                cx.notify();
+            }
+        }
+    }
+
     /// Open the session row menu from a right-click, floating it at the
     /// pointer ([`SessionMenu::at`]). Always (re)positions the menu — a
     /// right-click while another row's menu is up moves it to the new row
@@ -2653,6 +2714,7 @@ impl OrbitApp {
     ) {
         self.dismiss_transient_popups(window, cx);
         self.workspace_menu = None;
+        self.clear_session_card(cx);
         self.session_menu = Some(menu);
         cx.notify();
     }

@@ -370,16 +370,22 @@ The navigation rail's user-turn index is likewise cached in `Transcript` and
 rebuilt only when the message list changes, and debug builds log one local
 `[orbit:perf]` line per settle (window, cache, prompt, output, duration, rate).
 
-The sidebar keeps the title, prompt preview, age/status, branch/divergence,
-provider/model marks, and pin/archive indicators. Flat mode names the workspace
-under the title; grouped mode names it once in the project header. Tinted project
+The sidebar row keeps the title, the optional first-message summary, the
+age/status slot, and pin/archive indicators. Grouped mode still names the
+workspace once in the project header. Workspace, branch, divergence, path, and
+provider/model are on the row's hover card, not on the row. Tinted project
 marks and count badges establish hierarchy, semantic status washes distinguish
-outcomes, and primary-ink titles lead secondary previews and muted metadata.
+outcomes, and primary-ink titles lead secondary previews.
 The selected row keeps its theme selection fill with a subtle accent outline;
 the keyboard cursor adds a full focus outline even when that row is selected.
-Title, preview, and branch tooltips expose truncated text without widening the
-sidebar. Spacing and mark geometry follow the existing theme tokens, and the
-list remains virtualized with the same session data and action handlers.
+Hovering a session opens one card pinned to that row's top-right, after the
+same delay as other tooltips. Leaving the row dismisses it, and so do scrolling
+the list, clicking the row, or opening a sidebar menu. The card shows the
+full title, wrapping inside the tooltip width, then the workspace and branch,
+the path, and any providers. The open shortcut is its own last line, and only
+for the first nine sessions. Spacing and mark geometry
+follow the existing theme tokens, and the list remains virtualized with the
+same session data and action handlers.
 The sidebar view menu's **Show** submenu toggles Updated and Summary. Updated
 is on by default and shows the relative time in the status slot when the row
 has no status words. Summary is off by default and adds the first-message line
@@ -393,9 +399,9 @@ message to a "remainder" hid the end of the ask instead of de-duplicating it.
 Branch metadata is a
 per-project cache (`OrbitApp::sidebar_branches`), filled off-thread by
 `git branch --show-current` + `rev-list --left-right` at launch and whenever the
-project list or the current checkout changes, so rendering a row never spawns
-git; a project that is not a repository, or is on a detached HEAD, has no branch
-item rather than an empty slot, and `↑n`/`↓n` appear only for non-zero counts
+project list or the current checkout changes, so the hover card never spawns
+git; a project that is not a repository, or is on a detached HEAD, omits the
+branch on that card, and `↑n`/`↓n` appear only for non-zero counts
 (`divergence_labels`). Row actions are the right-click context menu's job — the
 session row carries no hover-revealed `…`, which is why the title owns the full
 line width and why the keyboard/palette delete path anchors its confirmation to

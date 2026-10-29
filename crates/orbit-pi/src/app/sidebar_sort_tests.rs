@@ -145,10 +145,10 @@ fn last_updated_does_not_override_activity_when_opening_a_session() {
 }
 
 #[test]
-fn an_open_session_leads_a_running_sibling() {
+fn opening_or_running_does_not_reorder_a_group() {
     // The store is newest-first. The open session is the oldest, and a
-    // sibling is mid-run. The open row rises above the running one, and
-    // both rise above the idle sibling. Pins would still lead them.
+    // sibling is mid-run. Neither rises: only a new message changes order.
+    // Pins would still lead them.
     let sessions = vec![
         store_session("a2", "/work/alpha", 30),
         store_session("a3", "/work/alpha", 20),
@@ -179,8 +179,9 @@ fn an_open_session_leads_a_running_sibling() {
             _ => None,
         })
         .collect();
-    // Open (a1), then the running sibling (a2), then the idle one (a3).
-    assert_eq!(indices, vec![2, 0, 1]);
+    // Newest first: the running sibling (a2), the idle one (a3), then the
+    // open session (a1). Clicking a1 did not move it.
+    assert_eq!(indices, vec![0, 1, 2]);
 }
 
 #[test]

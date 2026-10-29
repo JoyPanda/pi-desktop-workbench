@@ -51,20 +51,20 @@ fn flat_rows_lead_with_pinned_sessions() {
 }
 
 #[test]
-fn flat_rows_place_the_open_session_ahead_of_newer_idle_ones() {
-    // The store hands sessions over newest-first. The open session is the
-    // older one, and it rises above idle siblings. Pins still lead it.
+fn flat_rows_do_not_promote_the_open_session() {
+    // The store hands sessions over newest-first. Opening the older one
+    // leaves that order alone. Pins still lead.
     let sessions = vec![
         store_session("background", "/work/alpha", 30),
         store_session("active", "/work/alpha", 10),
     ];
     let active = Some(sessions[1].path.clone());
     let rows = build_flat_sidebar_rows(&sessions, &HashSet::new(), &active, &HashSet::new());
-    assert_eq!(session_indices(&rows), vec![1, 0]);
+    assert_eq!(session_indices(&rows), vec![0, 1]);
 }
 
 #[test]
-fn flat_rows_keep_pins_ahead_of_open_and_running_sessions() {
+fn flat_rows_keep_pins_ahead_without_promoting_open_or_running() {
     let sessions = vec![
         store_session("running", "/work/alpha", 40),
         store_session("idle", "/work/alpha", 30),
@@ -75,13 +75,8 @@ fn flat_rows_keep_pins_ahead_of_open_and_running_sessions() {
     let running = HashSet::from([sessions[0].path.clone()]);
     let active = Some(sessions[2].path.clone());
     let rows = build_flat_sidebar_rows(&sessions, &pinned, &active, &running);
-    assert_eq!(session_indices(&rows), vec![3, 2, 0, 1]);
-    let rows = build_flat_sidebar_rows(
-        &sessions,
-        &pinned,
-        &Some(sessions[3].path.clone()),
-        &running,
-    );
+    // Pin first, then newest activity. The open row and the running row
+    // stay where their last message put them.
     assert_eq!(session_indices(&rows), vec![3, 0, 1, 2]);
 }
 

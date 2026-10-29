@@ -334,6 +334,7 @@ impl Render for OrbitApp {
                     session_menu.as_ref().as_ref(),
                     workspace_menu.as_ref().as_ref(),
                     sidebar_cursor == Some(sticky.ix),
+                    self.session_card.as_deref(),
                     theme,
                 ))
                 .into_any_element()
@@ -750,6 +751,9 @@ impl Render for OrbitApp {
                                                                     session_menu.as_ref().as_ref(),
                                                                     row_workspace_menu,
                                                                     sidebar_cursor == Some(ix),
+                                                                    this.read(cx)
+                                                                        .session_card
+                                                                        .as_deref(),
                                                                     *theme::get(cx),
                                                                 )
                                                                 .into_any_element()
