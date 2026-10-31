@@ -1366,16 +1366,8 @@ impl Transcript {
         // A summary boundary is not a streamed turn: land it as its own row
         // (it cannot continue a run, and nothing may stream into it).
         if message.is_summary() {
-            // pi emits `message_start` and `message_end` for a custom message,
-            // so the same notice arrives twice back to back.
             if message.is_notice() {
-                let repeat = self.messages.borrow().last().is_some_and(|last| {
-                    last.summary.as_ref().map(|row| (&row.notice, &row.summary))
-                        == message.summary.as_ref().map(|row| (&row.notice, &row.summary))
-                });
-                if repeat {
-                    return false;
-                }
+                return self.land_notice(message);
             }
             self.set_tail_row(false);
             self.flush_held_notices();
@@ -1386,11 +1378,11 @@ impl Transcript {
             return true;
         }
         let injected = injected_skill_message(value);
-        self.flush_held_notices();
         if message.user {
             // A new turn begins: the previous run's end-of-task summary row
             // steps aside before the prompt row lands.
             self.set_tail_row(false);
+            self.flush_held_notices();
         } else {
             // A streamed answer retires the pending row — the live message row
             // is the indicator now. Done before the list grows below so the
@@ -1727,11 +1719,11 @@ impl Transcript {
         if final_message.is_summary() {
             return self.on_message_boundary(value);
         }
-        self.flush_held_notices();
         if final_message.user {
             // A new turn arriving as a settled message (no live boundary):
             // the previous run's summary row steps aside first.
             self.set_tail_row(false);
+            self.flush_held_notices();
         }
         if !final_message.user {
             // The step's wall clock runs from the start of its turn; the
@@ -2490,17 +2482,44 @@ impl Transcript {
     /// are the attachments that rode along with the prompt.
     /// Show an extension's live `notify` as a feed row. Live-only: pi does not
     /// store a `notify`, so a reload drops the row. Returns whether the list
-    /// changed; a notice that arrives before any conversation row is held.
+    /// changed (a held notice does not change it yet).
     pub fn push_notice(&mut self, label: &str, text: &str) -> bool {
-        let Some(notice) = ChatMessage::notice_row(label, text) else {
-            return false;
+        match ChatMessage::notice_row(label, text) {
+            Some(notice) => self.land_notice(notice),
+            None => false,
+        }
+    }
+
+    /// Land an extension notice, or hold it. A notice never sits directly
+    /// after an assistant row: that would split a run that is still streaming
+    /// tool calls into a second row, and the end-of-task card and footer read
+    /// the last row. It also never lands on an empty transcript, which would
+    /// swap the new-task page for a chat view. Held notices land just ahead of
+    /// the next user prompt.
+    ///
+    /// A repeat of the newest notice is dropped: pi emits `message_start` and
+    /// `message_end` for a custom message, and the toast dedupes the same way.
+    fn land_notice(&mut self, notice: ChatMessage) -> bool {
+        let key = |message: &ChatMessage| {
+            message
+                .summary
+                .as_ref()
+                .map(|row| (row.notice.clone(), row.summary.clone()))
         };
-        if self.messages.borrow().is_empty() {
+        let mut messages = self.messages.borrow_mut();
+        let newest = match self.held_notices.last() {
+            Some(held) => Some(held),
+            None => messages.last().filter(|last| last.is_notice()),
+        };
+        if newest.is_some_and(|newest| key(newest) == key(&notice)) {
+            return false;
+        }
+        if messages.last().is_none_or(ChatMessage::is_assistant) {
             self.held_notices.push(notice);
             return false;
         }
-        self.set_tail_row(false);
-        self.messages.borrow_mut().push(notice);
+        messages.push(notice);
+        drop(messages);
         self.insert_row();
         true
     }
@@ -2511,6 +2530,15 @@ impl Transcript {
             self.messages.borrow_mut().push(notice);
             self.insert_row();
         }
+    }
+
+    /// [`Self::clear`] for the `new_session` reply: pi runs the new
+    /// session's `session_start` hooks first, so a `notify` they raised is
+    /// already waiting and belongs to the session this clear opens.
+    pub fn clear_for_new_session(&mut self) {
+        let held = std::mem::take(&mut self.held_notices);
+        self.clear();
+        self.held_notices = held;
     }
 
     pub fn append_user_message(&mut self, text: &str, images: Vec<Arc<Image>>) -> bool {
@@ -3549,6 +3577,54 @@ mod tests {
         assert!(t.push_notice("Extension", "later"));
         assert!(t.messages.borrow()[2].is_notice());
         assert!(!t.push_notice("Extension", "   "));
+    }
+
+    /// A notice must not split a run: after an assistant row it waits, so the
+    /// following tool execution still lands on that row and the next prompt
+    /// is preceded by the held notice.
+    #[test]
+    fn notice_after_an_assistant_row_waits_for_the_next_prompt() {
+        let mut t = Transcript::new();
+        assert!(t.append_user_message("go", Vec::new()));
+        let assistant = json!({"role": "assistant", "content": [
+            {"type": "toolCall", "id": "c1", "name": "edit", "arguments": {"path": "a.rs"}}
+        ]});
+        t.apply_event(&Event::MessageStart {
+            value: json!({"type": "message_start", "message": assistant}),
+        });
+        t.apply_event(&Event::MessageEnd {
+            value: json!({"type": "message_end", "message": assistant}),
+        });
+        assert!(!t.push_notice("Extension", "mid-run"));
+        t.apply_event(&Event::ToolExecutionStart {
+            value: json!({"toolCallId": "c1", "toolName": "edit", "args": {"path": "a.rs"}}),
+        });
+        {
+            let messages = t.messages.borrow();
+            assert_eq!(messages.len(), 2, "the notice did not split the run");
+            assert_eq!(messages[1].tools().count(), 1, "one copy of the call");
+        }
+        assert!(t.append_user_message("next", Vec::new()));
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 4);
+        assert!(messages[2].is_notice(), "held notice lands before the prompt");
+        assert!(messages[3].user);
+    }
+
+    #[test]
+    fn repeated_notice_is_dropped_and_new_session_keeps_held_ones() {
+        let mut t = Transcript::new();
+        t.push_notice("Extension", "started");
+        t.push_notice("Extension", "started");
+        t.clear_for_new_session();
+        assert!(t.append_user_message("hi", Vec::new()));
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 2, "one held notice, then the prompt");
+        assert!(messages[0].is_notice());
+        drop(messages);
+        t.clear();
+        assert!(t.append_user_message("hi", Vec::new()));
+        assert_eq!(t.messages.borrow().len(), 1, "a plain clear drops held notices");
     }
 
     #[test]

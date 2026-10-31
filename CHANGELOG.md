@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   task starts) now renders as a notice card in the feed, and so does an
   extension `notify` (live-only; its toast still appears). Short text shows in
   full; longer text collapses to a one-line preview and expands on click.
-  `display: false` context stays hidden.
+  `display: false` context stays hidden. A notice raised while a reply is
+  running waits and appears just before your next message.
 
 ## [0.2.13] - 2026-10-27
 

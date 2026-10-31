@@ -688,7 +688,7 @@ impl OrbitApp {
                 }
                 // Native requests remain blocked until this session is opened.
                 // The reducer saved the raw request; no answer is fabricated.
-                Event::ExtensionUiRequest { id, method, .. } => {
+                Event::ExtensionUiRequest { id, method, value } => {
                     if matches!(method.as_str(), "select" | "input") {
                         if let Some(replay) = parked.interaction.ask_replay.as_mut() {
                             // These answers were already committed by the user;
@@ -715,6 +715,14 @@ impl OrbitApp {
                         }
                     } else if method == "custom" {
                         let _ = parked.client.cancel_dialog(id);
+                    } else if method == "notify" {
+                        // No toast for a background session, but the row waits
+                        // in its transcript for when it is opened.
+                        if let Some(message) = value.get("message").and_then(Value::as_str) {
+                            parked
+                                .transcript
+                                .push_notice(&tr!("transcript.extension_notice"), message);
+                        }
                     }
                     continue;
                 }
@@ -1241,7 +1249,7 @@ impl OrbitApp {
                 if !self.busy {
                     self.execution = SessionExecution::default();
                 }
-                self.transcript.clear();
+                self.transcript.clear_for_new_session();
                 self.current_title = None;
                 self.reset_session_name(cx);
                 self.current_session_path = None;

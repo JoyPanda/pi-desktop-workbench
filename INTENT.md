@@ -539,7 +539,9 @@ also still raises its toast. Notice rows are live rows only for `notify` (pi
 stores no `notify`; a reload drops it) and persistent for `custom` messages.
 `display: false` context is never shown. A `notify` that arrives before any
 conversation row is held and lands just ahead of the first message, so an empty
-session keeps the new-task page. Notices are skipped by the prompt/echo dedupe
+session keeps the new-task page. A notice never lands directly after an assistant
+row (it would split a streaming run and trail the end-of-task card): it waits and
+lands just ahead of the next prompt. Notices are skipped by the prompt/echo dedupe
 (`last_turn_message`), and a custom message's start/end pair lands once. Short
 text (≤3 lines, ≤240 chars) shows in full; longer text collapses behind the same
 per-row disclosure the boundary cards use.
