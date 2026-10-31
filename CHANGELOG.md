@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Extension notices in the transcript.** A pi `custom` message its extension
+  marks `display: true` (for example the plan summary a plugin injects when a
+  task starts) now renders as a notice card in the feed, and so does an
+  extension `notify` (live-only; its toast still appears). Short text shows in
+  full; longer text collapses to a one-line preview and expands on click.
+  `display: false` context stays hidden.
+
 ## [0.2.13] - 2026-10-27
 
 ### Added

@@ -532,6 +532,18 @@ re-reads `get_messages` so the live chat adopts pi's compacted projection
 (summary + kept entries) instead of holding the pre-compaction history until
 the session is reopened.
 
+Extension notices are visible in the transcript: a pi `custom` message with
+`display: true` (a plugin's injected plan summary, say) renders as a notice card
+(`SummaryRow.notice = Some(customType)`), as does an extension `notify`, which
+also still raises its toast. Notice rows are live rows only for `notify` (pi
+stores no `notify`; a reload drops it) and persistent for `custom` messages.
+`display: false` context is never shown. A `notify` that arrives before any
+conversation row is held and lands just ahead of the first message, so an empty
+session keeps the new-task page. Notices are skipped by the prompt/echo dedupe
+(`last_turn_message`), and a custom message's start/end pair lands once. Short
+text (≤3 lines, ≤240 chars) shows in full; longer text collapses behind the same
+per-row disclosure the boundary cards use.
+
 Agent call details — an activity group or a tool card the reader has not opened
 themselves — default to following the run: open while the turn streams, closed
 once it settles. Settings → Agent → Agent call details can pin them always
