@@ -1048,6 +1048,10 @@ pub struct Transcript {
     /// one on an empty transcript would swap the new-task page for a chat
     /// view, so they wait and land just ahead of the first real message.
     held_notices: Vec<ChatMessage>,
+    /// A `new_session` request is out and its reply has not cleared this
+    /// transcript yet. Everything arriving meanwhile belongs to the new
+    /// session, so notices are held, never landed on the old rows.
+    awaiting_new_session: bool,
     /// Message index where the latest turn starts. `None` until the app's
     /// turn clock says which turn the card should describe.
     review_card_start: Option<usize>,
@@ -1110,6 +1114,7 @@ impl Transcript {
             seed_thinking: Rc::new(Cell::new(false)),
             tail_summary: Rc::new(Cell::new(false)),
             held_notices: Vec::new(),
+            awaiting_new_session: false,
             review_card_start: None,
             review_workspace: None,
             review_card_files: Vec::new(),
@@ -1279,6 +1284,7 @@ impl Transcript {
     pub fn clear(&mut self) {
         *self.messages.borrow_mut() = Vec::new();
         self.held_notices.clear();
+        self.awaiting_new_session = false;
         self.invalidate_user_turns();
         self.text_selection.borrow_mut().clear();
         self.scroller.reset(0);
@@ -1315,9 +1321,14 @@ impl Transcript {
 
     /// Apply one protocol event; returns `true` if the transcript changed.
     pub fn apply_event(&mut self, event: &Event) -> bool {
-        if self.held_notices_precede(event) {
+        let flushed = self.held_notices_precede(event);
+        if flushed {
             self.flush_held_notices();
         }
+        self.apply_event_inner(event) || flushed
+    }
+
+    fn apply_event_inner(&mut self, event: &Event) -> bool {
         match event {
             Event::MessageStart { value } => {
                 let changed = self.on_message_boundary(value);
@@ -2528,12 +2539,13 @@ impl Transcript {
         let mut messages = self.messages.borrow_mut();
         let newest = match self.held_notices.last() {
             Some(held) => Some(held),
+            None if self.awaiting_new_session => None,
             None => messages.last().filter(|last| last.is_notice()),
         };
         if newest.is_some_and(|newest| key(newest) == key(&notice)) {
             return false;
         }
-        if messages.last().is_none_or(ChatMessage::is_assistant) {
+        if self.awaiting_new_session || messages.last().is_none_or(ChatMessage::is_assistant) {
             self.held_notices.push(notice);
             return false;
         }
@@ -2551,17 +2563,26 @@ impl Transcript {
         if self.held_notices.is_empty() {
             return false;
         }
-        let message = match event {
-            Event::MessageStart { value } | Event::MessageEnd { value } => Some(value),
-            Event::MessageUpdate { .. }
+        match event {
+            // Only a message that becomes a conversation row opens one: not a
+            // `system` loadout, a `toolResult`, or a custom message (a notice
+            // itself, which queues behind the others).
+            Event::MessageStart { value } | Event::MessageEnd { value } => {
+                if !matches!(
+                    message_role(value),
+                    Some("user" | "assistant" | "compactionSummary" | "branchSummary")
+                ) {
+                    return false;
+                }
+            }
+            // Streamed content and tool runs open a row when no start came.
+            Event::MessageUpdate {
+                assistant: Some(_), ..
+            }
             | Event::ToolExecutionStart { .. }
             | Event::ToolExecutionUpdate { .. }
-            | Event::ToolExecutionEnd { .. } => None,
+            | Event::ToolExecutionEnd { .. } => {}
             _ => return false,
-        };
-        // A custom message is a notice itself: it queues behind the others.
-        if message.is_some_and(|value| message_role(value) == Some("custom")) {
-            return false;
         }
         !self
             .messages
@@ -2570,11 +2591,13 @@ impl Transcript {
             .is_some_and(ChatMessage::is_assistant)
     }
 
-    /// Drop notices still waiting for a prompt. A session that is reused in
-    /// place for a new task calls this before `new_session` so the old
-    /// session's notices cannot land in the new one.
-    pub fn drop_held_notices(&mut self) {
+    /// A session reused in place for a new task calls this before sending
+    /// `new_session`: the old session's waiting notices are dropped, and
+    /// notices arriving until the reply clears the transcript (the new
+    /// session's `session_start` hooks) are held, not added to the old rows.
+    pub fn begin_new_session(&mut self) {
         self.held_notices.clear();
+        self.awaiting_new_session = true;
     }
 
     /// Land the held notices ahead of the message about to be pushed.
@@ -2592,6 +2615,7 @@ impl Transcript {
         let held = std::mem::take(&mut self.held_notices);
         self.clear();
         self.held_notices = held;
+        self.awaiting_new_session = false;
     }
 
     pub fn append_user_message(&mut self, text: &str, images: Vec<Arc<Image>>) -> bool {
@@ -3728,13 +3752,43 @@ mod tests {
             value: json!({"type": "message_end", "message": assistant}),
         });
         t.push_notice("Extension", "old session");
-        t.drop_held_notices();
+        t.begin_new_session();
         t.clear_for_new_session();
         t.push_notice("Extension", "new session");
         assert!(t.append_user_message("hi", Vec::new()));
         let messages = t.messages.borrow();
         assert_eq!(messages.len(), 2, "only the new session's notice + prompt");
         assert_eq!(messages[0].summary.as_ref().unwrap().summary, "new session");
+    }
+
+    #[test]
+    fn new_session_notice_is_not_added_to_the_old_rows() {
+        let mut t = Transcript::new();
+        // The old session ends on a user row (a rejected prompt).
+        assert!(t.append_user_message("old", Vec::new()));
+        t.begin_new_session();
+        // session_start hook of the new session fires before the reply.
+        assert!(!t.push_notice("Extension", "started"));
+        assert_eq!(t.messages.borrow().len(), 1, "old rows are untouched");
+        t.clear_for_new_session();
+        assert!(t.is_empty());
+        assert!(t.append_user_message("hi", Vec::new()));
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].is_notice());
+    }
+
+    #[test]
+    fn a_system_message_does_not_flush_held_notices() {
+        let mut t = Transcript::new();
+        t.push_notice("Extension", "started");
+        let system = json!({"role": "system", "content": "",
+            "sections": {"preamble": "You are an expert…"}});
+        let changed = t.apply_event(&Event::MessageStart {
+            value: json!({"type": "message_start", "message": system}),
+        });
+        assert!(!changed);
+        assert!(t.is_empty(), "the new-task page stays until a real row");
     }
 
     #[test]
