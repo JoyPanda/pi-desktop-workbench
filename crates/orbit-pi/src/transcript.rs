@@ -1192,6 +1192,7 @@ impl Transcript {
     pub fn load_from(&mut self, data: &Value) {
         self.text_selection.borrow_mut().clear();
         let mut parsed = Vec::new();
+        let mut waiting: Vec<ChatMessage> = Vec::new();
         if let Some(messages) = data.get("messages").and_then(Value::as_array) {
             for message in messages {
                 // Tool results are not chat rows — attach the output to the
@@ -1201,6 +1202,17 @@ impl Transcript {
                     continue;
                 }
                 if let Some(parsed_message) = ChatMessage::from_value(message) {
+                    // A notice never sits directly after an assistant row
+                    // (it would split the run); it waits for the next row
+                    // that is not part of that run, as in the live view.
+                    if parsed_message.is_notice() {
+                        if parsed.last().is_none_or(ChatMessage::is_assistant) {
+                            waiting.push(parsed_message);
+                        } else {
+                            parsed.push(parsed_message);
+                        }
+                        continue;
+                    }
                     // Consecutive assistant messages are one logical turn
                     // one row, one fold, one footer — not a stack of
                     // "Worked" dividers per streaming step. A user message
@@ -1213,15 +1225,19 @@ impl Transcript {
                         {
                             merge_step(previous, parsed_message);
                         }
-                        _ => parsed.push(parsed_message),
+                        _ => {
+                            parsed.append(&mut waiting);
+                            parsed.push(parsed_message);
+                        }
                     }
                 }
             }
         }
         let count = parsed.len();
-        if count > 0 {
-            // A different session's history replaces whatever was waiting.
-            self.held_notices.clear();
+        if count > 0 || !waiting.is_empty() {
+            // This history replaces whatever was waiting; notices that trail
+            // its last assistant row wait for the next prompt.
+            self.held_notices = waiting;
         }
         *self.messages.borrow_mut() = parsed;
         self.invalidate_user_turns();
@@ -1299,6 +1315,9 @@ impl Transcript {
 
     /// Apply one protocol event; returns `true` if the transcript changed.
     pub fn apply_event(&mut self, event: &Event) -> bool {
+        if self.held_notices_precede(event) {
+            self.flush_held_notices();
+        }
         match event {
             Event::MessageStart { value } => {
                 let changed = self.on_message_boundary(value);
@@ -2524,6 +2543,40 @@ impl Transcript {
         true
     }
 
+    /// Whether `event` is about to open an assistant row while notices are
+    /// still held. Held notices exist past the first row only behind an
+    /// assistant row, so this is the empty-transcript case: they belong ahead
+    /// of the first row, as a reload would order them.
+    fn held_notices_precede(&self, event: &Event) -> bool {
+        if self.held_notices.is_empty() {
+            return false;
+        }
+        let message = match event {
+            Event::MessageStart { value } | Event::MessageEnd { value } => Some(value),
+            Event::MessageUpdate { .. }
+            | Event::ToolExecutionStart { .. }
+            | Event::ToolExecutionUpdate { .. }
+            | Event::ToolExecutionEnd { .. } => None,
+            _ => return false,
+        };
+        // A custom message is a notice itself: it queues behind the others.
+        if message.is_some_and(|value| message_role(value) == Some("custom")) {
+            return false;
+        }
+        !self
+            .messages
+            .borrow()
+            .last()
+            .is_some_and(ChatMessage::is_assistant)
+    }
+
+    /// Drop notices still waiting for a prompt. A session that is reused in
+    /// place for a new task calls this before `new_session` so the old
+    /// session's notices cannot land in the new one.
+    pub fn drop_held_notices(&mut self) {
+        self.held_notices.clear();
+    }
+
     /// Land the held notices ahead of the message about to be pushed.
     fn flush_held_notices(&mut self) {
         for notice in std::mem::take(&mut self.held_notices) {
@@ -3625,6 +3678,63 @@ mod tests {
         t.clear();
         assert!(t.append_user_message("hi", Vec::new()));
         assert_eq!(t.messages.borrow().len(), 1, "a plain clear drops held notices");
+    }
+
+    #[test]
+    fn reload_keeps_a_run_whole_and_holds_a_trailing_notice() {
+        let payload = json!({"messages": [
+            {"role": "user", "content": "go"},
+            {"role": "assistant", "content": [{"type": "text", "text": "one"}]},
+            {"role": "custom", "customType": "x", "display": true, "content": "mid"},
+            {"role": "assistant", "content": [{"type": "text", "text": "two"}]},
+            {"role": "custom", "customType": "x", "display": true, "content": "tail"}
+        ]});
+        let mut t = Transcript::new();
+        t.load_from(&payload);
+        {
+            let messages = t.messages.borrow();
+            assert_eq!(messages.len(), 2, "one user row, one merged assistant run");
+            assert!(messages[1].is_assistant());
+            assert_eq!(messages[1].text(), "one\n\ntwo");
+        }
+        // Both notices wait; they land before the next prompt.
+        assert!(t.append_user_message("next", Vec::new()));
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 5);
+        assert!(messages[2].is_notice() && messages[3].is_notice());
+        assert!(messages[4].user);
+    }
+
+    #[test]
+    fn held_notices_land_before_a_first_assistant_row() {
+        let mut t = Transcript::new();
+        t.push_notice("Extension", "started");
+        let assistant = json!({"role": "assistant", "content": [{"type": "text", "text": "hi"}]});
+        t.apply_event(&Event::MessageStart {
+            value: json!({"type": "message_start", "message": assistant}),
+        });
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].is_notice());
+        assert!(messages[1].is_assistant());
+    }
+
+    #[test]
+    fn dropped_held_notices_do_not_reach_the_next_session() {
+        let mut t = Transcript::new();
+        assert!(t.append_user_message("go", Vec::new()));
+        let assistant = json!({"role": "assistant", "content": [{"type": "text", "text": "ok"}]});
+        t.apply_event(&Event::MessageEnd {
+            value: json!({"type": "message_end", "message": assistant}),
+        });
+        t.push_notice("Extension", "old session");
+        t.drop_held_notices();
+        t.clear_for_new_session();
+        t.push_notice("Extension", "new session");
+        assert!(t.append_user_message("hi", Vec::new()));
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 2, "only the new session's notice + prompt");
+        assert_eq!(messages[0].summary.as_ref().unwrap().summary, "new session");
     }
 
     #[test]
