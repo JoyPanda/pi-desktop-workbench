@@ -790,7 +790,7 @@ impl OrbitApp {
         }
         self.cancel_fork_followup();
         self.close_surfaces_for_new_task(cx);
-        self.transcript.drop_held_notices();
+        self.transcript.begin_new_session();
         self.send(CommandBody::NewSession, "new_session");
         self.input.read(cx).focus(window);
         cx.notify();
@@ -1086,7 +1086,7 @@ impl OrbitApp {
         if self.current_workspace.as_ref() == Some(&cwd) && self.can_reuse_session() {
             self.cancel_fork_followup();
             self.close_surfaces_for_new_task(cx);
-            self.transcript.drop_held_notices();
+            self.transcript.begin_new_session();
             self.send(CommandBody::NewSession, "new_session");
             self.input.read(cx).focus(window);
             cx.notify();
