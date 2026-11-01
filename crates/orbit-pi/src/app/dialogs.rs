@@ -40,10 +40,13 @@ impl OrbitApp {
                     self.open_dialog(request, cx);
                 }
             }
-            // `notify` is a user-facing toast — render it as one. `setStatus`
-            // stays on the quiet transient status line.
+            // `notify` is a user-facing toast — render it as one, and keep a
+            // row in the feed (live-only) so it is not lost once the toast
+            // fades. `setStatus` stays on the quiet transient status line.
             "notify" => {
                 if let Some(message) = value.get("message").and_then(Value::as_str) {
+                    self.transcript
+                        .push_notice(&tr!("transcript.extension_notice"), message);
                     self.toast_info(message.to_owned());
                     cx.notify();
                 }

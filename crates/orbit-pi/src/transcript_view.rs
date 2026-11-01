@@ -1782,7 +1782,10 @@ fn render_row(paint: RowPaint, cx: &gpui::App) -> AnyElement {
     let last = paint.ix + 1 == paint.row_count;
 
     let inner = if let Some(summary) = message.summary.as_ref() {
-        render_summary_card(summary, &paint)
+        match summary.notice.as_deref() {
+            Some(label) => render_notice_card(summary, label, &paint),
+            None => render_summary_card(summary, &paint),
+        }
     } else if message.user {
         render_user_bubble(message, &paint, cx).into_any_element()
     } else {
@@ -1915,40 +1918,140 @@ fn render_summary_card(row: &SummaryRow, paint: &RowPaint) -> AnyElement {
         .bg(theme.overlay)
         .child(header);
     if expanded {
-        card = card.child(
+        card = card.child(summary_card_body(&row.summary, paint));
+    }
+    card.into_any_element()
+}
+
+/// The markdown body shared by the boundary and notice cards: a bordered
+/// block that clips overflow and sits inset from the reading column.
+fn summary_card_body(markdown: &str, paint: &RowPaint) -> impl IntoElement {
+    let theme = paint.theme;
+    div()
+        .w_full()
+        .min_w_0()
+        .border_t_1()
+        .border_color(theme.border)
+        .px(DynamicSpacing::Base12.px(&theme))
+        .py(DynamicSpacing::Base08.px(&theme))
+        .child(render_prose(
+            markdown,
+            paint.ix,
+            4096,
+            theme,
+            theme.output_prose,
+            paint.copied_sections.clone(),
+            paint.expanded_blocks.clone(),
+            true,
+            true,
+            paint.scroller.clone(),
+            // Fit the table to the card interior so a wide table scrolls
+            // inside the card instead of breaking out into the pane and
+            // getting clipped.
+            Some({
+                let pad = f32::from(DynamicSpacing::Base12.px(&theme));
+                let inner = (paint.table_breakout.column_width - px(pad * 2. + 2.)).max(px(0.));
+                TableBreakout {
+                    max_width: inner,
+                    column_width: inner,
+                }
+            }),
+        ))
+}
+
+/// Longest notice (lines, characters) shown without a disclosure. Anything
+/// longer collapses to a one-line preview and expands on click.
+const NOTICE_INLINE_LINES: usize = 3;
+const NOTICE_INLINE_CHARS: usize = 240;
+
+/// An extension notice: a displayable `custom` message (the plan summary a
+/// plugin injects at the start of a task) or a live `notify`. A short text
+/// shows in full; a long one collapses behind the same per-row disclosure the
+/// boundary cards use.
+fn render_notice_card(row: &SummaryRow, label: &str, paint: &RowPaint) -> AnyElement {
+    let theme = paint.theme;
+    let ix = paint.ix;
+    let label = if label.is_empty() {
+        tr!("transcript.extension_notice")
+    } else {
+        label.to_string()
+    };
+    let text = row.summary.as_str();
+    let collapsible =
+        text.lines().count() > NOTICE_INLINE_LINES || text.chars().count() > NOTICE_INLINE_CHARS;
+    let expanded = !collapsible || paint.fold_open;
+    let preview = text.lines().next().unwrap_or_default().to_string();
+
+    let header = div()
+        .id(ElementId::NamedInteger("notice-head".into(), ix as u64))
+        .h(DynamicSpacing::Base32.px(&theme))
+        .px(DynamicSpacing::Base08.px(&theme))
+        .flex()
+        .items_center()
+        .gap(DynamicSpacing::Base08.px(&theme))
+        .rounded_t(panel::RADIUS.px(&theme))
+        .when(!expanded, |header| {
+            header.rounded_b(panel::RADIUS.px(&theme))
+        })
+        .when(collapsible, |header| {
+            header
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.overlay_strong))
+                .on_click({
+                    let expanded_turns = paint.expanded_turns.clone();
+                    let scroller = paint.scroller.clone();
+                    move |_, _, cx| {
+                        toggle_index(&expanded_turns, ix);
+                        scroller.remeasure_toggle(ix);
+                        cx.refresh_windows();
+                    }
+                })
+        })
+        .child(activity_badge("icons/info.svg", theme.accent_text, theme))
+        .child(
             div()
-                .w_full()
-                .min_w_0()
-                .border_t_1()
-                .border_color(theme.border)
-                .px(DynamicSpacing::Base12.px(&theme))
-                .py(DynamicSpacing::Base08.px(&theme))
-                .child(render_prose(
-                    &row.summary,
-                    ix,
-                    4096,
-                    theme,
-                    theme.output_prose,
-                    paint.copied_sections.clone(),
-                    paint.expanded_blocks.clone(),
-                    true,
-                    true,
-                    paint.scroller.clone(),
-                    // The card clips overflow and is already inset from the
-                    // reading column. Fit the table to that interior so a
-                    // wide table scrolls inside the card instead of breaking
-                    // out into the pane and getting clipped.
-                    Some({
-                        let pad = f32::from(DynamicSpacing::Base12.px(&theme));
-                        let inner =
-                            (paint.table_breakout.column_width - px(pad * 2. + 2.)).max(px(0.));
-                        TableBreakout {
-                            max_width: inner,
-                            column_width: inner,
-                        }
-                    }),
-                )),
-        );
+                .flex_none()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text_primary)
+                .child(label),
+        )
+        .when(!expanded, |header| {
+            header.child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_size(TextSize::Small.px(&theme))
+                    .text_color(theme.text_muted)
+                    .child(preview),
+            )
+        })
+        .when(expanded, |header| header.child(div().flex_1()))
+        .when(collapsible, |header| {
+            header.child(glyph(
+                if expanded {
+                    "icons/chevron-down.svg"
+                } else {
+                    "icons/chevron-right.svg"
+                },
+                IconSize::XSmall.px(&theme),
+                theme.text_muted,
+            ))
+        });
+
+    let mut card = div()
+        .id(ElementId::NamedInteger("notice-card".into(), ix as u64))
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
+        .rounded(panel::RADIUS.px(&theme))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.overlay)
+        .child(header);
+    if expanded {
+        card = card.child(summary_card_body(text, paint));
     }
     card.into_any_element()
 }
@@ -9532,6 +9635,7 @@ mod tests {
                 branch,
                 summary: summary.to_string(),
                 tokens_before: tokens,
+                notice: None,
             }),
             steps: vec![Step::default()],
             images: Vec::new(),
@@ -9546,6 +9650,56 @@ mod tests {
         ]));
         // Collapsed paints the header alone; `open_work` expands row 0 (the
         // disclosure state summaries share with the turn fold).
+        for open in [false, true] {
+            let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+            let scroller = MessageScrollerState::new(messages.borrow().len());
+            let view = cx.update(|_, cx| {
+                cx.new(|_| SelectTestView {
+                    messages: messages.clone(),
+                    state,
+                    scroller,
+                    main_width: px(900.),
+                    open_work: open,
+                    live: false,
+                })
+            });
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(800.)),
+                |_, _| view.clone(),
+            );
+        }
+    }
+
+    /// Extension notices paint short (full text) and long (collapsed, then
+    /// expanded) without panicking or leaving a blank row.
+    #[gpui::test]
+    fn notice_cards_render_short_and_long(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let long = (0..8)
+            .map(|n| format!("- plan {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let notice = |label: &str, text: &str| ChatMessage {
+            user: false,
+            summary: Some(SummaryRow {
+                branch: false,
+                summary: text.to_string(),
+                tokens_before: None,
+                notice: Some(label.to_string()),
+            }),
+            steps: vec![Step::default()],
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        };
+        let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![
+            notice("pet-inject", "[pet] 3 plans"),
+            notice("", &long),
+        ]));
         for open in [false, true] {
             let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
             let scroller = MessageScrollerState::new(messages.borrow().len());

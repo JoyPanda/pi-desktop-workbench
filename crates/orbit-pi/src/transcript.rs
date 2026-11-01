@@ -67,6 +67,10 @@ pub struct SummaryRow {
     /// Context tokens before compaction replaced them. Compaction only; pi
     /// does not report a token count for branch summaries.
     pub tokens_before: Option<u64>,
+    /// `Some(label)` marks an extension notice instead of a pi boundary: a
+    /// displayable `custom` message (`label` is its `customType`) or a live
+    /// `notify`. `summary` then holds the notice text.
+    pub notice: Option<String>,
 }
 
 pub struct ChatMessage {
@@ -95,6 +99,13 @@ impl ChatMessage {
     /// A compaction/branch-summary boundary row.
     pub fn is_summary(&self) -> bool {
         self.summary.is_some()
+    }
+
+    /// An extension notice row (a displayable `custom` message or a `notify`).
+    pub fn is_notice(&self) -> bool {
+        self.summary
+            .as_ref()
+            .is_some_and(|row| row.notice.is_some())
     }
 
     /// A real assistant turn — the counterpart of [`Self::user`], and false
@@ -288,6 +299,13 @@ impl ChatMessage {
         // `custom` messages. Parsed as rows they would land between the
         // optimistic prompt and pi's echo, defeating the identical-echo
         // dedupe and showing the prompt twice.
+        // The exception: a `custom` message its extension marked
+        // `display: true` is a notice row (pi's TUI shows these too);
+        // `display: false` context stays hidden. `on_message_boundary` keeps
+        // such a row from breaking the prompt/echo dedupe.
+        if role == "custom" {
+            return Self::custom_notice(value);
+        }
         if role != "user" && role != "assistant" {
             return None;
         }
@@ -385,6 +403,55 @@ impl ChatMessage {
         Some(message)
     }
 
+    /// A displayable extension `custom` message as a notice row. `None` for
+    /// `display: false` (context-only) and for empty content.
+    fn custom_notice(value: &Value) -> Option<Self> {
+        if value.get("display").and_then(Value::as_bool) != Some(true) {
+            return None;
+        }
+        let text = match value.get("content")? {
+            Value::String(text) => text.clone(),
+            Value::Array(blocks) => blocks
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+            _ => return None,
+        };
+        let label = value
+            .get("customType")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut row = Self::notice_row(label, &text)?;
+        row.finished_at = parse_timestamp(value.get("timestamp"));
+        Some(row)
+    }
+
+    /// An extension notice row; `None` when the text is blank. The step stays
+    /// empty so `text()` keeps it out of turn navigation, search, and copy.
+    fn notice_row(label: &str, text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        Some(Self {
+            user: false,
+            summary: Some(SummaryRow {
+                branch: false,
+                summary: text.to_string(),
+                tokens_before: None,
+                notice: Some(label.trim().to_string()),
+            }),
+            steps: vec![Step::default()],
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        })
+    }
+
     /// One compaction/branch-summary boundary row. The step stays empty: the
     /// summary renders as its own card, and `text()` must stay clear of turn
     /// navigation, search, and answer-copy paths.
@@ -399,6 +466,7 @@ impl ChatMessage {
                     .unwrap_or_default()
                     .to_string(),
                 tokens_before: value.get("tokensBefore").and_then(Value::as_u64),
+                notice: None,
             }),
             steps: vec![Step::default()],
             images: Vec::new(),
@@ -470,6 +538,13 @@ fn compact_skill_prompt(name: &str, trailing: &str) -> String {
     } else {
         format!("/skill:{name} {trailing}")
     }
+}
+
+/// The newest row that is part of the conversation, skipping extension
+/// notices. The prompt/echo dedupe compares against this so a notice landing
+/// between the optimistic prompt and pi's echo cannot show the prompt twice.
+fn last_turn_message(messages: &[ChatMessage]) -> Option<&ChatMessage> {
+    messages.iter().rev().find(|message| !message.is_notice())
 }
 
 /// Whether a pi message value is that injected skill document.
@@ -969,6 +1044,10 @@ pub struct Transcript {
     /// extra slot after the last message). Shown once the latest turn has
     /// landed an `edit` / `write`; removed when that turn has none.
     tail_summary: Rc<Cell<bool>>,
+    /// Live `notify` rows that arrived before any conversation row. Landing
+    /// one on an empty transcript would swap the new-task page for a chat
+    /// view, so they wait and land just ahead of the first real message.
+    held_notices: Vec<ChatMessage>,
     /// Message index where the latest turn starts. `None` until the app's
     /// turn clock says which turn the card should describe.
     review_card_start: Option<usize>,
@@ -1030,6 +1109,7 @@ impl Transcript {
             seed_text: Rc::new(Cell::new(false)),
             seed_thinking: Rc::new(Cell::new(false)),
             tail_summary: Rc::new(Cell::new(false)),
+            held_notices: Vec::new(),
             review_card_start: None,
             review_workspace: None,
             review_card_files: Vec::new(),
@@ -1139,6 +1219,10 @@ impl Transcript {
             }
         }
         let count = parsed.len();
+        if count > 0 {
+            // A different session's history replaces whatever was waiting.
+            self.held_notices.clear();
+        }
         *self.messages.borrow_mut() = parsed;
         self.invalidate_user_turns();
         self.scroller.reset(count);
@@ -1178,6 +1262,7 @@ impl Transcript {
     /// Clear for a fresh session.
     pub fn clear(&mut self) {
         *self.messages.borrow_mut() = Vec::new();
+        self.held_notices.clear();
         self.invalidate_user_turns();
         self.text_selection.borrow_mut().clear();
         self.scroller.reset(0);
@@ -1281,7 +1366,11 @@ impl Transcript {
         // A summary boundary is not a streamed turn: land it as its own row
         // (it cannot continue a run, and nothing may stream into it).
         if message.is_summary() {
+            if message.is_notice() {
+                return self.land_notice(message);
+            }
             self.set_tail_row(false);
+            self.flush_held_notices();
             let mut messages = self.messages.borrow_mut();
             messages.push(message);
             drop(messages);
@@ -1293,6 +1382,7 @@ impl Transcript {
             // A new turn begins: the previous run's end-of-task summary row
             // steps aside before the prompt row lands.
             self.set_tail_row(false);
+            self.flush_held_notices();
         } else {
             // A streamed answer retires the pending row — the live message row
             // is the indicator now. Done before the list grows below so the
@@ -1306,13 +1396,11 @@ impl Transcript {
             // plus the prompt text). The optimistic prompt — or the compact
             // row a reload rebuilt — already represents this turn, so the
             // restatement is dropped rather than shown as a second bubble.
-            if injected && messages.last().map(|m| m.user).unwrap_or(false) {
+            if injected && last_turn_message(&messages).is_some_and(|m| m.user) {
                 return false;
             }
             // pi echoes the user's own message; show it (dedupe if identical).
-            if messages
-                .last()
-                .map(|m| m.user && m.text() == message.text())
+            if last_turn_message(&messages).map(|m| m.user && m.text() == message.text())
                 != Some(true)
             {
                 messages.push(message);
@@ -1635,6 +1723,7 @@ impl Transcript {
             // A new turn arriving as a settled message (no live boundary):
             // the previous run's summary row steps aside first.
             self.set_tail_row(false);
+            self.flush_held_notices();
         }
         if !final_message.user {
             // The step's wall clock runs from the start of its turn; the
@@ -1656,14 +1745,15 @@ impl Transcript {
             // `/skill:a do x`), so the text comparison below misses it — drop
             // the restatement when it lands on the prompt's row, mirroring
             // `on_message_boundary`.
-            if injected_skill_message(value) && messages.last().map(|m| m.user).unwrap_or(false) {
+            if injected_skill_message(value) && last_turn_message(&messages).is_some_and(|m| m.user)
+            {
                 return false;
             }
             // A finalized user message replaces any optimistic copy.
-            if let Some(last) = messages.last_mut() {
-                if last.user && last.text() == final_message.text() {
-                    return false;
-                }
+            if last_turn_message(&messages)
+                .is_some_and(|last| last.user && last.text() == final_message.text())
+            {
+                return false;
             }
             messages.push(final_message);
             drop(messages);
@@ -2390,6 +2480,67 @@ impl Transcript {
     /// Show the just-sent prompt immediately — pi does not echo user
     /// messages in RPC mode. A later identical echo is deduped. `images`
     /// are the attachments that rode along with the prompt.
+    /// Show an extension's live `notify` as a feed row. Live-only: pi does not
+    /// store a `notify`, so a reload drops the row. Returns whether the list
+    /// changed (a held notice does not change it yet).
+    pub fn push_notice(&mut self, label: &str, text: &str) -> bool {
+        match ChatMessage::notice_row(label, text) {
+            Some(notice) => self.land_notice(notice),
+            None => false,
+        }
+    }
+
+    /// Land an extension notice, or hold it. A notice never sits directly
+    /// after an assistant row: that would split a run that is still streaming
+    /// tool calls into a second row, and the end-of-task card and footer read
+    /// the last row. It also never lands on an empty transcript, which would
+    /// swap the new-task page for a chat view. Held notices land just ahead of
+    /// the next user prompt.
+    ///
+    /// A repeat of the newest notice is dropped: pi emits `message_start` and
+    /// `message_end` for a custom message, and the toast dedupes the same way.
+    fn land_notice(&mut self, notice: ChatMessage) -> bool {
+        let key = |message: &ChatMessage| {
+            message
+                .summary
+                .as_ref()
+                .map(|row| (row.notice.clone(), row.summary.clone()))
+        };
+        let mut messages = self.messages.borrow_mut();
+        let newest = match self.held_notices.last() {
+            Some(held) => Some(held),
+            None => messages.last().filter(|last| last.is_notice()),
+        };
+        if newest.is_some_and(|newest| key(newest) == key(&notice)) {
+            return false;
+        }
+        if messages.last().is_none_or(ChatMessage::is_assistant) {
+            self.held_notices.push(notice);
+            return false;
+        }
+        messages.push(notice);
+        drop(messages);
+        self.insert_row();
+        true
+    }
+
+    /// Land the held notices ahead of the message about to be pushed.
+    fn flush_held_notices(&mut self) {
+        for notice in std::mem::take(&mut self.held_notices) {
+            self.messages.borrow_mut().push(notice);
+            self.insert_row();
+        }
+    }
+
+    /// [`Self::clear`] for the `new_session` reply: pi runs the new
+    /// session's `session_start` hooks first, so a `notify` they raised is
+    /// already waiting and belongs to the session this clear opens.
+    pub fn clear_for_new_session(&mut self) {
+        let held = std::mem::take(&mut self.held_notices);
+        self.clear();
+        self.held_notices = held;
+    }
+
     pub fn append_user_message(&mut self, text: &str, images: Vec<Arc<Image>>) -> bool {
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -2397,8 +2548,9 @@ impl Transcript {
         }
         // A new task begins: the previous run's summary row steps aside.
         self.set_tail_row(false);
+        self.flush_held_notices();
         let mut messages = self.messages.borrow_mut();
-        if messages.last().map(|m| m.user && m.text() == trimmed) == Some(true) {
+        if last_turn_message(&messages).map(|m| m.user && m.text() == trimmed) == Some(true) {
             return false;
         }
         messages.push(ChatMessage {
@@ -3354,6 +3506,141 @@ mod tests {
         assert!(row.branch);
         assert_eq!(row.tokens_before, None);
         assert!(parsed.text().is_empty());
+    }
+
+    #[test]
+    fn displayable_custom_messages_parse_as_notice_rows() {
+        let shown = json!({
+            "role": "custom", "customType": "pet-inject", "display": true,
+            "content": [{"type": "text", "text": "  [pet] 3 plans  "}],
+            "timestamp": 1_733_234_400_000i64
+        });
+        let parsed = ChatMessage::from_value(&shown).expect("notice row");
+        assert!(parsed.is_notice());
+        assert!(!parsed.is_assistant());
+        assert!(parsed.text().is_empty());
+        let row = parsed.summary.as_ref().expect("row");
+        assert_eq!(row.notice.as_deref(), Some("pet-inject"));
+        assert_eq!(row.summary, "[pet] 3 plans");
+
+        let plain = json!({"role": "custom", "customType": "x", "display": true, "content": "hi"});
+        assert_eq!(
+            ChatMessage::from_value(&plain).unwrap().summary.unwrap().summary,
+            "hi"
+        );
+        // Context-only and empty custom messages stay hidden.
+        for hidden in [
+            json!({"role": "custom", "customType": "x", "display": false, "content": "ctx"}),
+            json!({"role": "custom", "customType": "x", "content": "ctx"}),
+            json!({"role": "custom", "customType": "x", "display": true, "content": "  "}),
+        ] {
+            assert!(ChatMessage::from_value(&hidden).is_none());
+        }
+    }
+
+    /// pi emits start and end for a custom message; one row, and the prompt
+    /// must still render once whichever side of the echo the notice lands on.
+    #[test]
+    fn live_custom_notice_lands_once_and_keeps_the_prompt_deduped() {
+        let custom = json!({"role": "custom", "customType": "pet-inject", "display": true,
+            "content": "[pet] 3 plans"});
+        let user = json!({"role": "user", "content": [{"type": "text", "text": "hello"}]});
+        let mut t = Transcript::new();
+        assert!(t.append_user_message("hello", Vec::new()));
+        // Notice first, then pi's echo of the prompt.
+        for value in [&custom, &user] {
+            t.apply_event(&Event::MessageStart {
+                value: json!({"type": "message_start", "message": value}),
+            });
+            t.apply_event(&Event::MessageEnd {
+                value: json!({"type": "message_end", "message": value}),
+            });
+        }
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 2, "prompt once, notice once");
+        assert!(messages[0].user);
+        assert!(messages[1].is_notice());
+    }
+
+    #[test]
+    fn notify_rows_wait_for_the_first_message_then_land_before_it() {
+        let mut t = Transcript::new();
+        assert!(!t.push_notice("Extension", "started"));
+        assert!(t.is_empty(), "an empty transcript stays the new-task page");
+        assert!(t.append_user_message("hello", Vec::new()));
+        {
+            let messages = t.messages.borrow();
+            assert_eq!(messages.len(), 2);
+            assert!(messages[0].is_notice());
+            assert!(messages[1].user);
+        }
+        assert!(t.push_notice("Extension", "later"));
+        assert!(t.messages.borrow()[2].is_notice());
+        assert!(!t.push_notice("Extension", "   "));
+    }
+
+    /// A notice must not split a run: after an assistant row it waits, so the
+    /// following tool execution still lands on that row and the next prompt
+    /// is preceded by the held notice.
+    #[test]
+    fn notice_after_an_assistant_row_waits_for_the_next_prompt() {
+        let mut t = Transcript::new();
+        assert!(t.append_user_message("go", Vec::new()));
+        let assistant = json!({"role": "assistant", "content": [
+            {"type": "toolCall", "id": "c1", "name": "edit", "arguments": {"path": "a.rs"}}
+        ]});
+        t.apply_event(&Event::MessageStart {
+            value: json!({"type": "message_start", "message": assistant}),
+        });
+        t.apply_event(&Event::MessageEnd {
+            value: json!({"type": "message_end", "message": assistant}),
+        });
+        assert!(!t.push_notice("Extension", "mid-run"));
+        t.apply_event(&Event::ToolExecutionStart {
+            value: json!({"toolCallId": "c1", "toolName": "edit", "args": {"path": "a.rs"}}),
+        });
+        {
+            let messages = t.messages.borrow();
+            assert_eq!(messages.len(), 2, "the notice did not split the run");
+            assert_eq!(messages[1].tools().count(), 1, "one copy of the call");
+        }
+        assert!(t.append_user_message("next", Vec::new()));
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 4);
+        assert!(messages[2].is_notice(), "held notice lands before the prompt");
+        assert!(messages[3].user);
+    }
+
+    #[test]
+    fn repeated_notice_is_dropped_and_new_session_keeps_held_ones() {
+        let mut t = Transcript::new();
+        t.push_notice("Extension", "started");
+        t.push_notice("Extension", "started");
+        t.clear_for_new_session();
+        assert!(t.append_user_message("hi", Vec::new()));
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 2, "one held notice, then the prompt");
+        assert!(messages[0].is_notice());
+        drop(messages);
+        t.clear();
+        assert!(t.append_user_message("hi", Vec::new()));
+        assert_eq!(t.messages.borrow().len(), 1, "a plain clear drops held notices");
+    }
+
+    #[test]
+    fn custom_notices_survive_a_reload() {
+        let payload = json!({"messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "custom", "customType": "pet-inject", "display": true, "content": "plans"},
+            {"role": "custom", "customType": "pet-inject", "display": false, "content": "hb"},
+            {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}
+        ]});
+        let mut t = Transcript::new();
+        t.load_from(&payload);
+        let messages = t.messages.borrow();
+        assert_eq!(messages.len(), 3);
+        assert!(messages[1].is_notice());
+        assert!(messages[2].is_assistant());
     }
 
     #[test]
