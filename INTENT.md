@@ -412,7 +412,12 @@ Session rows show execution status independently of read/unread state. The same
 events: Running, Waiting for approval/input, Retrying, Compacting, Completed,
 Failed, Stopped, Disconnected, or Idle when no outcome is known. Only
 `agent_settled` completes a run; `agent_end` may still lead to retries or queued
-work. The RPC parser preserves the settle's `aborted` bit, including stops before
+work. **A stop the user asked for is the one local exception**: `abort` is only a
+request, and a pi whose event loop is stuck never reads it, so an unanswered stop
+is given a grace period and then escalated in Orbit — the turn is closed and the
+process replaced, instead of Stop being a dead button. The request stays a
+request (pi's own settle still wins the race); it just cannot hang forever.
+The RPC parser preserves the settle's `aborted` bit, including stops before
 an assistant message exists. Outcomes survive reading, switching, and warm-process
 reaping for this app launch (`session_outcomes`); historical and externally written
 sessions carry no status label until observed, rather than guessing from old files. Tool errors alone do not fail the session.

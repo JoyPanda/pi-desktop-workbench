@@ -143,6 +143,10 @@ impl OrbitApp {
         if let Some(client) = self.client.as_mut() {
             self.runtime.alive = client.is_alive();
         }
+        // A stop pi has not answered stops being a request and becomes an
+        // action. Runs before the event drain on purpose: while pi is stuck it
+        // sends no events at all, which is exactly the tick that needs it.
+        self.check_stalled_stop(cx);
         // Images pasted in the composer become message attachments.
         self.drain_pasted_images(cx);
         // Long pastes become collapsible pills above the composer.
@@ -314,6 +318,7 @@ impl OrbitApp {
                 }
                 Event::AgentSettled { aborted } => {
                     self.abort_requested = false;
+                    self.abort_sent_at = None;
                     self.busy = false;
                     self.retrying = false;
                     self.retry_detail = None;
@@ -405,6 +410,7 @@ impl OrbitApp {
                     self.runtime.alive = false;
                     self.runtime.exited = true;
                     self.abort_requested = false;
+                    self.abort_sent_at = None;
                     self.auth.on_disconnect();
                     // An exit the app can recover from on its own is a restart,
                     // not a failure to leave on screen — see `on_process_exited`.

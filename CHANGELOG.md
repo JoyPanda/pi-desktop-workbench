@@ -17,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `display: false` context stays hidden. A notice raised while a reply is
   running waits and appears just before your next message.
 
+### Fixed
+
+- **Stop and Esc now interrupt a stuck pi.** They sent `abort` and then waited
+  for `agent_settled`, which a pi whose event loop is wedged never sends — one
+  bash call that dumps several GB (`rg -r '' -n ""` over a large repo) was enough
+  to freeze it, and both controls went silent while the turn stayed “Working
+  for…” for minutes. A stop is now timestamped: the composer says it is waiting
+  on pi, pressing again after a moment acts at once, and if pi has not answered
+  within 10 s Orbit closes the turn itself, takes the process down and starts a
+  fresh one on the same session. The process kill is a tree kill on Windows, so
+  the wedged tool child goes with it instead of outliving the restart. Queue text
+  that was waiting behind the stop is handed back to the composer.
+
 ## [0.2.13] - 2026-10-27
 
 ### Added

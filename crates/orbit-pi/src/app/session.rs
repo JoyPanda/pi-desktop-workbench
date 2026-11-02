@@ -707,15 +707,33 @@ impl OrbitApp {
         // Interactive Esc: drop the pending queue first so its text can be
         // restored to the composer when the `clear_queue` response lands
         // (docs), then abort the run.
-        self.request_abort();
+        self.request_abort(cx);
         cx.notify();
     }
 
-    /// Ask pi to stop the current run. The request is recorded, not just sent:
-    /// pi answers a cancelled automatic retry with `auto_retry_end { success:
-    /// false }`, and only this record tells that apart from a retry that
-    /// genuinely ran out (issue #76).
-    pub(super) fn request_abort(&mut self) {
+    /// Ask pi to stop the current run.
+    ///
+    /// The request is recorded, not just sent: pi answers a cancelled automatic
+    /// retry with `auto_retry_end { success: false }`, and only this record tells
+    /// that apart from a retry that genuinely ran out (issue #76).
+    ///
+    /// It is also timestamped, because asking is all this can do and asking is
+    /// not cancelling. A pi whose event loop is stuck never reads the line, so
+    /// waiting for `agent_settled` can mean waiting forever while Stop looks
+    /// like a dead button — [`Self::check_stalled_stop`] turns a stop pi never
+    /// answered into an action Orbit takes itself.
+    pub(super) fn request_abort(&mut self, cx: &mut Context<Self>) {
+        // A second press is the user saying "now" — once it reads as a second
+        // press. Stop and Esc share this path and a double-tapped Esc is common,
+        // so inside the retry window the first request stands: a healthy pi is
+        // busy writing the aborted turn into the session at that point, and
+        // killing it there would throw that away.
+        if let Some(sent_at) = self.abort_sent_at {
+            if sent_at.elapsed() >= ABORT_RETRY_GRACE {
+                self.force_stop_run(cx);
+            }
+            return;
+        }
         if !self.queue.is_empty() {
             self.restore_queue_on_clear = true;
             self.send(CommandBody::ClearQueue, "clear_queue");
@@ -727,8 +745,87 @@ impl OrbitApp {
         // before the Esc still starts its run after the abort is written.
         if self.is_running() {
             self.abort_requested = true;
+            self.abort_sent_at = Some(Instant::now());
         }
         self.send(CommandBody::Abort, "abort");
+    }
+
+    /// Whether a stop has gone out that pi has not answered yet. The composer
+    /// reads this to say it is waiting on pi, so a stop being waited on never
+    /// reads as a dead button.
+    pub(super) fn is_stopping(&self) -> bool {
+        self.abort_sent_at.is_some()
+    }
+
+    /// Turn a stop pi never answered into a local action.
+    ///
+    /// Runs on the heartbeat. Every way a run can end clears the timestamp, so a
+    /// turn that settles normally never reaches this.
+    pub(super) fn check_stalled_stop(&mut self, cx: &mut Context<Self>) {
+        let Some(sent_at) = self.abort_sent_at else {
+            return;
+        };
+        if sent_at.elapsed() < ABORT_GRACE {
+            return;
+        }
+        self.abort_sent_at = None;
+        if !self.is_running() {
+            return;
+        }
+        self.force_stop_run(cx);
+    }
+
+    /// End the run by taking down the process that owns it, then bring a fresh
+    /// pi back on the same session.
+    ///
+    /// This is the difference between asking and cancelling. pi cannot honour an
+    /// `abort` it never reads, so the only cancel that always lands is the one
+    /// Orbit performs itself — the shape Zed gives a language server: the request
+    /// is a courtesy, dropping the process is the cancel.
+    ///
+    /// The local side closes *first*, exactly as a dying process would close it.
+    /// Waiting for the next heartbeat to notice would leave the composer on Stop
+    /// over a process that is already going, and a respawn that failed would
+    /// never clear it at all.
+    pub(super) fn force_stop_run(&mut self, cx: &mut Context<Self>) {
+        self.abort_sent_at = None;
+        // Nothing pi never acknowledged can still be delivered, so hand the
+        // queued text back before the drop resets the queue: a stop must not eat
+        // what the user typed while they waited.
+        if let Some(queued) = self.queue.restore_text() {
+            let typed = self.input.read(cx).text();
+            let restored = if typed.trim().is_empty() {
+                queued
+            } else {
+                // Something was typed while the stop was waiting: keep both,
+                // the queued text first, because it was written first.
+                format!("{queued}\n\n{typed}")
+            };
+            self.input.update(cx, |input, cx| input.set_text(restored, cx));
+        }
+        self.restore_queue_on_clear = false;
+        self.busy = false;
+        self.execution.stop();
+        // `abandon_reply` alone leaves a streaming row live; the process this
+        // turn belonged to is going, so close the turn the way its exit does.
+        self.transcript.apply_event(&Event::ProcessExited);
+        self.finish_turn(cx);
+        // The deferred MCP apply was waiting for a settle that will never come.
+        // The process about to start reads the current configuration itself.
+        self.mcp_apply_pending = false;
+        self.mcp_apply_forced = false;
+        self.drop_client();
+        self.toast_warning(tr!("runtime.pi_unresponsive_restart"));
+        // A session pi never claimed has nothing to re-attach, and a fresh
+        // process would open an empty one: the honest end is to stay stopped.
+        if self.current_session_path.is_none() {
+            self.transcript.abandon_reply();
+        } else {
+            // Quietly: the toast above says what happened, and pi's own
+            // "process started" line on top of it would be noise.
+            self.respawn_into_session(cx);
+        }
+        cx.notify();
     }
 
     pub(super) fn on_abort_mouse(
@@ -1269,6 +1366,9 @@ impl OrbitApp {
         // bookkeeping in place would show it on the incoming session.
         self.execution = SessionExecution::default();
         self.prompt_in_flight = None;
+        // A stop belonged to the session being left; the incoming process has
+        // nothing in flight for the deadline to be about.
+        self.abort_sent_at = None;
         self.retrying = false;
         self.is_compacting = false;
         self.retry_detail = None;

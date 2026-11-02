@@ -563,14 +563,65 @@ fn write_json_line(stdin: &mut ChildStdin, line: &str) -> std::io::Result<()> {
 
 impl Drop for PiClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        terminate(&mut self.child);
         // Break the writer thread out of its channel recv; the write to the
         // dead child's stdin errors and the thread exits.
         let _ = self.commands_tx.send(Outgoing {
             wire: String::new(),
         });
     }
+}
+
+/// Terminate pi **and what it spawned**.
+///
+/// `Child::kill` reaches the direct child only, and pi's tool children do not
+/// die with it: a pi that stopped answering is usually stuck *because* a tool
+/// child (bash, `rg`) owns the work, and that child outlives its parent. Killing
+/// the tree is what makes dropping the client a real cancel — without it, taking
+/// a stuck pi down would leave the stuck command running behind the fresh
+/// process that replaces it.
+///
+/// Unix keeps the plain kill: pi starts its tool children detached there, so
+/// only pi's own shutdown path can reach them.
+fn terminate(child: &mut Child) {
+    // A child that already exited may have had its pid handed to someone else:
+    // the tree walk must never start from a stranger's pid.
+    if !matches!(child.try_wait(), Ok(None)) {
+        return;
+    }
+    #[cfg(windows)]
+    terminate_tree(child.id());
+    #[cfg(not(windows))]
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// Kill pi's whole process tree (Windows).
+///
+/// The direct child is `cmd.exe` (npm's `pi.cmd` shim), not node, so killing it
+/// alone leaves the node under it — the process that is actually stuck, still
+/// burning memory and still writing — alive. `taskkill /T` walks down from the
+/// pid, and it has to run *while* the tree is there: killing the direct child
+/// first would orphan exactly the descendants this exists for.
+///
+/// The whole call runs on its own thread. `Drop` happens on the UI thread, and
+/// neither the tree walk nor the wait for it belongs in a frame. Windows has no
+/// zombie to reap either: closing pi's handle is the only cleanup a dropped
+/// `Child` owes, so nothing here needs the caller to wait.
+#[cfg(windows)]
+fn terminate_tree(pid: u32) {
+    thread::spawn(move || {
+        let mut taskkill = std::process::Command::new("taskkill");
+        taskkill
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        hide_console(&mut taskkill);
+        let _ = taskkill.status();
+    });
 }
 
 /// Suppress the console window Windows attaches to a console child process

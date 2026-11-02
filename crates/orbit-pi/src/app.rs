@@ -138,6 +138,22 @@ const AUTO_RESTART_LIMIT: u8 = 3;
 /// spinning the CPU and the log.
 const AUTO_RESTART_DELAY: Duration = Duration::from_millis(400);
 
+/// How long an `abort` gets to be answered before Orbit stops waiting for pi
+/// and takes the process down itself.
+///
+/// `abort` only asks. A pi whose event loop is stuck — the shape a multi-GB
+/// bash result leaves behind — never reads the line, and its own `abort()` waits
+/// for the run to go idle, so the `agent_settled` Orbit waits for may never
+/// come. The grace is long enough that a healthy pi always wins the race (it
+/// answers in milliseconds) and short enough that Stop is never a dead button.
+const ABORT_GRACE: Duration = Duration::from_secs(10);
+
+/// How long a stop must have been outstanding before pressing Stop again counts
+/// as "do it now" rather than as the same gesture twice. Stop and Esc land in
+/// one function and a double-tapped Esc is normal, so the window is what keeps a
+/// healthy pi — busy writing the aborted turn into the session — alive.
+const ABORT_RETRY_GRACE: Duration = Duration::from_millis(1500);
+
 /// Session start races the bridge's first fetch (it runs on `session_start`
 /// too), so the first few polls use a short interval until a snapshot lands
 /// — or the bootstrap budget runs out for an account with no providers.
@@ -296,6 +312,12 @@ pub struct OrbitApp {
     /// same shape an exhausted retry uses — so the request itself, not the
     /// wording, decides whether that is a failure (issue #76).
     abort_requested: bool,
+    /// When the outstanding `abort` went out. Set with the request while a run
+    /// is in flight, cleared by every way a run can end, so
+    /// [`OrbitApp::check_stalled_stop`] only ever fires on a stop pi never
+    /// answered. The timestamp rather than a deadline, because pressing Stop
+    /// again reads it too.
+    abort_sent_at: Option<Instant>,
     /// pi's id for the composer's own `prompt`, while its answer is still
     /// outstanding. pi answers a prompt two ways: it starts a run, or an
     /// extension command takes it (`disposition: "handled"`) and nothing runs.
@@ -1931,6 +1953,7 @@ impl OrbitApp {
             auto_restarts: 0,
             auto_restart_scheduled: false,
             abort_requested: false,
+            abort_sent_at: None,
             prompt_in_flight: None,
             toasts: toast::Toasts::new(),
             pending_follow_up: None,
@@ -3683,6 +3706,8 @@ mod sidebar_sort_tests;
 mod sidepane_full_width_tests;
 #[cfg(test)]
 mod stale_error_tests;
+#[cfg(test)]
+mod stop_escalation_tests;
 #[cfg(test)]
 mod theme_switch_tests;
 #[cfg(test)]

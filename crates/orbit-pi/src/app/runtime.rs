@@ -176,6 +176,9 @@ impl OrbitApp {
         // A new process starts a new session stream: entry ids from the old
         // process mean nothing here.
         self.reset_quota_entries();
+        // Nothing is in flight in a process that just started, so a stop left
+        // pending on the previous one must not escalate against this one.
+        self.abort_sent_at = None;
     }
 
     /// Tear down the active pi process (dropping `PiClient` kills the child).
@@ -196,6 +199,8 @@ impl OrbitApp {
         self.client = None;
         self.runtime = RuntimeStatus::default();
         self.abort_requested = false;
+        // The stop this clock belonged to has no process left to answer it.
+        self.abort_sent_at = None;
         // A prompt the departing process never answered cannot be recognised
         // later, and the next process starts its own id sequence.
         self.prompt_in_flight = None;
@@ -615,6 +620,49 @@ impl OrbitApp {
         self.drop_client();
         self.runtime_start(cx);
         self.reattach_current_session();
+    }
+
+    /// Start a fresh process on the session the UI is showing, quietly, after
+    /// the previous one was dropped.
+    ///
+    /// This is the shape for "that process cannot serve this session any more":
+    /// it spawns without the startup toast (the caller has its own line to say
+    /// what happened) and re-attaches by path, so the conversation survives the
+    /// process instead of landing in an empty new session. The caller drops the
+    /// old client first — the forced stop does, the MCP apply does.
+    ///
+    /// Returns whether a process came back: a session pi never claimed has
+    /// nothing to re-attach, and a failed spawn leaves its banner to explain.
+    pub(super) fn respawn_into_session(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(session_path) = self.current_session_path.clone() else {
+            return false;
+        };
+        let workspace = self.workspace_dir();
+        match self
+            .extensions
+            .spawn(&workspace, false, &self.mcp.secret_env())
+        {
+            Ok(client) => {
+                self.adopt_client(client);
+                self.mcp_stamp = self.mcp.fingerprint_for(Some(&workspace));
+                self.send(
+                    CommandBody::SwitchSession {
+                        session_path: session_path.to_string_lossy().into_owned(),
+                    },
+                    "switch_session",
+                );
+                cx.notify();
+                true
+            }
+            Err(err) => {
+                let message = tr!("runtime.pi_spawn_failed", error = err);
+                self.client = None;
+                self.runtime.error = Some(message.clone());
+                self.toast_error(message);
+                cx.notify();
+                false
+            }
+        }
     }
 
     /// Point a just-spawned process back at the session the UI is showing. A

@@ -170,9 +170,9 @@ fn prompt_then_cancel(app: &Entity<OrbitApp>, cx: &mut gpui::TestAppContext) {
         );
     });
     pump_until(app, cx, |app| app.busy && app.transcript.is_streaming());
-    app.update(cx, |app, _| {
+    app.update(cx, |app, cx| {
         // Exactly what Esc does.
-        app.request_abort();
+        app.request_abort(cx);
     });
 }
 
@@ -195,6 +195,12 @@ fn cancelling_a_run_clears_the_working_state(cx: &mut gpui::TestAppContext) {
         assert!(
             !app.is_running(),
             "an aborted run must stop reading as work in progress"
+        );
+        // The settle is the one thing that makes a stop "answered": a later Esc
+        // on the now-idle composer must not escalate against a live process.
+        assert!(
+            app.abort_sent_at.is_none(),
+            "a run that ended on its own leaves no stalled-stop timestamp behind"
         );
         assert!(
             !app.transcript.is_awaiting_reply() && !app.transcript.is_streaming(),

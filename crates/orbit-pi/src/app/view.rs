@@ -4116,12 +4116,21 @@ impl OrbitApp {
     /// Stop the run. Neutral at rest — stopping is routine, not a failure — and
     /// only takes the error color under the pointer, so it is unmissable when
     /// actually aimed at and never the loudest thing on a streaming page.
+    ///
+    /// While a stop is out and pi has not answered, the control says so: the
+    /// icon goes quiet and the tooltip names what is being waited on. That is the
+    /// state a stuck pi used to hide — the button looked live and did nothing.
     fn stop_button(&self, theme: Theme, cx: &Context<Self>) -> AnyElement {
-        let tooltip = tr!(
-            "composer.shortcut_hint",
-            keys = platform::shortcuts::label(platform::shortcuts::STOP),
-            action = tr!("shortcut.stop")
-        );
+        let stopping = self.is_stopping();
+        let tooltip = if stopping {
+            tr!("runtime.stopping_pi")
+        } else {
+            tr!(
+                "composer.shortcut_hint",
+                keys = platform::shortcuts::label(platform::shortcuts::STOP),
+                action = tr!("shortcut.stop")
+            )
+        };
         icon_button_frame(div().id("stop-btn"), &theme, ButtonSize::Medium)
             .group(BUTTON_GROUP)
             .rounded_full()
@@ -4134,7 +4143,11 @@ impl OrbitApp {
             .child(icon(
                 "icons/stop.svg",
                 ButtonSize::Medium.icon_size().px(&theme),
-                theme.text_primary,
+                if stopping {
+                    theme.text_muted
+                } else {
+                    theme.text_primary
+                },
             ))
             .into_any_element()
     }
