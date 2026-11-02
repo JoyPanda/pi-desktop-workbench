@@ -16,5 +16,5 @@ pub mod tree;
 pub mod viewer;
 pub mod walk;
 
-pub use panel::{ExplorerResize, FileOpRequest, ProjectPanel};
+pub use panel::{FileOpRequest, ProjectPanel};
 pub use viewer::FileViewer;

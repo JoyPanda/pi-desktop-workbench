@@ -827,6 +827,8 @@ GLOSSARY = {
 # back to English.
 for _locale, _table in {
     "zh-CN": {
+        "Expand thinking": "展开思维链",
+        "Show reasoning while it streams. When off, thinking stays one line you can open.": "思考过程中显示正文。关闭后，思考过程默认收成一行，可点开查看。",
         "Design system": "设计系统",
         "Choose the visual language. Classic keeps Orbit's current design; Operational applies Restrained Operational Minimalism.": "选择视觉语言。经典保留 Orbit 当前设计；运营模式应用克制的运营极简主义。",
         "Classic": "经典",

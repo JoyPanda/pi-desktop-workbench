@@ -17,6 +17,8 @@ use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 
+use crate::explorer::walk;
+
 /// Which surface the active trigger opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerKind {
@@ -286,289 +288,194 @@ pub enum AcEntry {
     File { path: String },
 }
 
-/// Filter the catalog by `query` (case-insensitive substring; prefix
-/// matches on the title rank first). Returns at most `limit` entries.
 /// Fuzzy subsequence score: `Some(score)` when every char of `needle`
 /// appears in `haystack` in order (case handled by the caller). Rewards
 /// consecutive runs and word-boundary hits, penalizes gaps — so `appx`
 /// matches `src/App.tsx` and `main` matches `src/main.rs` better than
 /// `crates/app/main.rs`.
+///
+/// Allocation-free: `@` scores every workspace candidate on each keystroke, so
+/// the old `Vec<char>` copy of the haystack is not affordable. Char indices
+/// (not byte offsets) keep the scoring identical for non-ASCII paths.
 fn fuzzy_match(needle: &str, haystack: &str) -> Option<i32> {
     if needle.is_empty() {
         return Some(0);
     }
-    let haystack: Vec<char> = haystack.chars().collect();
     let mut score = 0i32;
-    let mut search_start = 0usize;
-    let mut prev_hit: Option<usize> = None;
+    // Byte offset to resume scanning from, and its char index.
+    let mut search_from = 0usize;
+    let mut char_at_from = 0usize;
+    let mut prev: Option<usize> = None;
     for c in needle.chars() {
-        let found = haystack[search_start..]
-            .iter()
-            .position(|h| *h == c)
-            .map(|p| p + search_start)?;
-        if prev_hit == Some(found.wrapping_sub(1)) {
+        let mut hit = None;
+        for (i, (offset, h)) in haystack[search_from..].char_indices().enumerate() {
+            if h == c {
+                hit = Some((search_from + offset, char_at_from + i));
+                break;
+            }
+        }
+        let (byte, index) = hit?;
+        if prev == Some(index.wrapping_sub(1)) {
             score += 3; // consecutive run
         }
-        if found == 0 || haystack[found - 1] == '/' {
+        if index == 0 || haystack[..byte].ends_with('/') {
             score += 2; // start of the path or a segment
         }
-        let gap = found - prev_hit.map(|p| p + 1).unwrap_or(0);
+        let gap = index - prev.map(|p| p + 1).unwrap_or(0);
         score -= gap.min(12) as i32;
-        prev_hit = Some(found);
-        search_start = found + 1;
+        prev = Some(index);
+        search_from = byte + c.len_utf8();
+        char_at_from = index + 1;
     }
     Some(score)
 }
 
-/// Filter the catalog by `query` with fuzzy (subsequence) matching —
-/// basename matches outrank path matches, higher scores rank first, ties
-/// keep catalog order. Returns at most `limit` entries.
-pub fn filter_entries(
-    query: &str,
-    files: &[String],
-    commands: &[SlashCommand],
-    limit: usize,
-) -> Vec<AcEntry> {
+/// Filter the slash-command catalog by `query` (fuzzy subsequence on the
+/// name). Returns at most `limit` entries. Files are ranked by
+/// [`MentionIndex::query`] instead — they come from the workspace index, not
+/// from this catalog.
+pub fn filter_entries(query: &str, commands: &[SlashCommand], limit: usize) -> Vec<AcEntry> {
     let q = query.to_lowercase();
-    let mut scored: Vec<(i32, usize, AcEntry)> = Vec::new();
+    let mut scored: Vec<(i32, usize)> = Vec::new();
     for (ix, command) in commands.iter().enumerate() {
-        let name = command.name.to_lowercase();
-        if let Some(score) = fuzzy_match(&q, &name) {
-            scored.push((
-                score + 10,
-                ix,
-                AcEntry::Command {
-                    name: command.name.clone(),
-                    description: command.description.clone(),
-                    scope: command.scope.clone(),
-                },
-            ));
-        }
-    }
-    for (ix, path) in files.iter().enumerate() {
-        let basename = path.rsplit('/').next().unwrap_or(path).to_lowercase();
-        // A basename hit (weighted 2×) outranks the same hit deep in the
-        // path, so `app` surfaces `src/App.tsx` over `crates/app/…`.
-        let score = fuzzy_match(&q, &basename)
-            .map(|s| s * 2)
-            .into_iter()
-            .chain(fuzzy_match(&q, &path.to_lowercase()))
-            .max();
-        if let Some(score) = score {
-            scored.push((
-                score,
-                ix + commands.len(),
-                AcEntry::File { path: path.clone() },
-            ));
+        if let Some(score) = fuzzy_match(&q, &command.name.to_lowercase()) {
+            scored.push((score + 10, ix));
         }
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     scored.truncate(limit);
-    scored.into_iter().map(|(_, _, entry)| entry).collect()
+    scored
+        .into_iter()
+        .map(|(_, ix)| {
+            let command = &commands[ix];
+            AcEntry::Command {
+                name: command.name.clone(),
+                description: command.description.clone(),
+                scope: command.scope.clone(),
+            }
+        })
+        .collect()
 }
 
-/// Walk the workspace for @-mentionable files (relative, `/`-separated).
-/// Skips VCS/dependency/build dirs and dot directories, caps depth and
-/// count so huge trees stay responsive.
-pub fn list_workspace_files(root: &Path) -> Vec<String> {
-    const MAX_FILES: usize = 4_000;
-    const MAX_DEPTH: usize = 12;
-    const SKIP_DIRS: &[&str] = &[
-        ".git",
-        ".pi",
-        ".hg",
-        ".svn",
-        "node_modules",
-        "target",
-        "dist",
-        "build",
-        "vendor",
-        "__pycache__",
-        ".next",
-        ".cache",
-    ];
-    let mut out = Vec::new();
-    let mut stack = vec![(root.to_path_buf(), 0usize)];
-    while let Some((dir, depth)) = stack.pop() {
-        if out.len() >= MAX_FILES || depth > MAX_DEPTH {
-            continue;
+/// Every `@`-mentionable workspace entry, pre-scored for cheap per-keystroke
+/// queries: lowercased paths, basename offsets and the hidden bit are computed
+/// once at build time, because a keystroke pays the scan 30× a second while the
+/// workspace changes a few times a minute.
+///
+/// The candidate list comes from [`crate::explorer::walk::snapshot`] — the same
+/// walk the Explorer renders, so `@` and the tree can never disagree about what
+/// exists. Nothing here spawns a process: shelling out to `fd` per keystroke was
+/// the 300–700 ms stall this replaced.
+pub struct MentionIndex {
+    /// Display paths, shallowest first (depth, then path).
+    paths: Vec<String>,
+    /// `paths[i]` lowercased.
+    lower: Vec<String>,
+    /// Byte offset of the basename inside `lower[i]`.
+    name_at: Vec<u32>,
+    hidden: Vec<bool>,
+    /// Indices into `paths`, sorted by path — membership tests for recents.
+    by_path: Vec<u32>,
+}
+
+impl MentionIndex {
+    pub fn build(entries: &[walk::Entry]) -> Self {
+        let mut order: Vec<&walk::Entry> = entries.iter().collect();
+        order.sort_by(|a, b| {
+            path_depth(&a.path)
+                .cmp(&path_depth(&b.path))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        let mut paths = Vec::with_capacity(order.len());
+        let mut lower = Vec::with_capacity(order.len());
+        let mut name_at = Vec::with_capacity(order.len());
+        let mut hidden = Vec::with_capacity(order.len());
+        for entry in &order {
+            let lowered = entry.path.to_lowercase();
+            let offset = lowered
+                .rfind('/')
+                .map(|i| i + 1)
+                .unwrap_or(0)
+                .min(u32::MAX as usize) as u32;
+            name_at.push(offset);
+            lower.push(lowered);
+            hidden.push(entry.is_hidden);
+            paths.push(entry.path.clone());
         }
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                if name.starts_with('.') || SKIP_DIRS.contains(&name.as_ref()) {
-                    continue;
-                }
-                stack.push((path, depth + 1));
-            } else if !name.starts_with('.') && out.len() < MAX_FILES {
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                out.push(rel);
+        let mut by_path: Vec<u32> = (0..paths.len() as u32).collect();
+        by_path.sort_by(|a, b| paths[*a as usize].cmp(&paths[*b as usize]));
+        Self {
+            paths,
+            lower,
+            name_at,
+            hidden,
+            by_path,
+        }
+    }
+
+    /// Test/seed constructor: paths only, as if every one were a file.
+    #[cfg(test)]
+    pub fn from_paths(paths: Vec<String>) -> Self {
+        let entries: Vec<walk::Entry> = paths
+            .into_iter()
+            .map(|path| walk::Entry {
+                is_hidden: walk::is_hidden_path(&path),
+                is_dir: false,
+                path,
+            })
+            .collect();
+        Self::build(&entries)
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.paths.len()
+    }
+
+    /// Whether the workspace still has `path` (recents drop deleted files).
+    pub fn contains(&self, path: &str) -> bool {
+        self.by_path
+            .binary_search_by(|ix| self.paths[*ix as usize].as_str().cmp(path))
+            .is_ok()
+    }
+
+    /// The top `limit` paths for `query`, best first.
+    ///
+    /// An empty query is "shallowest first" (the recents head is the caller's
+    /// job); otherwise a basename hit (weighted 2×) outranks a path hit, and
+    /// ties fall to non-hidden, then shallowness, then path.
+    pub fn query(&self, query: &str, limit: usize) -> Vec<String> {
+        if limit == 0 {
+            return Vec::new();
+        }
+        if query.is_empty() {
+            return self.paths.iter().take(limit).cloned().collect();
+        }
+        let needle = query.to_lowercase();
+        let mut scored: Vec<(i32, bool, usize)> = Vec::new();
+        for (ix, lowered) in self.lower.iter().enumerate() {
+            let name = &lowered[self.name_at[ix] as usize..];
+            let score = fuzzy_match(&needle, name)
+                .map(|score| score * 2)
+                .or_else(|| fuzzy_match(&needle, lowered));
+            if let Some(score) = score {
+                scored.push((score, self.hidden[ix], ix));
             }
         }
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+        scored.truncate(limit);
+        scored
+            .into_iter()
+            .map(|(_, _, ix)| self.paths[ix].clone())
+            .collect()
     }
-    out.sort();
-    out
 }
 
-/// What `fd` did with an `@` query.
-pub(crate) enum FdSearch {
-    /// `fd` ran. An empty list is a real "nothing matched", not a failure.
-    Hits(Vec<String>),
-    /// No `fd` binary to run. The caller keeps the bounded directory walk.
-    Missing,
-}
-
-/// The regex `fd` should apply. A slash in the query searches the whole
-/// path; otherwise `fd` matches the file name. Same shape as pi's
-/// `buildFdPathQuery`.
-pub(crate) fn fd_pattern(query: &str) -> String {
-    let normalized = query.replace('\\', "/");
-    if !normalized.contains('/') {
-        return escape_regex(&normalized);
-    }
-    let trailing = normalized.ends_with('/');
-    let trimmed = normalized.trim_matches('/');
-    if trimmed.is_empty() {
-        return normalized;
-    }
-    let mut pattern = trimmed
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .map(escape_regex)
-        .collect::<Vec<_>>()
-        .join("[\\\\/]");
-    if trailing {
-        pattern.push_str("[\\\\/]");
-    }
-    pattern
-}
-
-fn escape_regex(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        if matches!(
-            ch,
-            '.' | '*' | '+' | '?' | '^' | '$' | '{' | '}' | '(' | ')' | '|' | '[' | ']' | '\\'
-        ) {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-/// pi's filename score: exact, then prefix, then substring, then path.
-fn score_path(path: &str, query: &str, is_dir: bool) -> i32 {
-    if query.is_empty() {
-        return 1;
-    }
-    let file_name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    let name = file_name.to_lowercase();
-    let query = query.to_lowercase();
-    let mut score = if name == query {
-        100
-    } else if name.starts_with(&query) {
-        80
-    } else if name.contains(&query) {
-        50
-    } else if path.to_lowercase().contains(&query) {
-        30
-    } else {
-        0
-    };
-    if is_dir && score > 0 {
-        score += 10;
-    }
-    score
-}
-
+/// Segments in a `/`-separated path (`a/b/c` → 3).
 fn path_depth(path: &str) -> usize {
     path.split('/')
         .filter(|segment| !segment.is_empty())
         .count()
-}
-
-/// Search `root` with `fd`, the same walker pi's TUI uses for `@`.
-///
-/// `fd` applies the pattern while it walks and skips ignored directories
-/// (Unity `Temp` / `Library`, `node_modules`, …), so a name match is not
-/// crowded out by the first few thousand generated files.
-pub(crate) fn search_fd(root: &Path, query: &str) -> FdSearch {
-    let Some(fd) = crate::onboarding::locate("fd") else {
-        return FdSearch::Missing;
-    };
-    let mut command = std::process::Command::new(&fd);
-    command
-        .current_dir(root)
-        .arg("--base-directory")
-        .arg(root)
-        .arg("--max-results")
-        .arg("100")
-        .arg("--type")
-        .arg("f")
-        .arg("--type")
-        .arg("d")
-        .arg("--follow")
-        .arg("--hidden")
-        .arg("--exclude")
-        .arg(".git")
-        .arg("--exclude")
-        .arg(".git/*")
-        .arg("--exclude")
-        .arg(".git/**")
-        .arg("--ignore-case")
-        .arg("--color")
-        .arg("never");
-    let normalized = query.replace('\\', "/");
-    if normalized.contains('/') {
-        command.arg("--full-path");
-    }
-    if !query.is_empty() {
-        command.arg(fd_pattern(query));
-    }
-    orbit_rpc::hide_console(&mut command);
-    let Ok(output) = command.output() else {
-        return FdSearch::Hits(Vec::new());
-    };
-    let text = String::from_utf8_lossy(&output.stdout);
-    let mut ranked: Vec<(i32, usize, usize, String)> = Vec::new();
-    for line in text.lines() {
-        let display = line.trim().replace('\\', "/");
-        if display.is_empty()
-            || display == ".git"
-            || display.starts_with(".git/")
-            || display.contains("/.git/")
-        {
-            continue;
-        }
-        let is_dir = display.ends_with('/');
-        let path = display.trim_end_matches('/').to_string();
-        let score = score_path(&path, query, is_dir);
-        if !query.is_empty() && score == 0 {
-            continue;
-        }
-        ranked.push((score, path_depth(&path), path.len(), path));
-    }
-    ranked.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then(a.1.cmp(&b.1))
-            .then(a.2.cmp(&b.2))
-            .then(a.3.cmp(&b.3))
-    });
-    let hits: Vec<String> = ranked.into_iter().map(|(_, _, _, path)| path).collect();
-    FdSearch::Hits(hits)
 }
 
 /// Shared keyboard-negotiation state between the composer (which owns
@@ -894,95 +801,168 @@ mod tests {
         assert_eq!(tokenize_mentions("@a@b").len(), 1);
     }
 
+    fn index_of(paths: &[&str]) -> MentionIndex {
+        MentionIndex::from_paths(paths.iter().map(|path| path.to_string()).collect())
+    }
+
+    fn command(name: &str) -> SlashCommand {
+        SlashCommand {
+            name: name.to_string(),
+            description: String::new(),
+            scope: CommandScope::Builtin,
+        }
+    }
+
     #[test]
-    fn filter_ranks_prefix_matches_first() {
-        let files = vec![
-            "crates/app/main.rs".to_string(),
-            "src/main.rs".to_string(),
-            "README.md".to_string(),
-            "main.py".to_string(),
+    fn filter_ranks_command_prefixes_first() {
+        let commands = vec![
+            command("review"),
+            command("review-branch"),
+            command("impersonate"),
         ];
-        let entries = filter_entries("main", &files, &[], 10);
-        // Basename prefix matches first (stable by catalog order), then
-        // path-contains matches.
-        let title = |e: &AcEntry| match e {
-            AcEntry::Command { name, .. } => name.clone(),
-            AcEntry::File { path } => path.clone(),
-        };
-        assert_eq!(
-            entries.iter().map(title).collect::<Vec<_>>(),
-            // All three basenames start with "main" — rank ties break by
-            // catalog order. "README.md" (contains-match) is excluded.
-            vec![
-                "crates/app/main.rs".to_string(),
-                "src/main.rs".to_string(),
-                "main.py".to_string()
-            ]
-        );
+        let names: Vec<String> = filter_entries("review", &commands, 10)
+            .into_iter()
+            .map(|entry| match entry {
+                AcEntry::Command { name, .. } => name,
+                AcEntry::File { path } => path,
+            })
+            .collect();
+        assert_eq!(names, vec!["review", "review-branch"]);
+        assert!(filter_entries("zzq", &commands, 10).is_empty());
     }
 
     #[test]
-    fn filter_is_fuzzy_and_basename_first() {
-        // Subsequence match: no exact substring of "appx" appears in the
-        // path, yet fuzzy finds a-p-p-x in order.
-        let files = vec!["src/App.tsx".to_string()];
-        assert_eq!(filter_entries("appx", &files, &[], 10).len(), 1);
-        // Basename hits outrank path hits: `app` ranks src/App.tsx (basename)
-        // above crates/app/main.rs (path-only hit).
-        let files = vec!["crates/app/main.rs".to_string(), "src/App.tsx".to_string()];
+    fn index_ranks_basename_hits_first() {
+        let index = index_of(&["crates/app/main.rs", "src/main.rs", "README.md", "main.py"]);
+        // Basename hits (weighted 2×) first; equal scores fall to the
+        // shallowest path, so `main.py` beats `src/main.rs`.
         assert_eq!(
-            filter_entries("app", &files, &[], 10)
-                .first()
-                .map(|e| match e {
-                    AcEntry::File { path } => path.as_str(),
-                    _ => "",
-                }),
-            Some("src/App.tsx")
+            index.query("main", 10),
+            vec!["main.py", "src/main.rs", "crates/app/main.rs"]
         );
-        // No subsequence → no match ("zzq" can't be spelled from these).
-        assert!(filter_entries("zzq", &files, &[], 10).is_empty());
+        // A path-only hit still matches, below every basename hit.
+        assert_eq!(index.query("crates", 10), vec!["crates/app/main.rs"]);
+        // No subsequence → no match.
+        assert!(index.query("zzq", 10).is_empty());
     }
 
     #[test]
-    fn filter_is_case_insensitive_and_capped() {
-        let files = vec!["Big/FILE.Rs".to_string()];
-        assert_eq!(filter_entries("file", &files, &[], 10).len(), 1);
-        assert!(filter_entries("zzz", &files, &[], 10).is_empty());
+    fn index_is_fuzzy_and_case_insensitive() {
+        // No literal "appx" anywhere, yet a-p-p-x appears in order.
+        let index = index_of(&["src/App.tsx"]);
+        assert_eq!(index.query("appx", 10), vec!["src/App.tsx"]);
+        assert_eq!(index.query("APPX", 10), vec!["src/App.tsx"]);
+
+        let index = index_of(&["Big/FILE.Rs"]);
+        assert_eq!(index.query("file", 10), vec!["Big/FILE.Rs"]);
+    }
+
+    #[test]
+    fn index_empty_query_is_shallow_then_capped() {
+        let index = index_of(&["a/b/deep.rs", "root.rs", "a/mid.rs"]);
+        assert_eq!(
+            index.query("", 10),
+            vec!["root.rs", "a/mid.rs", "a/b/deep.rs"]
+        );
         let many: Vec<String> = (0..50).map(|i| format!("f{i}.rs")).collect();
-        assert_eq!(filter_entries("", &many, &[], 8).len(), 8);
+        let index = MentionIndex::from_paths(many);
+        assert_eq!(index.query("", 8).len(), 8);
+        assert!(index.query("", 0).is_empty());
     }
 
     #[test]
-    fn fd_pattern_matches_pi_file_and_path_queries() {
-        assert_eq!(fd_pattern("MetaData"), "MetaData");
-        assert_eq!(fd_pattern("a.b"), "a\\.b");
-        // A slash searches the path, with either separator.
-        assert_eq!(fd_pattern("src/lib"), "src[\\\\/]lib");
-        assert_eq!(fd_pattern("src/lib/"), "src[\\\\/]lib[\\\\/]");
-        // Filename substring outranks a path-only accident, and a name that
-        // does not contain the query scores nothing.
-        assert!(score_path("Assets/FooMetaData.cs", "MetaData", false) >= 50);
-        assert_eq!(
-            score_path("Temp/Agent/_adhoc/RunDataRegenAll.cs", "MetaData", false),
-            0
-        );
-        assert!(score_path("metadata.bytes", "MetaData", false) >= 50);
+    fn index_hidden_entries_lose_ties_only() {
+        let index = index_of(&["src/.env", "src/env.txt"]);
+        // Same score class: the visible file wins the tie.
+        assert_eq!(index.query("env", 10), vec!["src/env.txt", "src/.env"]);
+        // A hidden file still wins on a strictly better score.
+        let index = index_of(&[".env", "src/config.toml"]);
+        assert_eq!(index.query("env", 10), vec![".env"]);
     }
 
     #[test]
-    fn workspace_walk_skips_ignorable_dirs() {
-        let root = std::env::temp_dir().join(format!("orbit-mentions-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
-        std::fs::create_dir_all(root.join(".git/refs")).unwrap();
-        std::fs::write(root.join("src/lib.rs"), "").unwrap();
-        std::fs::write(root.join(".env"), "").unwrap();
-        std::fs::write(root.join("node_modules/pkg/i.js"), "").unwrap();
-        std::fs::write(root.join(".git/refs/x"), "").unwrap();
-        let files = list_workspace_files(&root);
-        assert_eq!(files, vec!["src/lib.rs".to_string()]);
-        std::fs::remove_dir_all(&root).ok();
+    fn index_contains_reports_workspace_files() {
+        let index = index_of(&["src/main.rs", "README.md"]);
+        assert!(index.contains("src/main.rs"));
+        assert!(!index.contains("src/gone.rs"));
+        assert_eq!(index.len(), 2);
+        assert!(!MentionIndex::from_paths(Vec::new()).contains("x"));
+    }
+
+    #[test]
+    fn fuzzy_match_rewards_runs_and_boundaries() {
+        // A consecutive run and a segment start beat a scattered match.
+        let run = fuzzy_match("main", "main.rs").unwrap();
+        let scattered = fuzzy_match("main", "m/a/i/n.rs").unwrap();
+        assert!(run > scattered, "{run} should beat {scattered}");
+        assert!(fuzzy_match("main", "src/main.rs").unwrap() > 0);
+        assert_eq!(fuzzy_match("", "anything"), Some(0));
+        assert_eq!(fuzzy_match("zzq", "src/main.rs"), None);
+    }
+
+    /// The implementation this replaced — it allocated a `Vec<char>` per call.
+    /// Kept as an oracle: the allocation-free rewrite must not change scoring.
+    fn fuzzy_match_reference(needle: &str, haystack: &str) -> Option<i32> {
+        if needle.is_empty() {
+            return Some(0);
+        }
+        let haystack: Vec<char> = haystack.chars().collect();
+        let mut score = 0i32;
+        let mut search_start = 0usize;
+        let mut prev_hit: Option<usize> = None;
+        for c in needle.chars() {
+            let found = haystack[search_start..]
+                .iter()
+                .position(|h| *h == c)
+                .map(|p| p + search_start)?;
+            if prev_hit == Some(found.wrapping_sub(1)) {
+                score += 3;
+            }
+            if found == 0 || haystack[found - 1] == '/' {
+                score += 2;
+            }
+            let gap = found - prev_hit.map(|p| p + 1).unwrap_or(0);
+            score -= gap.min(12) as i32;
+            prev_hit = Some(found);
+            search_start = found + 1;
+        }
+        Some(score)
+    }
+
+    #[test]
+    fn fuzzy_match_scores_identically_to_the_old_implementation() {
+        let alphabet: Vec<char> = "abc/._资源角色控制器Main".chars().collect();
+        let mut seed: u64 = 0x5eed;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 33) as usize
+        };
+        for _ in 0..400 {
+            let haystack_len = next() % 24 + 1;
+            let haystack: String = (0..haystack_len)
+                .map(|_| alphabet[next() % alphabet.len()])
+                .collect();
+            let needle_len = next() % 5;
+            let needle: String = (0..needle_len)
+                .map(|_| alphabet[next() % alphabet.len()])
+                .collect();
+            assert_eq!(
+                fuzzy_match(&needle, &haystack),
+                fuzzy_match_reference(&needle, &haystack),
+                "needle {needle:?} haystack {haystack:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fuzzy_match_counts_chars_not_bytes() {
+        // CJK: one char each, so the run bonus must still fire.
+        let cjk = fuzzy_match("角色", "角色控制器.rs").unwrap();
+        assert!(cjk > 0);
+        // An ASCII needle still finds a match after a multi-byte segment.
+        assert!(fuzzy_match("main", "资源/主城/main.rs").is_some());
     }
 
     #[test]

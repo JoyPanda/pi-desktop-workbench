@@ -697,8 +697,13 @@ impl OrbitApp {
             cx.notify();
             return;
         }
-        // The Review pane's source menu is closed by Escape before the key
-        // falls through to aborting a run.
+        // The dock's "+" menu, then the Review pane's source menu, close on
+        // Escape before the key falls through to aborting a run.
+        if self.dock_add_menu_open {
+            self.dock_add_menu_open = false;
+            cx.notify();
+            return;
+        }
         if self.sidepane.read(cx).is_source_menu_open() {
             self.sidepane
                 .update(cx, |pane, cx| pane.close_source_menu(cx));
@@ -1402,6 +1407,7 @@ impl OrbitApp {
             // the process channel streams in from the next tick on.
             self.adopt_client(parked.client);
             self.transcript = parked.transcript;
+            self.transcript.prepare_foreground_resume();
             self.turns = parked.turns;
             self.push_turn_records(cx);
             self.busy = parked.busy;
@@ -1808,7 +1814,6 @@ impl OrbitApp {
     /// Open Review (⌘⇧R and the palette), replacing the Git page.
     pub(super) fn open_review(&mut self, cx: &mut Context<Self>) {
         self.close_git_for_review(cx);
-        self.subagents.yield_dock();
         self.sidepane.update(cx, |pane, cx| pane.show_review(cx));
     }
 
@@ -2974,42 +2979,14 @@ impl OrbitApp {
         }
     }
 
-    /// The top-bar Review control: one chip for the right dock and the
-    /// working tree's `+N −N` counts. With a dirty tree and the pane closed it
-    /// opens Review on the **Uncommitted** diff, so the counts the chip shows
-    /// are what it reveals; otherwise it is a plain toggle.
-    pub(super) fn on_toggle_side_pane(
+    /// The top-bar change-count chip: open Review on the uncommitted diff.
+    pub(super) fn on_open_uncommitted_review(
         &mut self,
         _: &MouseUpEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.toggle_side_pane(cx);
-    }
-
-    /// Flip the right dock, opening Review on the working tree's Uncommitted
-    /// diff when it is dirty and the pane is closed. Split from the click
-    /// handler so the overflow menu can call it without synthesizing an event.
-    pub(super) fn toggle_side_pane(&mut self, cx: &mut Context<Self>) {
-        let pane_open = self.sidepane.read(cx).is_open();
-        if !pane_open {
-            // Opening Review replaces the Git page, which shares the window,
-            // and the subagent dock, which shares the right column.
-            self.close_git_for_review(cx);
-            self.subagents.yield_dock();
-        } else {
-            let free = !self.project_panel.read(cx).is_open();
-            self.subagents.consider_auto_open(free);
-        }
-        let dirty = self.added > 0 || self.removed > 0;
-        self.sidepane.update(cx, |pane, cx| {
-            if pane_open || !dirty {
-                pane.toggle(cx);
-            } else {
-                pane.show_uncommitted(cx);
-            }
-        });
-        cx.notify();
+        self.open_changes_tab(true, cx);
     }
 
     /// Flip the bottom terminal panel (cmd-j). Focus moves into the shell on
@@ -3093,19 +3070,13 @@ impl OrbitApp {
         self.toggle_project_panel(cx);
     }
 
+    /// Flip the Files tab: show it, or close it when it is already on screen.
     pub(super) fn toggle_project_panel(&mut self, cx: &mut Context<Self>) {
-        let opening = !self.project_panel.read(cx).is_open();
-        self.project_panel.update(cx, |panel, cx| panel.toggle(cx));
-        if opening {
-            // The Explorer, Review, and the subagent transcript share one
-            // right dock: opening the tree closes the other two.
-            self.sidepane.update(cx, |pane, cx| pane.close(cx));
-            self.subagents.yield_dock();
+        if self.files_docked(cx) {
+            self.close_dock_tab(&right_dock::DockTab::Files, cx);
         } else {
-            let free = !self.sidepane.read(cx).is_open();
-            self.subagents.consider_auto_open(free);
+            self.open_files_tab(cx);
         }
-        cx.notify();
     }
 
     /// Open a workspace file in the Files surface — the project panel's open
@@ -3123,6 +3094,9 @@ impl OrbitApp {
         self.git_open = false;
         self.usage_open = false;
         self.worktrees_open = false;
+        // The viewer is a main-area page; a full-width dock would hide it.
+        self.sidepane
+            .update(cx, |pane, cx| pane.leave_full_width(cx));
         self.file_viewer
             .update(cx, |viewer, cx| viewer.show(path, display, cx));
         self.sync_terminal_active(cx);
@@ -3164,8 +3138,7 @@ impl OrbitApp {
                         match result {
                             Ok(path) => {
                                 app.clear_explorer_notice(cx);
-                                app.project_panel
-                                    .update(cx, |panel, cx| panel.mark_stale(cx));
+                                app.invalidate_index(true, cx);
                                 let display = relative_display(&display_root, &path);
                                 app.open_file_in_viewer(path, display, cx);
                                 app.toast_success(tr!("explorer.created_file", name = name));
@@ -3189,8 +3162,7 @@ impl OrbitApp {
                         match result {
                             Ok(_) => {
                                 app.clear_explorer_notice(cx);
-                                app.project_panel
-                                    .update(cx, |panel, cx| panel.mark_stale(cx));
+                                app.invalidate_index(true, cx);
                                 app.toast_success(tr!("explorer.created_folder", name = name));
                             }
                             Err(error) => app.explorer_op_error(&error, cx),
@@ -3230,8 +3202,7 @@ impl OrbitApp {
                                     )
                                 });
                                 app.clear_explorer_notice(cx);
-                                app.project_panel
-                                    .update(cx, |panel, cx| panel.mark_stale(cx));
+                                app.invalidate_index(true, cx);
                                 app.toast_success(tr!("explorer.renamed", name = name));
                             }
                             Err(error) => app.explorer_op_error(&error, cx),
@@ -3261,8 +3232,7 @@ impl OrbitApp {
                                 app.file_viewer
                                     .update(cx, |viewer, cx| viewer.close_under(&target, cx));
                                 app.clear_explorer_notice(cx);
-                                app.project_panel
-                                    .update(cx, |panel, cx| panel.mark_stale(cx));
+                                app.invalidate_index(true, cx);
                                 app.toast_success(tr!("explorer.deleted", name = name));
                             }
                             Err(error) => {
@@ -3324,7 +3294,6 @@ impl OrbitApp {
             let _ = app.update(cx, |app, cx| {
                 app.push_turn_records(cx);
                 app.close_git_for_review(cx);
-                app.subagents.yield_dock();
                 latest = app.turns.latest;
             });
             pane.update(cx, |pane, cx| pane.show_review_turn(latest, cx));
@@ -3398,8 +3367,7 @@ impl OrbitApp {
             self.refresh_worktrees(cx);
         }
         // The Explorer tree (a cheap no-op when it was never loaded).
-        self.project_panel
-            .update(cx, |panel, cx| panel.mark_stale(cx));
+        self.invalidate_index(true, cx);
         // The Review pane's diff, only while it is showing.
         if self.sidepane.read(cx).is_open() {
             self.sidepane

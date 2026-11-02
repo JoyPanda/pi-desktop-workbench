@@ -120,8 +120,9 @@ impl OrbitApp {
             self.sidepane
                 .update(cx, |pane, cx| pane.mark_git_review_stale(cx));
             self.git_panel.update(cx, |panel, cx| panel.refresh(cx));
-            self.project_panel
-                .update(cx, |panel, cx| panel.mark_stale(cx));
+            // One index feeds the tree and `@`; the watcher throttle decides
+            // when it actually re-walks.
+            self.invalidate_index(false, cx);
             if let Some(path) = self.file_viewer.read(cx).active_path() {
                 self.file_viewer
                     .update(cx, |viewer, cx| viewer.reload(&path, cx));
@@ -467,6 +468,12 @@ impl OrbitApp {
             if self.transcript.apply_event(event) {
                 cx.notify();
             }
+            self.consider_foreground_arm(cx);
+            if let Event::ToolExecutionUpdate { value } = event {
+                if let Some(id) = value.get("toolCallId").and_then(serde_json::Value::as_str) {
+                    self.subagents.note_foreground_growth(id);
+                }
+            }
         }
         self.busy = self.execution.status().is_in_progress();
         if let Some(path) = &self.current_session_path {
@@ -800,6 +807,7 @@ impl OrbitApp {
             }
             changed |= parked.transcript.apply_event(&event);
         }
+        parked.transcript.discard_foreground_arm();
         parked.busy = parked.execution.status().is_in_progress();
         ParkedDrain {
             changed,
@@ -1505,16 +1513,14 @@ impl OrbitApp {
     }
 
     /// Whether a full-page surface has replaced the chat column: Files, Git,
-    /// Usage, Worktrees, or a full-width Review pane. Mirrors the renderer's own
+    /// Usage, Worktrees, or a full-width right dock. Mirrors the renderer's own
     /// rule in `view.rs` (`feature_open` / `pane_full`) — keep the two in step,
     /// since a page that hides the transcript must also stop the review mark
     /// from being spent.
     fn chat_column_covered(&self, cx: &App) -> bool {
-        let pane = self.sidepane.read(cx);
-        // Same gate the renderer puts on a full-width Review pane: it only owns
-        // the page once its dependencies are ready and no page already has it.
-        let review_covers_chat =
-            pane.is_open() && pane.is_full_width() && self.dependencies_ready();
+        // Same gate the renderer puts on a full-width dock: it only owns the
+        // page once its dependencies are ready and the dock is showing.
+        let review_covers_chat = self.dock_full_width(cx);
         self.file_viewer.read(cx).is_open()
             || self.git_open
             || self.usage_open

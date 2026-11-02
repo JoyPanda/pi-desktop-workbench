@@ -106,6 +106,7 @@ mod temp_files;
 mod terminal;
 mod text_measure;
 mod theme;
+mod thinking_display;
 mod toast;
 mod transcript;
 mod transcript_view;

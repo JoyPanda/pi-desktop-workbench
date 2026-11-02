@@ -1,9 +1,10 @@
 //! The Explorer's project panel: a Zed-style workspace tree in a right dock.
 //!
 //! The panel owns the built [`TreeIndex`], the expand/collapse set, the filter
-//! input, and its virtualized list. It never reads the filesystem on the
-//! render path: [`ProjectPanel::set_workspace`] / [`ProjectPanel::mark_stale`]
-//! kick a background snapshot, and rendering only walks the in-memory tree.
+//! input, and its virtualized list. It never reads the filesystem and never
+//! walks the workspace: the app owns the single [`walk::Snapshot`] (shared with
+//! the composer's `@` mentions) and hands it over through
+//! [`ProjectPanel::set_index`], so rendering only walks the in-memory tree.
 //!
 //! Clicking a file calls the [`OpenHandler`] the app installed at
 //! construction — the panel does not know about the file viewer.
@@ -11,12 +12,13 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    div, prelude::*, px, AnyElement, App, ClickEvent, Context, CursorStyle, Entity, FocusHandle,
-    FontWeight, Hsla, KeyDownEvent, ListAlignment, ListState, MouseButton, MouseDownEvent, Pixels,
-    Render, Subscription, Window,
+    div, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, FocusHandle, FontWeight,
+    Hsla, KeyDownEvent, ListAlignment, ListState, MouseButton, MouseDownEvent, Pixels, Render,
+    Subscription, Window,
 };
 
 use super::ops;
@@ -28,18 +30,12 @@ use crate::app::{
     refresh_glyph, EmptyFill, TipExt, BUTTON_GROUP,
 };
 use crate::composer::ComposerInput;
-use crate::git;
 use crate::platform;
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    context_menu, input, panel, ButtonSize, DynamicSpacing, IconSize, Radius, StyledExt, TextSize,
+    context_menu, input, ButtonSize, DynamicSpacing, IconSize, Radius, StyledExt, TextSize,
 };
 use crate::theme::{self, Theme, ThemeMode};
-
-/// Panel width defaults / drag clamps.
-pub const PANEL_DEFAULT_W: f32 = 248.;
-pub const PANEL_MIN_W: f32 = 172.;
-pub const PANEL_MAX_W: f32 = 460.;
 
 /// Fixed tree row height — 28px, the design system's navigation-row height.
 const ROW_H: f32 = 28.;
@@ -49,18 +45,6 @@ const FOOTER_H: f32 = 26.;
 /// What a row click does when the app is told a file was picked. The string
 /// is the workspace-relative path, used to label the file in the viewer.
 pub type OpenHandler = Rc<dyn Fn(PathBuf, String, &mut App)>;
-
-/// Drag marker for the panel's resize handle (gpui typed drag state).
-pub struct ExplorerResize;
-
-/// An invisible drag ghost — resizing leaves no floating preview.
-struct ExplorerDragGhost;
-
-impl Render for ExplorerDragGhost {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
-}
 
 /// Which row the context menu targets, and where it was opened (window
 /// coordinates) so the menu can be placed at the pointer.
@@ -85,6 +69,10 @@ pub enum FileOpRequest {
 
 /// The app's handler for a [`FileOpRequest`].
 pub type FileOpHandler = Rc<dyn Fn(FileOpRequest, &mut App)>;
+
+/// The app's handler for the header's refresh button. The app owns the
+/// workspace index, so a manual refresh has to go through it.
+pub type RefreshHandler = Rc<dyn Fn(&mut App)>;
 
 /// Which inline name prompt is open.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -117,7 +105,6 @@ struct DeleteConfirm {
 
 pub struct ProjectPanel {
     open: bool,
-    width: Pixels,
     /// On Windows, reserve the top-right caption-controls inset in the header
     /// when this dock is the window's rightmost column.
     reserve_controls: bool,
@@ -128,11 +115,8 @@ pub struct ProjectPanel {
     rows: Vec<Row>,
     expanded: HashSet<String>,
     show_hidden: bool,
-    /// A snapshot needs to run (workspace changed, watcher fired, hidden toggled).
-    stale: bool,
+    /// A snapshot is in flight; the tree is stale or empty.
     loading: bool,
-    /// Guards a late snapshot from a previous request.
-    generation: u64,
     error: Option<String>,
     list: ListState,
     /// Keyboard cursor: index into `rows`.
@@ -156,15 +140,15 @@ pub struct ProjectPanel {
     on_open: OpenHandler,
     /// The app's file-operation callback.
     on_file_op: FileOpHandler,
-    /// The app's close callback (the header's X).
-    on_close: Rc<dyn Fn(&mut App)>,
+    /// The app's index-refresh callback.
+    on_refresh: RefreshHandler,
 }
 
 impl ProjectPanel {
     pub fn new(
         on_open: OpenHandler,
         on_file_op: FileOpHandler,
-        on_close: Rc<dyn Fn(&mut App)>,
+        on_refresh: RefreshHandler,
         cx: &mut Context<Self>,
     ) -> Self {
         let filter = cx.new(|cx| {
@@ -178,18 +162,13 @@ impl ProjectPanel {
         });
         Self {
             open: false,
-            width: px(crate::layout::explorer_width()
-                .unwrap_or(PANEL_DEFAULT_W)
-                .clamp(PANEL_MIN_W, PANEL_MAX_W)),
             reserve_controls: false,
             workspace: None,
             index: TreeIndex::default(),
             rows: Vec::new(),
             expanded: HashSet::new(),
             show_hidden: false,
-            stale: false,
             loading: false,
-            generation: 0,
             error: None,
             list: ListState::new(0, ListAlignment::Top, px(400.)),
             cursor: None,
@@ -204,7 +183,7 @@ impl ProjectPanel {
             notice: None,
             on_open,
             on_file_op,
-            on_close,
+            on_refresh,
         }
     }
 
@@ -214,31 +193,19 @@ impl ProjectPanel {
         self.open
     }
 
-    pub fn width(&self) -> Pixels {
-        self.width
-    }
-
-    pub fn set_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
-        let width = width.clamp(px(PANEL_MIN_W), px(PANEL_MAX_W));
-        if width != self.width {
-            self.width = width;
-            crate::layout::set_explorer_width(f32::from(width));
-            cx.notify();
-        }
-    }
-
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
         self.open = !self.open;
         if !self.open {
             self.menu = None;
-        } else {
-            self.ensure_loaded(cx);
+        } else if self.index.file_count == 0 && self.rows.is_empty() && !self.loading {
+            // Opened before any workspace was picked: ask the app for the index
+            // it has not needed yet (the panel is fed, it never scans).
+            (self.on_refresh)(cx);
         }
         cx.notify();
     }
 
-    /// Close the dock if it is open. Used while the Review pane is open — the
-    /// two right docks are mutually exclusive.
+    /// Close the panel if it is open (its dock tab closes with it).
     pub fn close(&mut self, cx: &mut Context<Self>) {
         if self.open {
             self.open = false;
@@ -247,7 +214,9 @@ impl ProjectPanel {
         }
     }
 
-    /// The app calls this every render; a changed workspace rebuilds the tree.
+    /// The app calls this every render; a changed workspace drops the tree.
+    /// The app then rebuilds the shared index and pushes it back through
+    /// [`ProjectPanel::set_index`].
     pub fn set_workspace(&mut self, workspace: Option<PathBuf>, cx: &mut Context<Self>) {
         if self.workspace == workspace {
             return;
@@ -262,17 +231,40 @@ impl ProjectPanel {
         self.entry = None;
         self.pending_delete = None;
         self.notice = None;
+        self.loading = self.workspace.is_some();
         self.list.reset(0);
-        self.stale = true;
-        self.ensure_loaded(cx);
+        cx.notify();
     }
 
-    /// The workspace watcher fired (or a run settled): rebuild off-thread.
-    pub fn mark_stale(&mut self, cx: &mut Context<Self>) {
-        if self.workspace.is_some() {
-            self.stale = true;
-            self.ensure_loaded(cx);
+    /// A fresh workspace snapshot landed; rebuild the tree from it.
+    ///
+    /// The snapshot is the app's (one `Arc`, shared with `@`), so the panel
+    /// never copies a 100k-entry list just to draw it.
+    pub fn set_index(
+        &mut self,
+        snapshot: Arc<walk::Snapshot>,
+        badges: std::collections::HashMap<String, StatusBadge>,
+        cx: &mut Context<Self>,
+    ) {
+        self.index = TreeIndex::build(&snapshot, badges);
+        self.loading = false;
+        self.error = None;
+        self.cursor = self.cursor.filter(|index| *index < self.rows.len());
+        self.refresh_rows(cx);
+        if let Some(path) = self.active.clone() {
+            self.reveal_path(&path);
+            self.refresh_rows(cx);
         }
+        cx.notify();
+    }
+
+    /// The app started (or finished) a workspace scan.
+    pub fn set_loading(&mut self, loading: bool, cx: &mut Context<Self>) {
+        if self.loading == loading {
+            return;
+        }
+        self.loading = loading;
+        cx.notify();
     }
 
     /// Highlight the file the viewer is showing, and reveal it.
@@ -289,57 +281,11 @@ impl ProjectPanel {
         cx.notify();
     }
 
-    // ── loading ────────────────────────────────────────────────────────
-
-    fn ensure_loaded(&mut self, cx: &mut Context<Self>) {
-        if !self.stale || self.loading {
-            return;
-        }
-        let Some(root) = self.workspace.clone() else {
-            self.stale = false;
-            return;
-        };
-        self.stale = false;
-        self.loading = true;
-        self.generation = self.generation.wrapping_add(1);
-        let generation = self.generation;
-        let show_hidden = self.show_hidden;
-
-        cx.spawn(async move |this, cx| {
-            let (snapshot, badges) = cx
-                .background_executor()
-                .spawn(async move {
-                    let snapshot = walk::snapshot(&root, show_hidden);
-                    // Git status is a subprocess; it must not run on the UI thread.
-                    let badges = git::status_rows(&root)
-                        .map(|rows| {
-                            rows.into_iter()
-                                .map(|row| (row.path.clone(), StatusBadge::from_status(&row)))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    (snapshot, badges)
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if this.generation != generation {
-                    return;
-                }
-                this.index = TreeIndex::build(snapshot, badges);
-                this.loading = false;
-                this.error = None;
-                this.refresh_rows(cx);
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     // ── rows ───────────────────────────────────────────────────────────
 
     fn refresh_rows(&mut self, cx: &Context<Self>) {
         let filter = self.filter.read(cx).text();
-        let rows = tree::visible_rows(&self.index, &self.expanded, &filter);
+        let rows = tree::visible_rows(&self.index, &self.expanded, &filter, self.show_hidden);
         if rows.len() != self.list.item_count() {
             self.list.reset(rows.len());
         }
@@ -815,7 +761,7 @@ impl ProjectPanel {
                     .hover(|el| el.bg(theme.surface_hover)),
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.mark_stale(cx);
+                    (this.on_refresh)(cx);
                 }))
                 .child(refresh_glyph(
                     "explorer-refresh-spin",
@@ -853,24 +799,8 @@ impl ProjectPanel {
                 },
                 cx.listener(|this, _: &ClickEvent, _, cx| {
                     this.show_hidden = !this.show_hidden;
-                    this.stale = true;
-                    this.ensure_loaded(cx);
+                    this.refresh_rows(cx);
                     cx.notify();
-                }),
-            ))
-            .child(ghost_icon(
-                &theme,
-                "explorer-close",
-                "icons/x.svg",
-                theme.text_muted,
-                tr!("explorer.hide"),
-                cx.listener(|this, _: &ClickEvent, _, cx| {
-                    // Close here — this listener already holds the panel's
-                    // lease, so the app callback must not re-enter `update`
-                    // on this entity (that would double-lease and abort).
-                    let on_close = this.on_close.clone();
-                    this.close(cx);
-                    on_close(cx);
                 }),
             ))
             .into_any_element()
@@ -1618,47 +1548,26 @@ impl Render for ProjectPanel {
         if !self.open {
             return div().into_any_element();
         }
-        self.ensure_loaded(cx);
         // The filter is read here; the observer marks rows dirty on change.
         self.refresh_rows(cx);
         let theme = *theme::get(cx);
+        // The tab body of the right dock: the dock owns the width, the resize
+        // handle, and the left hairline. The popups stay outside the clipped
+        // shell.
         div()
             .id("project-panel")
             .relative()
-            .flex_none()
-            .w(self.width)
-            .h_full()
-            .pl(DynamicSpacing::Base12.px(&theme))
+            .flex_1()
+            .w_full()
+            .min_h_0()
             .flex()
             .flex_col()
-            .min_h_0()
-            .child(
-                div()
-                    .id("explorer-resize-handle")
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    // Sit on the card's left border (the 12px gutter, minus
-                    // half the handle width), not the panel's outer edge, so
-                    // the edge users see is the edge they can grab.
-                    .left(px(9.))
-                    .w(px(6.))
-                    .cursor(CursorStyle::ResizeLeftRight)
-                    .hover(|style| style.bg(theme.accent.opacity(0.4)))
-                    .on_drag(ExplorerResize, |_, _, _, cx| cx.new(|_| ExplorerDragGhost)),
-            )
-            // The dock reads as a rounded card, like the Git/Usage cards in
-            // the main column. The popups stay outside this clipped shell so
-            // they are not cut off at its corners.
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .bg(theme.surface)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(panel::RADIUS.px(&theme))
+                    .bg(theme.background)
                     .overflow_hidden()
                     .flex()
                     .flex_col()
@@ -1700,19 +1609,15 @@ mod tests {
 
         let open: OpenHandler = Rc::new(|_, _, _| {});
         let op: FileOpHandler = Rc::new(|_, _| {});
-        let panel = cx.update(|_, app| {
-            app.new(|cx| ProjectPanel::new(open, op, Rc::new(|_: &mut App| {}), cx))
-        });
+        let refresh: RefreshHandler = Rc::new(|_| {});
+        let panel = cx.update(|_, app| app.new(|cx| ProjectPanel::new(open, op, refresh, cx)));
 
-        let snapshot = walk::snapshot(&root, false);
+        let snapshot = std::sync::Arc::new(walk::snapshot(&root));
         cx.update(|window, app| {
             panel.update(app, |panel, cx| {
                 panel.open = true;
-                panel.width = px(280.);
                 panel.workspace = Some(root.clone());
-                panel.index = TreeIndex::build(snapshot, HashMap::new());
-                panel.stale = false;
-                panel.refresh_rows(cx);
+                panel.set_index(snapshot, HashMap::new(), cx);
                 // Rename renders inside its row; New File renders above the
                 // tree. Both wrap the same prompt input.
                 panel.start_rename("main.rs".to_string(), false, window, cx);
@@ -1724,7 +1629,7 @@ mod tests {
             gpui::size(px(280.), px(600.)),
             {
                 let drawn = drawn.clone();
-                move |_, _| drawn.clone()
+                move |_, _| div().size_full().flex().flex_col().child(drawn.clone())
             },
         );
         assert_prompt_has_width(cx, "rename");
@@ -1738,7 +1643,7 @@ mod tests {
             gpui::size(px(280.), px(600.)),
             {
                 let drawn = drawn.clone();
-                move |_, _| drawn.clone()
+                move |_, _| div().size_full().flex().flex_col().child(drawn.clone())
             },
         );
         assert_prompt_has_width(cx, "new file");

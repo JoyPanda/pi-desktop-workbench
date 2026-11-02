@@ -9,25 +9,25 @@ use crate::composer_send::SendMode;
 use crate::theme::{Theme, ThemeKey};
 
 /// Put the composer on `text` with the completion menu open on a single known
-/// file. The catalog is seeded directly and stamped as belonging to the
-/// current workspace, so `ensure_mention_files` leaves it alone instead of
-/// re-scanning the real tree.
+/// file. The index is seeded directly and stamped as belonging to the current
+/// workspace, so `ensure_mention_index` leaves it alone instead of re-walking
+/// the real tree.
 ///
 /// The workspace itself is seeded too, because `at_paths` returns nothing at all
 /// without one: these tests must not pass or fail on whether this machine has a
-/// project open (and which one). `fd` is disabled for the same reason — `at_paths`
-/// prefers a live `fd` search of the *real* tree over this catalog, so the result
-/// would depend on the workspace on disk. These tests pin the completion gate,
-/// not the file search, so they take the bounded-walk path where the seeded
-/// catalog is authoritative.
+/// project open (and which one). These tests pin the completion gate, not the
+/// file search, so the seeded index is authoritative.
 fn open_menu_on(app: &mut OrbitApp, text: &str, cx: &mut Context<OrbitApp>) {
     let root = std::env::temp_dir().join("orbit-send-control-mentions");
     app.current_workspace = Some(root.clone());
-    app.mention_fd_missing = true;
-    app.mention_fd_key = None;
-    app.mention_fd_hits.clear();
-    app.mention_files_workspace = Some(root);
-    app.mention_files = vec!["src/main.rs".to_string()];
+    app.mention_index_workspace = Some(root);
+    app.mention_index = Some(std::sync::Arc::new(MentionIndex::from_paths(vec![
+        "src/main.rs".to_string(),
+    ])));
+    app.mention_index_generation = 1;
+    app.mention_index_stale = false;
+    app.mention_index_due = None;
+    app.mention_query_memo = None;
     app.input.update(cx, |input, cx| input.set_text(text, cx));
     let mut state = app.autocomplete.borrow_mut();
     state.open = true;
@@ -40,6 +40,54 @@ fn app(cx: &mut gpui::TestAppContext) -> Entity<OrbitApp> {
         cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         cx.new(OrbitApp::new)
     })
+}
+
+/// The empty `@` menu leads with what the user touched most recently, and a
+/// path the workspace no longer has is dropped instead of rowing a dead entry.
+#[gpui::test]
+fn empty_mention_menu_puts_recent_files_first(cx: &mut gpui::TestAppContext) {
+    let app = app(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let root = std::env::temp_dir().join("orbit-send-control-recents");
+            app.current_workspace = Some(root.clone());
+            app.mention_index_workspace = Some(root);
+            app.mention_index = Some(std::sync::Arc::new(MentionIndex::from_paths(vec![
+                "z/deep.rs".to_string(),
+                "a.rs".to_string(),
+                "m.rs".to_string(),
+            ])));
+            app.mention_index_generation = 1;
+            app.mention_index_stale = false;
+            app.mention_index_due = None;
+
+            app.note_recent_file(Some("z/deep.rs"));
+            let hits = app.at_entries("", cx);
+            assert_eq!(
+                hits.first().map(|entry| match entry {
+                    AcEntry::File { path } => path.as_str(),
+                    AcEntry::Command { .. } => "",
+                }),
+                Some("z/deep.rs"),
+                "the most recent file leads the empty menu"
+            );
+
+            // A file the index no longer holds never rows.
+            app.note_recent_file(Some("gone.rs"));
+            let hits = app.at_entries("", cx);
+            assert!(!hits
+                .iter()
+                .any(|entry| matches!(entry, AcEntry::File { path } if path == "gone.rs")));
+            assert_eq!(
+                hits.first().map(|entry| match entry {
+                    AcEntry::File { path } => path.as_str(),
+                    AcEntry::Command { .. } => "",
+                }),
+                Some("z/deep.rs"),
+                "the dropped recent falls through to the next one"
+            );
+        });
+    });
 }
 
 /// A collapsed paste is a sendable message on its own. The control used to

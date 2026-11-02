@@ -455,12 +455,13 @@ the chat page has neither.
   shift-click extends — matching native text fields.
 
 ### Navigation
-- Sidebar rows: 28px tall, 6px radius, 14px icon (Small) in a fixed 20px slot, label in
-  `text_2`/`text_3`; hover fills `bg_hover`; the active destination is marked by
-  `active` fill with `active_fg`, never by accent color alone.
-- A running session row leads with a small accent arc turning in place and its title
-  carries a shimmer — an accent highlight band swept left-to-right across the ink on a 2s
-  loop. This is the only per-row motion in the sidebar; a settled row is still.
+- Sidebar rows share one left-aligned icon column, the project-mark tile: a 16px glyph
+  centered in a slot of `IconSize::Medium` plus `Base08`. Section labels sit outside that
+  column. Hover fills `bg_hover`; the active destination is marked by `active` fill with
+  `active_fg`, never by accent color alone.
+- A running session row replaces its leading dot with a small accent arc turning in
+  place. The title stays still. This is the only per-row motion in the sidebar; a settled
+  row keeps the dot.
 - Page headers: 44px, back affordance first, title in 15px/500, actions right-aligned
   as 28px ghost controls.
 
@@ -601,15 +602,14 @@ The sidebar is quiet infrastructure.
   owns the full line width. The project group header keeps its own `…` (and `+`) because
   a header is a section control, not a row.
 - Active navigation uses `selection`, not accent color alone.
-- Execution state lives in one **status lane**: a 16px slot at the leading edge of
-  the row's state line (the title line under a project header, the project line in
-  the flat list), so the list's activity is one vertical scan away instead of a
-  word competing with every title. The lane paints one glyph — a spinner while
-  running, a lock for an approval gate, a chat glyph for a question, a check when a
-  result has been read, an eye when it has not, a cross for a failure or a dead
-  process, a stop for an aborted run — and nothing at all for `Idle` / `Unknown`;
-  the slot keeps its width either way so every row's text stays on the same x. Only
-  the spinner moves. Attention states (blocked, needs review, failed) add words in
+- Every session row leads with a list marker in the icon column: a muted dot. While the
+  row's status lane is Progress (running, retrying, or compacting) that dot becomes the
+  accent spinner, and the trailing badge does not paint a second one. The spinner's
+  tooltip names Running, Retrying, or Compacting. Other execution glyphs stay on the
+  trailing side of the title — a lock for an approval gate, a chat glyph for a question,
+  a check when a result has been read, an eye when it has not, a cross for a failure or a
+  dead process, a stop for an aborted run — and Idle / Unknown paint no trailing glyph.
+  Only the spinner moves. Attention states (blocked, needs review, failed) add words in
   place of the age, so colour is never the only distinction.
 - A session whose turn settled while the user was not reading it keeps an **unread
   mark** on its row — a green eye plus "Needs review" until the session is actually
@@ -739,7 +739,7 @@ Motion communicates state; it does not decorate the interface.
   light crosses the monogram on a twenty-second pass. It is the page's texture rather
   than an event, it is drawn behind everything, it never moves a glyph or a box, and
   Reduce Motion freezes it on the frame it was showing. Every other loop in the product
-  remains the state it reports — the running-session shimmer, a spinner, a streaming
+  remains the state it reports — the running-session spinner, a streaming
   transcript.
 - No decorative looping animation beyond that one field.
 - No parallax.

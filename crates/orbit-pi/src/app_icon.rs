@@ -33,16 +33,6 @@ pub const ASSET: &str = "app-icon.png";
 /// workbench draws. One byte array, one shape, in every build.
 pub const MARK_PNG: &[u8] = include_bytes!("../assets/app-icon.png");
 
-/// The "Orbit Pi" wordmark, shown as the sidebar brand header. Source of
-/// truth: workspace `assets/icons/logo.png`; the copy in this crate is what
-/// the running binary embeds. White ink, for dark sidebars.
-pub const LOGO_ASSET: &str = "logo.png";
-
-/// The wordmark for light sidebars — dark ink with a white halo, so it reads
-/// on a light background where the white mark would vanish. Source of truth:
-/// workspace `assets/icons/logo-dark.png`.
-pub const LOGO_DARK_ASSET: &str = "logo-dark.png";
-
 /// Set the macOS Dock icon for `cargo run` (no `.app` bundle).
 ///
 /// Bundled builds pick the icon up from `icon.icns` / cargo-bundle metadata;

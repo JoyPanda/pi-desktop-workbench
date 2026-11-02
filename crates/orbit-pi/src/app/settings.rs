@@ -5229,6 +5229,19 @@ impl OrbitApp {
                 None,
                 Some(self.agent_calls_select(theme, this.clone(), cx)),
             ),
+            self.setting_row(
+                theme,
+                &tr!("settings.expand_thinking"),
+                Some(&tr!("settings.expand_thinking_hint")),
+                None,
+                Some(self.settings_toggle(
+                    "expand-thinking-toggle",
+                    self.expand_thinking,
+                    theme,
+                    this.clone(),
+                    Self::toggle_expand_thinking,
+                )),
+            ),
         ];
 
         let mut sections = Vec::new();
@@ -5354,6 +5367,18 @@ impl OrbitApp {
             this,
             cx,
         )
+    }
+
+    /// Flip whether a thinking step streams open, and remeasure the live row
+    /// so the card's height change does not wait for the next token.
+    pub(super) fn toggle_expand_thinking(&mut self, cx: &mut Context<Self>) {
+        self.expand_thinking = !self.expand_thinking;
+        crate::thinking_display::ThinkingDisplay {
+            expand_while_streaming: self.expand_thinking,
+        }
+        .persist();
+        self.transcript.remeasure_streaming_row();
+        cx.notify();
     }
 
     /// Flip auto session titles on/off and persist it for the extension.

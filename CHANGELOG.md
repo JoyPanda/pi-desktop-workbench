@@ -17,6 +17,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `display: false` context stays hidden. A notice raised while a reply is
   running waits and appears just before your next message.
 
+- **Reasoning stays in the transcript.** A thinking step streams open, then
+  collapses to one line that can be opened again. Turning Settings →
+  Behavior → Expand thinking off keeps streaming thoughts on that one line.
+  The cards stay in step order and are not hidden inside Worked for.
+  Scrolling up inside a card leaves it there instead of jumping back to the
+  newest line.
+
+### Changed
+
+- **`@` file mentions are instant and no longer need `fd`.** The composer ranks
+  an in-memory index of the workspace instead of spawning a search process on
+  every keystroke, which stalled the window for 300–700 ms per character on a
+  large project. The same walk feeds the Explorer tree, so `@` and the tree
+  cannot disagree about what exists, and a renamed or deleted file drops out of
+  both at once.
+- **`.gitignore` now applies whether or not the workspace is a git repository**
+  (a `.gitignore` in a plain folder counts), and `.gitignore` files in *parent*
+  directories are no longer consulted. The Explorer follows the same rule, so
+  opening a subfolder of a repository no longer inherits the root's exclusions.
+- **Hidden files are findable with `@`.** Dotfiles and dot-directories (`.env`,
+  `.github/**`, `.claude/**`, …) are indexed and searchable; the Explorer still
+  hides them until you toggle the eye. Version-control and OS metadata (`.git`,
+  `.svn`, `.hg`, `.jj`, `.DS_Store`, `Thumbs.db`) is never indexed.
+- **The Explorer's hidden-files toggle no longer re-scans the workspace** — it
+  is a view filter. The tree stops rebuilding itself and renders the index the
+  app already keeps: up to 200k entries, walked in parallel, rebuilt lazily on
+  a 2 s watcher throttle. If the cap is ever hit, the `@` menu says so.
+
 ### Fixed
 
 - **Stop and Esc now interrupt a stuck pi.** They sent `abort` and then waited

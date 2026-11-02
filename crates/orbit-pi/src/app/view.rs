@@ -25,20 +25,23 @@ pub(super) const TOP_BAR_H: f32 = 44.;
 /// bar share it so the window's left controls never ride into the OS buttons.
 pub(super) const TRAFFIC_LIGHT_CLEARANCE: f32 = platform::WINDOW_CONTROLS_CLEARANCE;
 
-/// Space between the titlebar's left controls. Set to the same 8px the right
+/// Space between the titlebar's controls. Set to the same 8px the right
 /// cluster spaces its chips with (`gap_2`), so the two ends of the bar share
 /// one rhythm — a bare 2px let bordered chips read as one crowded block.
 const TITLEBAR_CONTROLS_GAP: f32 = 8.;
 
 /// Breathing room between the OS window buttons and the first titlebar
-/// control. The traffic-light clearance alone ended flush against them, which
-/// made the app's own controls read as part of the caption; the lead gives
-/// the overlay its own left margin.
+/// control while the sidebar is collapsed. The traffic-light clearance alone
+/// ended flush against them, which made the app's own controls read as part
+/// of the caption; the lead gives the overlay its own left margin.
 pub(super) const TITLEBAR_CONTROLS_LEAD: f32 = 12.;
 
-/// Combined width of the titlebar's left controls (toggle + history) as laid
-/// out by [`OrbitApp::titlebar_left_controls`]: three [`HEADER_CTRL_H`] boxes,
-/// two [`TITLEBAR_CONTROLS_GAP`] gaps, and the trailing 6px gap.
+/// Width of the Back/Forward pair, including the gap between the two buttons.
+pub(super) const TITLEBAR_HISTORY_W: f32 = HEADER_CTRL_H * 2. + TITLEBAR_CONTROLS_GAP;
+
+/// Combined width of the collapsed titlebar cluster (toggle + history): three
+/// [`HEADER_CTRL_H`] boxes, two [`TITLEBAR_CONTROLS_GAP`] gaps, and the
+/// trailing 6px gap the session title clears.
 pub(super) const TITLEBAR_CONTROLS_W: f32 = HEADER_CTRL_H * 3. + TITLEBAR_CONTROLS_GAP * 2. + 6.;
 
 /// Space between the controls and the session title while the sidebar is
@@ -54,30 +57,91 @@ pub(super) const TITLEBAR_TITLE_GAP: f32 = 8.;
 pub(super) const TITLEBAR_LEADING: f32 =
     TRAFFIC_LIGHT_CLEARANCE + TITLEBAR_CONTROLS_LEAD + TITLEBAR_CONTROLS_W + TITLEBAR_TITLE_GAP;
 
-/// Space kept between the last titlebar control and the sidebar's right edge
-/// while the controls are right-aligned inside the sidebar's strip. The
-/// sidebar's 6px resize handle lives against that edge, so the pad keeps the
-/// chips off it (and off the sidebar's rounded boundary).
+/// Space kept between the history buttons and the sidebar's right edge while
+/// the sidebar is open. The sidebar's 6px resize handle lives against that
+/// edge, so the pad keeps the chips off it.
 pub(super) const SIDEBAR_EDGE_PAD: f32 = 6.;
 
-/// Where the titlebar's left controls sit. While the sidebar is open they
-/// right-align inside its strip — [`SIDEBAR_EDGE_PAD`] off the column's right
-/// edge, so they ride both a resize drag and the open/close slide. Collapsed,
-/// there is no column to hug and the chips fall back to the fixed lead past
-/// the OS window buttons.
-///
-/// Windows is the exception: it has no OS buttons on the left at all — the app
-/// paints the caption itself, at the window's right
-/// ([`platform::draws_window_controls`]) — so the cluster left-aligns on the
-/// fixed lead whether the sidebar is open or not, the way a Windows app's own
-/// titlebar controls sit. Nothing else changes there: the lead still clears
-/// the window edge, and the sidebar's drag strip and wordmark live on other
-/// rows of that column.
-pub(super) fn titlebar_controls_left(sidebar_visible: bool, sidebar_width: f32) -> f32 {
-    if sidebar_visible && !cfg!(windows) {
-        sidebar_width - TITLEBAR_CONTROLS_W - SIDEBAR_EDGE_PAD
+/// Left edge of the collapsed cluster. There is no sidebar column to split
+/// across, so Hide Sidebar, Back, and Forward sit together past the OS
+/// window buttons.
+pub(super) fn titlebar_cluster_left() -> f32 {
+    TRAFFIC_LIGHT_CLEARANCE + TITLEBAR_CONTROLS_LEAD
+}
+
+/// Left edge of Hide Sidebar. Collapsed, it leads the cluster. Open, its
+/// glyph lines up with the New Task glyph — `icon_aligned` is that button's
+/// left — but never rides into the OS window buttons. On macOS the traffic
+/// lights win, so the two glyphs do not share a vertical line.
+pub(super) fn titlebar_toggle_left(sidebar_visible: bool, icon_aligned: f32) -> f32 {
+    if sidebar_visible {
+        icon_aligned.max(TRAFFIC_LIGHT_CLEARANCE)
     } else {
-        TRAFFIC_LIGHT_CLEARANCE + TITLEBAR_CONTROLS_LEAD
+        titlebar_cluster_left()
+    }
+}
+
+/// Button left that puts the Hide Sidebar glyph on the same vertical line as
+/// the New Task glyph. That glyph is centered in the sidebar icon column;
+/// the toggle glyph is centered in a [`HEADER_CTRL_H`] box.
+pub(super) fn titlebar_toggle_aligned_left(theme: &Theme) -> f32 {
+    let new_task_glyph = sidebar_glyph_left(theme);
+    let toggle_glyph = f32::from(ButtonSize::Medium.icon_size().px(theme));
+    let inset = (HEADER_CTRL_H - toggle_glyph) / 2.;
+    new_task_glyph - inset
+}
+
+/// Left edge of the Back/Forward pair. Open, the pair's right edge sits
+/// [`SIDEBAR_EDGE_PAD`] inside the sidebar. Collapsed, it follows the toggle
+/// in the left cluster.
+pub(super) fn titlebar_history_left(sidebar_visible: bool, sidebar_width: f32) -> f32 {
+    if sidebar_visible {
+        sidebar_width - TITLEBAR_HISTORY_W - SIDEBAR_EDGE_PAD
+    } else {
+        titlebar_cluster_left() + HEADER_CTRL_H + TITLEBAR_CONTROLS_GAP
+    }
+}
+
+/// One titlebar control, pinned to `collapsed_left` or `open_left`. A slide
+/// in progress interpolates between them with the sidebar panel's easing, so
+/// the chips arrive with the column instead of snapping.
+fn titlebar_anchored(
+    id: String,
+    gen: u64,
+    reduce_motion: bool,
+    shown: bool,
+    collapsed_left: f32,
+    open_left: f32,
+    child: impl IntoElement,
+) -> AnyElement {
+    let controls = div()
+        .absolute()
+        .top_0()
+        .h(px(TOP_BAR_H))
+        .flex()
+        .items_center()
+        .child(child);
+    if gen == 0 || reduce_motion {
+        controls
+            .left(px(if shown { open_left } else { collapsed_left }))
+            .into_any_element()
+    } else {
+        let expanding = shown;
+        controls
+            .with_animation(
+                ElementId::Name(id.into()),
+                Animation::new(Duration::from_millis(SIDEBAR_SLIDE_MS))
+                    .with_easing(|d| 1.0 - (1.0 - d).powi(3)),
+                move |el, d| {
+                    let (from, to) = if expanding {
+                        (collapsed_left, open_left)
+                    } else {
+                        (open_left, collapsed_left)
+                    };
+                    el.left(px(from + (to - from) * d))
+                },
+            )
+            .into_any_element()
     }
 }
 
@@ -110,8 +174,8 @@ fn feature_card(theme: Theme, body: AnyElement) -> AnyElement {
 /// icon, a label, the command's platform chord, and a trailing check when its
 /// surface is open. Reuses the picker's row metrics so it lines up with the
 /// app's other dropdowns.
-fn header_menu_row(
-    id: &'static str,
+pub(super) fn header_menu_row(
+    id: impl Into<ElementId>,
     icon_path: &'static str,
     label: String,
     shortcut: Option<String>,
@@ -347,35 +411,32 @@ impl Render for OrbitApp {
             .or_else(|| std::env::current_dir().ok());
         // The rail gates on the main area's width (872px transcript
         // container), which excludes the sessions sidebar when visible.
-        self.place_subagent_scroll();
         let viewport = window.viewport_size();
-        // The right side pane is hidden while settings/onboarding own the
-        // main area (same rule as the sessions sidebar).
-        let pane_open = self.sidepane.read(cx).is_open();
-        let pane_visible =
-            pane_open && !self.settings_open && !self.usage_open && self.dependencies_ready();
+        // The right dock is hidden while settings/onboarding own the main area
+        // (same rule as the sessions sidebar). Fold the panels' open state into
+        // its tab list first, so everything below sees one consistent answer.
+        self.sync_dock(cx);
+        self.place_subagent_scroll();
+        let dock_visible = self.dock_visible();
+        let pane_visible = self.changes_docked(cx);
         // Feature pages (Files / Git / Usage / Worktrees) own the main column, so a
-        // full-page Review pane yields to the one that just opened rather than
+        // full-width dock yields to the one that just opened rather than
         // covering it. `OrbitApp::chat_column_covered` (events.rs) answers the
         // same question for the review-mark bookkeeping — keep them in step.
         let viewer_open = self.file_viewer.read(cx).is_open();
         let feature_open = viewer_open || self.git_open || self.usage_open || self.worktrees_open;
-        // A page that opens under a full-page Review pane gets the window
-        // back; one that was already open does not block maximizing over it.
-        if pane_visible
-            && feature_open
-            && !self.feature_open_last
-            && self.sidepane.read(cx).is_full_width()
-        {
+        // A page that opens under a full-width dock gets the window back; one
+        // that was already open does not block maximizing over it.
+        if self.dock_full_width(cx) && feature_open && !self.feature_open_last {
             self.sidepane
                 .update(cx, |pane, cx| pane.leave_full_width(cx));
         }
         self.feature_open_last = feature_open;
-        // Expanding the Review pane hides the session view, but it opens the
+        // Expanding the dock to full width hides the session view, but it opens the
         // sessions sidebar: switching sessions stays one click away while the
         // review owns the page. The sidebar snaps open with the pane rather
         // than sliding, so the session view never peeks through mid-slide.
-        let pane_full = pane_visible && self.sidepane.read(cx).is_full_width();
+        let pane_full = self.dock_full_width(cx);
         if pane_full && !self.pane_full_last && !self.sidebar_visible {
             self.sidebar_visible = true;
         }
@@ -385,7 +446,7 @@ impl Render for OrbitApp {
         // Bottom terminal panel. The chat branch is what renders it, so the
         // full-page surfaces (settings / Git / Usage) hide it by construction;
         // `terminal_visible` exists to stop a hidden shell requesting frames.
-        // A full-page Review pane collapses the chat column, terminal
+        // A full-width dock collapses the chat column, terminal
         // included, so it counts as hidden too.
         let terminal_visible = self.terminal_panel.read(cx).is_open()
             && !self.settings_open
@@ -407,51 +468,24 @@ impl Render for OrbitApp {
         // already their default; nothing to sync per frame.
         self.git_panel
             .update(cx, |panel, cx| panel.set_review_width(git_review_width, cx));
-        // ── project panel (right dock) ── hidden while Settings owns the
-        // window, like the sessions sidebar. Sync the workspace each render;
-        // a change rebuilds the tree off-thread. The Explorer and the Review
-        // pane are mutually exclusive right docks: while Review is open the
-        // tree stays closed.
-        // Subagent output, Review, and Project share one right dock. The
-        // subagent pane yields when Review is open; Project yields to it too,
-        // so a stale pair of flags never paints two docks.
-        let subagent_visible = self.subagents.is_open()
-            && !self.settings_open
-            && !self.usage_open
-            && self.dependencies_ready()
-            && !pane_open
-            && !pane_full;
-        let explorer_visible = self.project_panel.read(cx).is_open()
-            && !self.settings_open
-            && !pane_open
-            && !subagent_visible;
-        let explorer_width = if explorer_visible {
-            self.project_panel.read(cx).width()
-        } else {
-            px(0.)
-        };
-        // The pane's ceiling is the window minus the sidebar and the Explorer;
-        // Full width expands to it and collapses the chat column. The Explorer
-        // is closed whenever the pane opens, so this is usually the sidebar's
-        // width alone.
+        // ── right dock ── Changes, Files, and subagent output are its tabs; the
+        // tab on screen is whichever the dock says is active.
+        let explorer_visible = self.files_docked(cx);
+        // The dock's ceiling is the window minus the sidebar; Review's Full
+        // width expands to it and collapses the chat column.
         let pane_ceiling = viewport.width
             - if sidebar_shown {
                 self.sidebar_width
             } else {
                 px(0.)
-            }
-            - explorer_width;
+            };
         self.sidepane
             .update(cx, |pane, cx| pane.set_available_width(pane_ceiling, cx));
-        // Read the pane's width after the ceiling update: a full-width pane
-        // has just grown and this frame's layout must see it.
-        let pane_width = if pane_visible {
+        // The dock's width is the Review pane's, whichever tab is shown. Read
+        // it after the ceiling update: a full-width pane has just grown and
+        // this frame's layout must see it.
+        let dock_width = if dock_visible {
             self.sidepane.read(cx).width()
-        } else {
-            px(0.)
-        };
-        let subagent_width = if subagent_visible {
-            self.subagent_pane_width()
         } else {
             px(0.)
         };
@@ -461,9 +495,7 @@ impl Render for OrbitApp {
             } else {
                 px(0.)
             }
-            - explorer_width
-            - subagent_width
-            - pane_width;
+            - dock_width;
         // Composer toolbar compaction: below this column width the access
         // pill drops out and the model label clamps (Send stays reachable).
         let composer_compact = (main_width - px(32.)).min(px(CONTENT_MAX_W)) < px(600.);
@@ -476,13 +508,11 @@ impl Render for OrbitApp {
         }
 
         // ── top-bar right controls ──
-        // When Review owns the right edge, or the chat column is tight, the
-        // title and the chips collide. Compact the quota label and drop the
-        // +/− chip (Review already shows the same stats).
+        // When the chat column is tight, the title and the chips collide.
+        // Compact the quota label.
         // The top bar spans the whole main area, so the docks do not squeeze
         // it — compact only when the main area itself is tight.
-        let compact_chrome =
-            f32::from(main_width + explorer_width + subagent_width + pane_width) < 720.;
+        let compact_chrome = f32::from(main_width + dock_width) < 720.;
         // While a feature card is open, its title moves up into the shared top
         // bar (see `GitPanel::top_bar_leading` / `UsagePage::top_bar_leading`);
         // the card's own chrome (branch selector, filters) stays with the view
@@ -505,10 +535,9 @@ impl Render for OrbitApp {
         top_controls = top_controls.children(self.render_quota_chip(compact_chrome, cx));
         top_controls = top_controls.children(self.render_open_in_control(cx));
         top_controls = top_controls
-            // Review dock — the side-panel toggle and the working tree's
-            // change counts folded into one chip
+            // The working tree's change counts, when there are any to show
             // (see `render_review_panel_control`).
-            .child(self.render_review_panel_control(theme, pane_visible, cx))
+            .children(self.render_review_panel_control(theme, pane_visible, cx))
             // The remaining surfaces (Session details, Explorer, Terminal, Git)
             // sit behind one "…" menu so the bar keeps only what shows live
             // state: the quota, open-in, and Review. See `render_header_more`.
@@ -596,10 +625,9 @@ impl Render for OrbitApp {
                             // arrows/Enter/Escape to the row cursor.
                             .track_focus(&self.sidebar_focus)
                             .key_context("Sidebar")
-                            // traffic-light strip (drag region); the window's
-                            // left controls float above it in the titlebar
-                            // overlay — right-aligned against this column's
-                            // edge while the sidebar is open.
+                            // traffic-light strip (drag region); Hide Sidebar
+                            // and Back/Forward float above it in the titlebar
+                            // overlay.
                             .child(window_drag_region(div().h(px(TOP_BAR_H)).w_full()))
                             // Resize handle: drag the sidebar's right edge to
                             // adjust its width. Kept fully inside the panel so
@@ -618,32 +646,14 @@ impl Render for OrbitApp {
                                     .hover(|style| style.bg(theme.accent.opacity(0.4)))
                                     .on_drag(SidebarResize, |_, _, _, cx| cx.new(|_| DragGhost)),
                             )
-                            // brand — the wordmark, centred over the nav
-                            // column and held to a quiet size. White mark on
-                            // dark sidebars; the dark-ink mark on light ones,
-                            // where the white wordmark vanishes.
-                            .child(
-                                div()
-                                    .px_3()
-                                    .pt(px(2.))
-                                    .pb_3()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(embedded_image_w(
-                                        if theme.mode == ThemeMode::Light {
-                                            crate::app_icon::LOGO_DARK_ASSET
-                                        } else {
-                                            crate::app_icon::LOGO_ASSET
-                                        },
-                                        px(76.),
-                                    )),
-                            )
                             // nav — the primary action (New Task); the
-                            // utility icons live in the footer
+                            // utility icons live in the footer. The horizontal
+                            // inset is the same 0.75rem as `px_3`, read through
+                            // the theme so Hide Sidebar's glyph can share the
+                            // New Task glyph's left edge.
                             .child(
                                 div()
-                                    .px_3()
+                                    .px(theme.rems(0.75))
                                     .pt_1()
                                     .pb_2()
                                     .flex()
@@ -705,7 +715,9 @@ impl Render for OrbitApp {
                                             .id("sidebar-sessions")
                                             .flex_1()
                                             .min_h_0()
-                                            .px_2()
+                                            // Same label x as New Task at every UI size:
+                                            // list pad + border + Base08 + the icon column + Base06.
+                                            .px(sidebar_list_pad(&theme))
                                             .pb_2()
                                             .relative()
                                             .child(
@@ -994,7 +1006,7 @@ impl Render for OrbitApp {
                     }
                 };
                 let body: AnyElement = if pane_full {
-                    // The expanded Review pane owns the page; the chat is not
+                    // The full-width dock owns the page; the chat is not
                     // just covered, it is skipped — same as a feature page.
                     div().into_any_element()
                 } else if viewer_open {
@@ -1029,9 +1041,11 @@ impl Render for OrbitApp {
                                     window.viewport_size().height,
                                     main_width,
                                     self.agent_calls,
+                                    self.expand_thinking,
                                     Some(self.review_opener(cx)),
                                     Some(self.image_opener(cx)),
                                     Some(self.fork_opener(cx)),
+                                    Some(self.subagent_tool_opener(cx)),
                                     self.search_hits(),
                                     self.search_active(),
                                     cx,
@@ -1220,67 +1234,51 @@ impl Render for OrbitApp {
                             } else {
                                 body
                             })
-                            .children(
-                                explorer_visible
-                                    .then(|| self.project_panel.clone().into_any_element()),
-                            )
-                            .children(subagent_visible.then(|| self.subagent_pane(cx)))
-                            .children(
-                                pane_visible.then(|| self.sidepane.clone().into_any_element()),
-                            ),
+                            .children(dock_visible.then(|| self.render_right_dock(theme, cx))),
                     )
                     .into_any_element()
             })
-            // ── titlebar controls ── a fixed overlay pinned just past the
-            // macOS traffic lights, above both the sidebar and the main column.
-            // Shown on every surface except Settings, which owns its own nav
-            // column — including the Git/Usage pages when the sidebar is
-            // collapsed, so the toggle (and history arrows) stay reachable;
-            // those pages inset their own headers to clear it. The controls
-            // right-align inside the sidebar's strip when it is open (hugging
-            // its edge, and tracking it through a resize or the slide) and
-            // fall back to the fixed lead when it is collapsed; on Windows,
-            // which has no left-hand OS buttons, they take that fixed lead
-            // whether it is open or not. The container
-            // is not itself a hitbox, so the drag strip beneath still drags the
-            // window in the gaps between buttons while each button takes its
-            // own clicks.
-            .children((!self.settings_open).then(|| {
-                let pinned = titlebar_controls_left(false, f32::from(self.sidebar_width));
-                let hugging = titlebar_controls_left(true, f32::from(self.sidebar_width));
-                let controls = div()
-                    .absolute()
-                    .top_0()
-                    .h(px(TOP_BAR_H))
-                    .flex()
-                    .items_center()
-                    .child(self.titlebar_left_controls(theme, cx));
-                let gen = self.sidebar_slide_gen;
-                if gen == 0 || theme::reduce_motion(cx) {
-                    controls
-                        .left(px(if sidebar_shown { hugging } else { pinned }))
-                        .into_any_element()
+            // ── titlebar controls ── two overlays above both the sidebar and
+            // the main column. Shown on every surface except Settings, which
+            // owns its own nav column — including the Git/Usage pages when the
+            // sidebar is collapsed, so the toggle and history arrows stay
+            // reachable; those pages inset their own headers to clear them.
+            // Open, Hide Sidebar lines up with the New Task glyph and
+            // Back/Forward hug the sidebar's right edge. Collapsed, the three
+            // sit together at the fixed lead past the OS window buttons. Each
+            // box is only as wide as its buttons, so the drag strip beneath
+            // still drags the window in the gaps.
+            .children({
+                let overlays: Vec<AnyElement> = if self.settings_open {
+                    Vec::new()
                 } else {
-                    // Same easing and duration as the panel's own slide, so the
-                    // chips ride the edge instead of snapping to it.
-                    let expanding = sidebar_shown;
-                    controls
-                        .with_animation(
-                            ElementId::Name(format!("titlebar-lead-{gen}").into()),
-                            Animation::new(Duration::from_millis(SIDEBAR_SLIDE_MS))
-                                .with_easing(|d| 1.0 - (1.0 - d).powi(3)),
-                            move |el, d| {
-                                let (from, to) = if expanding {
-                                    (pinned, hugging)
-                                } else {
-                                    (hugging, pinned)
-                                };
-                                el.left(px(from + (to - from) * d))
-                            },
-                        )
-                        .into_any_element()
-                }
-            }))
+                    let width = f32::from(self.sidebar_width);
+                    let aligned = titlebar_toggle_aligned_left(&theme);
+                    let reduce = theme::reduce_motion(cx);
+                    let gen = self.sidebar_slide_gen;
+                    vec![
+                        titlebar_anchored(
+                            format!("titlebar-toggle-{gen}"),
+                            gen,
+                            reduce,
+                            sidebar_shown,
+                            titlebar_toggle_left(false, aligned),
+                            titlebar_toggle_left(true, aligned),
+                            self.titlebar_sidebar_toggle(theme, cx),
+                        ),
+                        titlebar_anchored(
+                            format!("titlebar-history-{gen}"),
+                            gen,
+                            reduce,
+                            sidebar_shown,
+                            titlebar_history_left(false, width),
+                            titlebar_history_left(true, width),
+                            self.titlebar_history_controls(theme, cx),
+                        ),
+                    ]
+                };
+                overlays
+            })
             // ── window caption buttons ── the app owns the caption on the
             // platforms where it draws it (`platform::draws_window_controls`),
             // so these sit above *every* surface — settings, git, usage,
@@ -1357,42 +1355,20 @@ impl Render for OrbitApp {
             ))
             .on_drag_move(cx.listener(
                 |app: &mut Self,
-                 event: &DragMoveEvent<crate::explorer::ExplorerResize>,
+                 event: &DragMoveEvent<super::subagent_ui::SubagentThumbDrag>,
                  _: &mut Window,
                  cx: &mut Context<Self>| {
-                    // The dock sits between the main column and the Review
-                    // pane, so its width is the pointer's distance to its
-                    // right edge — which the pane owns when it is open.
-                    let pane = if app.sidepane.read(cx).is_open()
-                        && !app.settings_open
-                        && !app.usage_open
-                        && app.dependencies_ready()
-                    {
-                        app.sidepane.read(cx).width()
-                    } else {
-                        px(0.)
+                    let y = event.event.position.y;
+                    let (leaf_id, armed, start_y, start_offset) = {
+                        let drag = event.drag(cx);
+                        (
+                            drag.leaf_id.clone(),
+                            drag.armed.get(),
+                            drag.start_y.get(),
+                            drag.start_offset.get(),
+                        )
                     };
-                    let width = event.bounds.size.width - pane - event.event.position.x;
-                    app.project_panel
-                        .update(cx, |panel, cx| panel.set_width(width, cx));
-                },
-            ))
-            .on_drag_move(cx.listener(
-                |app: &mut Self,
-                 event: &DragMoveEvent<super::subagent_ui::SubagentResize>,
-                 _: &mut Window,
-                 cx: &mut Context<Self>| {
-                    // The dock hugs the window's right edge while Review is
-                    // closed, so its width is the pointer's distance to that edge.
-                    let width = (event.bounds.size.width - event.event.position.x).clamp(
-                        px(super::subagent_ui::SUBAGENT_MIN_W),
-                        px(super::subagent_ui::SUBAGENT_MAX_W),
-                    );
-                    if width != app.subagent_width {
-                        app.subagent_width = width;
-                        crate::layout::set_subagent_width(f32::from(width));
-                        cx.notify();
-                    }
+                    app.drag_subagent_thumb(&leaf_id, armed, start_y, start_offset, y, cx);
                 },
             ))
             .on_drag_move(cx.listener(
@@ -1400,7 +1376,7 @@ impl Render for OrbitApp {
                  event: &DragMoveEvent<SidePaneResize>,
                  _: &mut Window,
                  cx: &mut Context<Self>| {
-                    // The pane hugs the window's right edge, so its width is
+                    // The dock hugs the window's right edge, so its width is
                     // the distance from the pointer to that edge.
                     let width = event.bounds.size.width - event.event.position.x;
                     let max = event.bounds.size.width - px(PANE_MAX_RESERVE);
@@ -3410,45 +3386,44 @@ impl OrbitApp {
         )
     }
 
-    /// The window's left titlebar controls: sidebar toggle + session history.
-    /// They sit beside the macOS traffic lights in the sidebar's drag strip
-    /// when the sessions sidebar is open, and fall back to the main top bar
-    /// (clearing the lights) when it is hidden. Windows has no OS buttons on
-    /// that side, so the cluster stays left-aligned there either way.
-    pub(super) fn titlebar_left_controls(
+    /// Hide Sidebar. A fixed square with a centered icon, same hit box as the
+    /// history chevrons, so the glyph can share the New Task glyph's left edge.
+    pub(super) fn titlebar_sidebar_toggle(
+        &self,
+        theme: Theme,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
+        header_ghost_button(
+            "toggle-sidebar",
+            &theme,
+            icon(
+                "icons/layout-left.svg",
+                ButtonSize::Medium.icon_size().px(&theme),
+                theme.text_secondary,
+            ),
+        )
+        .block_mouse_except_scroll()
+        .tooltip({
+            let label = commands::tooltip(CommandId::ToggleSidebar, self.sidebar_visible);
+            move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into()
+        })
+        .on_mouse_up(MouseButton::Left, cx.listener(Self::on_toggle_sidebar))
+    }
+
+    /// Back and Forward. The same square hit boxes as Hide Sidebar, with one
+    /// [`TITLEBAR_CONTROLS_GAP`] between them so the pair's width is
+    /// [`TITLEBAR_HISTORY_W`].
+    pub(super) fn titlebar_history_controls(
         &self,
         theme: Theme,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let back_enabled = self.history_index > 0;
         let forward_enabled = self.history_index + 1 < self.session_history.len();
-        // The three controls wear the same glass chips as the right cluster
-        // ([`header_icon_button`]), so the whole 44px bar reads as one row:
-        // a fixed square hit box with a centered Medium icon keeps the toggle
-        // and the chevrons optically even (a bare `p_1` lets the toggle's
-        // pill drift wider than the chevrons).
         div()
             .flex()
             .items_center()
             .gap(px(TITLEBAR_CONTROLS_GAP))
-            .pr(DynamicSpacing::Base06.px(&theme))
-            .child(
-                header_ghost_button(
-                    "toggle-sidebar",
-                    &theme,
-                    icon(
-                        "icons/layout-left.svg",
-                        ButtonSize::Medium.icon_size().px(&theme),
-                        theme.text_secondary,
-                    ),
-                )
-                .block_mouse_except_scroll()
-                .tooltip({
-                    let label = commands::tooltip(CommandId::ToggleSidebar, self.sidebar_visible);
-                    move |_, cx| cx.new(|_| Tooltip::new(label.clone())).into()
-                })
-                .on_mouse_up(MouseButton::Left, cx.listener(Self::on_toggle_sidebar)),
-            )
             .child(
                 div()
                     .id("history-back")
@@ -3507,83 +3482,63 @@ impl OrbitApp {
             )
     }
 
-    /// The right dock's single top-bar affordance: the side-panel toggle and
-    /// the working tree's `+N −N` change counts, folded into one chip. The
-    /// counts already opened Review on the uncommitted diff, so a separate
-    /// panel toggle beside them was the same job twice. Dirty — and with the
-    /// pane and the Git page closed — the chip wears the counts instead of the
-    /// glyph; clean, it falls back to the `panel-right` icon. Either way it
-    /// flips the pane and stays lifted while the pane is visible.
+    /// The top bar's change counts: the working tree's `+N −N` as one chip
+    /// that opens Review on the uncommitted diff. The dock's own controls
+    /// (full width, hide) live on its tab bar, so a clean tree shows nothing
+    /// here; the chip also steps aside while Changes or the Git page already
+    /// shows the same diff.
     pub(super) fn render_review_panel_control(
         &self,
         theme: Theme,
         pane_visible: bool,
         cx: &Context<Self>,
-    ) -> impl IntoElement + use<> {
-        // The counts stay off while the pane or the Git page already shows the
-        // same diff, matching the standalone chip's old visibility rule.
+    ) -> Option<impl IntoElement + use<>> {
         let dirty = (self.added > 0 || self.removed > 0) && !pane_visible && !self.git_open;
-        let chip = press(header_chip(
-            div()
-                .id("toggle-side-pane")
-                .group(BUTTON_GROUP)
-                .h(px(HEADER_CTRL_H))
-                .min_w(px(HEADER_CTRL_H))
-                .px(if dirty {
-                    ButtonSize::Medium.padding_x(&theme)
-                } else {
-                    px(0.)
-                })
-                .rounded(header_ctrl_radius(&theme))
-                .flex()
-                .items_center()
-                .justify_center()
-                .gap(DynamicSpacing::Base06.px(&theme))
-                .cursor_pointer(),
-            &theme,
-        ))
-        // One or the other, never both: the counts stand in for the glyph
-        // while the tree is dirty, so the chip cannot grow two things wide.
-        .children((!dirty).then(|| {
-            icon(
-                "icons/panel-right.svg",
-                ButtonSize::Medium.icon_size().px(&theme),
-                if pane_visible {
-                    theme.text_primary
-                } else {
-                    theme.text_secondary
-                },
+        dirty.then(|| {
+            press(header_chip(
+                div()
+                    .id("toggle-side-pane")
+                    .group(BUTTON_GROUP)
+                    .h(px(HEADER_CTRL_H))
+                    .min_w(px(HEADER_CTRL_H))
+                    .px(ButtonSize::Medium.padding_x(&theme))
+                    .rounded(header_ctrl_radius(&theme))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(DynamicSpacing::Base06.px(&theme))
+                    .cursor_pointer(),
+                &theme,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(DynamicSpacing::Base06.px(&theme))
+                    .child(
+                        div()
+                            .text_size(TextSize::Small.px(&theme))
+                            .text_color(theme.success)
+                            .child(format!("+{}", self.added)),
+                    )
+                    .child(
+                        div()
+                            .text_size(TextSize::Small.px(&theme))
+                            .text_color(theme.error)
+                            .child(format!("-{}", self.removed)),
+                    ),
             )
-        }))
-        .children(dirty.then(|| {
-            div()
-                .flex()
-                .items_center()
-                .gap(DynamicSpacing::Base06.px(&theme))
-                .child(
-                    div()
-                        .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.success)
-                        .child(format!("+{}", self.added)),
-                )
-                .child(
-                    div()
-                        .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.error)
-                        .child(format!("-{}", self.removed)),
-                )
-        }));
-        let chip = if pane_visible {
-            header_lift(chip, &theme)
-        } else {
-            chip
-        };
-        chip.tip(commands::tooltip(CommandId::ToggleSidePanel, pane_visible))
-            .on_mouse_up(MouseButton::Left, cx.listener(Self::on_toggle_side_pane))
+            .tip(tr!("command_palette.review_changes"))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(Self::on_open_uncommitted_review),
+            )
+        })
     }
 
     /// The top bar's overflow menu: one "…" control holding the surfaces that
-    /// no longer earn a permanent chip — Session details, Explorer, the
+    /// no longer earn a permanent chip — Session details, Explorer, the side
+    /// panel (the way back once its own tab bar is hidden along with it), the
     /// Terminal, the Git page, and Worktrees. It keeps the bar to the controls
     /// that carry live state (quota, open-in, Review, this), with the rest one
     /// click away and still on their shortcuts. Session details' popover is
@@ -3666,6 +3621,20 @@ impl OrbitApp {
                     this.toggle_project_panel(cx);
                 }),
             ))
+            // The dock's hide control lives on its own tab bar, which a hidden
+            // dock takes with it, so the way back stays in this menu.
+            .child(header_menu_row(
+                "header-more-side-panel",
+                "icons/panel-right.svg",
+                commands::title(CommandId::ToggleSidePanel, self.dock_visible()),
+                commands::spec(CommandId::ToggleSidePanel).shortcut(),
+                self.dock_visible(),
+                theme,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| {
+                    this.header_more_open = false;
+                    this.toggle_side_panel(cx);
+                }),
+            ))
             .child(header_menu_row(
                 "header-more-terminal",
                 "icons/terminal.svg",
@@ -3739,6 +3708,11 @@ impl OrbitApp {
         button_frame(div().id("sidebar-new-session"), &theme, ButtonSize::Large)
             .group(BUTTON_GROUP)
             .w_full()
+            // Half of Base08, so the icon column starts where the list rows'
+            // column starts. The 16px glyph stays centered in that column.
+            .pl(sidebar_new_task_pad_left(&theme))
+            .gap(px(0.))
+            .justify_start()
             .tip(commands::tooltip(CommandId::NewSession, false))
             .raised(theme.surface_elevated, &theme)
             .border_1()
@@ -3755,29 +3729,48 @@ impl OrbitApp {
                     this.on_new_session(&crate::NewSession, w, cx)
                 }),
             )
-            .child(icon(
-                "icons/task-add-01.svg",
-                ButtonSize::Large.icon_size().px(&theme),
-                theme.accent_text,
-            ))
+            .child(
+                div()
+                    .flex_none()
+                    .w(sidebar_icon_column(&theme))
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon(
+                        "icons/task-add-01.svg",
+                        IconSize::Medium.px(&theme),
+                        theme.accent_text,
+                    )),
+            )
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_primary)
-                    .child(tr!("view.new_task")),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .ml(button::keybinding_gap(&theme))
-                    .text_size(TextSize::Small.px(&theme))
-                    .text_color(theme.text_muted)
-                    .child(crate::platform::shortcuts::label(
-                        crate::platform::shortcuts::NEW_SESSION,
-                    )),
+                    .h_full()
+                    .ml(DynamicSpacing::Base06.px(&theme))
+                    .flex()
+                    .items_center()
+                    .gap(button::gap(&theme))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_primary)
+                            .child(tr!("view.new_task")),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .ml(button::keybinding_gap(&theme))
+                            .text_size(TextSize::Small.px(&theme))
+                            .text_color(theme.text_muted)
+                            .child(crate::platform::shortcuts::label(
+                                crate::platform::shortcuts::NEW_SESSION,
+                            )),
+                    ),
             )
     }
 

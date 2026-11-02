@@ -7,7 +7,7 @@ use crate::sessions::cap_chars;
 use crate::shimmer::ShimmerText;
 use crate::theme::tokens::{
     context_menu, list_item, picker, popover, tooltip, BufferLineHeight, ButtonSize,
-    DynamicSpacing, IconSize, Radius, StyledExt, TextSize,
+    DynamicSpacing, IconSize, Radius, StyledExt, TextSize, BORDER_WIDTH,
 };
 use crate::workspace_mark::{self, WorkspaceMark};
 
@@ -285,7 +285,7 @@ fn emit_workspace_group(
     }
 
     // Sessions start at the base cap and grow one step per "Show more"
-    // click, so a group with a long history reveals three rows at a time.
+    // click, so a group with a long history reveals five rows at a time.
     let extra = expanded_session_groups.get(&label).copied().unwrap_or(0);
     let limit = SIDEBAR_GROUP_SESSIONS_VISIBLE.saturating_add(extra);
     let mut visible = visible_sessions_in_group(ixs, sessions, limit, active_path);
@@ -479,11 +479,11 @@ pub(crate) fn sticky_sidebar_header(list: &ListState, rows: &[SideRow]) -> Optio
 
 /// The one glyph a session row spends on execution state.
 ///
-/// The row keeps a *lane* for it — the leading 16px of every row, at the same
-/// x — so the state of the whole list is one vertical scan away, instead of a
-/// word at the end of each title competing with the name for the line. Glyph,
-/// ink, and words resolve separately from the state, so the mapping is
-/// testable without a theme and paints from exactly one place.
+/// Progress paints in the leading list-marker slot (the dot becomes the
+/// spinner). Every other state paints in the trailing badge, so a lock, an
+/// eye, or a cross never shares the row with a second "what is happening"
+/// glyph. Glyph, ink, and words resolve separately from the state, so the
+/// mapping is testable without a theme and paints from exactly one place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StatusLane {
     /// A run is in flight; the glyph spins.
@@ -538,13 +538,12 @@ pub(crate) fn status_lane(status: Option<SessionStatus>, review: Option<ReviewMa
     }
 }
 
-/// The lane glyph, or nothing. `Idle` and `Unknown` paint no glyph at all: a
-/// session that has never run has no state to report, and a column of faint
-/// dots would make the states that *do* matter harder to spot. The lane still
-/// reserves its width either way, so every row's text stays on one x.
-///
-/// The spinner is the only glyph that moves: a run in flight is the only thing
-/// on the row that is still happening.
+/// The trailing glyph, or nothing. `Idle` and `Unknown` paint no glyph: a
+/// session that has never run has no state to report. Progress is not painted
+/// here — the leading list marker becomes the spinner — so this lane never
+/// draws a second one. The trailing slot still reserves its width for every
+/// other state, including the empty Idle / Unknown slot, so an age does not
+/// jump when a glyph appears.
 pub(crate) fn status_lane_icon(lane: StatusLane) -> Option<&'static str> {
     Some(match lane {
         StatusLane::Progress => "icons/running-spinner.svg",
@@ -600,23 +599,13 @@ const SIDEBAR_STATUS_LANE: f32 = 16.;
 
 /// Paint the status independently of hover, with a tooltip describing its meaning.
 fn session_status_lane(
-    id: usize,
     lane: StatusLane,
     status: Option<SessionStatus>,
     theme: Theme,
 ) -> AnyElement {
     let ink = status_lane_ink(lane, &theme);
     let size = IconSize::XSmall.px(&theme);
-    let glyph: Option<AnyElement> = if lane == StatusLane::Progress {
-        Some(crate::app::running_spinner(
-            ElementId::NamedInteger("side-lane".into(), id as u64),
-            size,
-            ink,
-            theme,
-        ))
-    } else {
-        status_lane_icon(lane).map(|path| icon(path, size, ink).into_any_element())
-    };
+    let glyph = status_lane_icon(lane).map(|path| icon(path, size, ink).into_any_element());
     let lane_el = div()
         .flex_none()
         .size(px(SIDEBAR_STATUS_LANE))
@@ -640,6 +629,161 @@ fn session_status_lane(
         Some(tip) => lane_el.tip(tip).into_any_element(),
         None => lane_el.into_any_element(),
     }
+}
+
+/// Width of the sidebar's icon column: the project-mark tile, a 16px glyph
+/// centered in `IconSize::Medium` plus `Base08`. Session dots, running
+/// spinners, disclosure chevrons, project marks, and the New Task icon share it.
+pub(super) fn sidebar_icon_column(theme: &Theme) -> Pixels {
+    IconSize::Medium.px(theme) + DynamicSpacing::Base08.px(theme)
+}
+
+/// New Task's left padding: half of `Base08`, so its icon column starts where
+/// the list rows' column starts.
+pub(super) fn sidebar_new_task_pad_left(theme: &Theme) -> Pixels {
+    DynamicSpacing::Base08.px(theme) * 0.5
+}
+
+/// Horizontal padding of the session list. The nav inset is `0.75rem`; this
+/// pulls back by half of `Base08` so the card's border and inner pad land the
+/// icon column on New Task's column.
+pub(super) fn sidebar_list_pad(theme: &Theme) -> Pixels {
+    px(f32::from(theme.rems(0.75)) - f32::from(DynamicSpacing::Base08.px(theme)) / 2.)
+}
+
+/// Left edge of a 16px glyph in that column, measured from the sidebar's left.
+/// The glyph stays centered in the wider slot and lines up with Hide Sidebar.
+pub(super) fn sidebar_glyph_left(theme: &Theme) -> f32 {
+    let slot = f32::from(sidebar_icon_column(theme));
+    let icon = f32::from(IconSize::Medium.px(theme));
+    f32::from(theme.rems(0.75))
+        + f32::from(BORDER_WIDTH)
+        + f32::from(sidebar_new_task_pad_left(theme))
+        + (slot - icon) / 2.
+}
+
+/// Left edge of the label that sits `Base06` past the icon column.
+/// New Task reaches it from the nav inset, a hairline, and [`sidebar_new_task_pad_left`].
+pub(super) fn sidebar_new_task_label_x(theme: &Theme) -> f32 {
+    f32::from(theme.rems(0.75))
+        + f32::from(BORDER_WIDTH)
+        + f32::from(sidebar_new_task_pad_left(theme))
+        + f32::from(sidebar_icon_column(theme))
+        + f32::from(DynamicSpacing::Base06.px(theme))
+}
+
+/// The same label edge for a list row: [`sidebar_list_pad`], then a hairline
+/// and `Base08` inside the card (Show more has no border, so its indent is
+/// the same 1px + `Base08`).
+pub(super) fn sidebar_list_label_x(theme: &Theme) -> f32 {
+    f32::from(sidebar_list_pad(theme))
+        + f32::from(BORDER_WIDTH)
+        + f32::from(DynamicSpacing::Base08.px(theme))
+        + f32::from(sidebar_icon_column(theme))
+        + f32::from(DynamicSpacing::Base06.px(theme))
+}
+
+/// Left inset for a row that has no border of its own. Session cards and
+/// workspace headers get the same content x from a 1px border plus `Base08`.
+fn sidebar_row_indent(theme: &Theme) -> Pixels {
+    px(1.) + DynamicSpacing::Base08.px(theme)
+}
+
+/// A glyph centered in the icon column, one title-line tall, so a session row
+/// does not grow to the project tile's square.
+fn sidebar_icon_slot(theme: &Theme, glyph: impl IntoElement) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(sidebar_icon_column(theme))
+        .h(BufferLineHeight::Standard.resolve(TextSize::Default.px(theme)))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(glyph)
+}
+
+/// The session row's leading marker. A dot for every state except Progress,
+/// which replaces it with the running spinner. The predicate is `status_lane`,
+/// not the wider `running` flag, so a wait for approval keeps its lock.
+fn session_list_mark(
+    id: usize,
+    lane: StatusLane,
+    status: Option<SessionStatus>,
+    dot: Hsla,
+    theme: Theme,
+) -> AnyElement {
+    let glyph = if lane == StatusLane::Progress {
+        crate::app::running_spinner(
+            ElementId::NamedInteger("side-mark".into(), id as u64),
+            IconSize::Medium.px(&theme),
+            status_lane_ink(lane, &theme),
+            theme,
+        )
+    } else {
+        div().size(px(6.)).rounded_full().bg(dot).into_any_element()
+    };
+    let slot = div()
+        .id(ElementId::NamedInteger("side-mark-slot".into(), id as u64))
+        .flex_none()
+        .w(sidebar_icon_column(&theme))
+        .h(BufferLineHeight::Standard.resolve(TextSize::Default.px(&theme)))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(glyph);
+    if lane == StatusLane::Progress {
+        if let Some(tip) = status_lane_tip(lane, status) {
+            return slot.tip(tip).into_any_element();
+        }
+    }
+    slot.into_any_element()
+}
+
+/// Project mark and disclosure chevron in one tile. The chevron replaces the
+/// mark only while the row group is hovered — keyboard focus does not.
+fn workspace_disclosure(
+    collapsed: bool,
+    mark: &WorkspaceMark,
+    logo: Option<&Arc<Image>>,
+    status_icon: Option<&SharedString>,
+    theme: &Theme,
+) -> impl IntoElement {
+    let chevron = if collapsed {
+        "icons/chevron-right.svg"
+    } else {
+        "icons/chevron-down.svg"
+    };
+    div()
+        .relative()
+        .flex_none()
+        .size(sidebar_icon_column(theme))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .group_hover("workspace-row", |layer| layer.opacity(0.))
+                .child(project_icon(
+                    mark,
+                    logo,
+                    status_icon,
+                    IconSize::Medium,
+                    theme,
+                )),
+        )
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .opacity(0.)
+                .group_hover("workspace-row", |layer| layer.opacity(1.))
+                .child(icon(chevron, IconSize::Medium.px(theme), theme.text_muted)),
+        )
 }
 
 /// The two arrows a branch needs, as `(ahead, behind)` labels. A count of zero
@@ -935,26 +1079,24 @@ pub(crate) fn render_side_row(
             let workspace_logo = logos.get(cwd);
             let workspace_icon = workspace_icons.get(cwd);
             // Outer shell: inter-group spacing only — horizontal inset comes
-            // from the list's `px_2`, so the hover pill lines up with the
-            // session rows' (inside the same container) and the chevron lands
-            // under the "Projects" label. Hover lives on the inner card so the
-            // highlight doesn't bleed into the padding. The header is the
-            // parent row above its sessions: chevron + mark + name, the
-            // session count pinned to the very end, and the row actions (a `…`
-            // menu, then the new-session `+`) fading in to the count's left on
-            // hover (all flex_none, so nothing shifts when they appear). The
-            // name and tinted mark distinguish the group from its sessions;
-            // the count stays visible while the contextual actions reveal.
+            // from the list's `px_2`. Hover and the disclosure swap live on
+            // the inner card, so the gap between groups does not flip the
+            // mark into a chevron. The header is the parent row above its
+            // sessions: one icon-column tile (the mark, a chevron on hover)
+            // plus the name, the session count pinned to the very end, and
+            // the row actions (a `…` menu, then the new-session `+`) fading
+            // in to the count's left on hover. The name and tinted mark
+            // distinguish the group from its sessions.
             div()
                 .w_full()
                 .pt(DynamicSpacing::Base12.px(&theme))
                 .pb(DynamicSpacing::Base02.px(&theme))
-                .group("workspace-row")
                 .child(
                     div()
+                        .group("workspace-row")
                         .w_full()
                         .min_h(ButtonSize::Default.height(&theme))
-                        .pl(DynamicSpacing::Base06.px(&theme))
+                        .pl(DynamicSpacing::Base08.px(&theme))
                         .pr(DynamicSpacing::Base08.px(&theme))
                         .rounded(list_item::RADIUS.px(&theme))
                         .flex()
@@ -999,20 +1141,11 @@ pub(crate) fn render_side_row(
                                 });
                             }
                         })
-                        .child(icon(
-                            if *collapsed {
-                                "icons/chevron-right.svg"
-                            } else {
-                                "icons/chevron-down.svg"
-                            },
-                            IconSize::XSmall.px(&theme),
-                            theme.text_muted,
-                        ))
-                        .child(project_icon(
+                        .child(workspace_disclosure(
+                            *collapsed,
                             &mark,
                             workspace_logo,
                             workspace_icon,
-                            IconSize::Medium,
                             &theme,
                         ))
                         .child(
@@ -1125,10 +1258,13 @@ pub(crate) fn render_side_row(
                         cx.notify();
                     });
                 })
-                .child(icon(
-                    "icons/chevron-down.svg",
-                    IconSize::XSmall.px(&theme),
-                    theme.text_muted,
+                .child(sidebar_icon_slot(
+                    &theme,
+                    icon(
+                        "icons/chevron-down.svg",
+                        IconSize::XSmall.px(&theme),
+                        theme.text_muted,
+                    ),
                 ))
                 .child(
                     div()
@@ -1139,10 +1275,11 @@ pub(crate) fn render_side_row(
             let mut row = div()
                 .w_full()
                 .h(px(26.))
-                .pl(px(22.))
+                .pl(sidebar_row_indent(&theme))
                 .pr(DynamicSpacing::Base04.px(&theme))
                 .flex()
                 .items_center()
+                .gap(DynamicSpacing::Base06.px(&theme))
                 .rounded(list_item::RADIUS.px(&theme))
                 .when(cursor, |s| s.bg(theme.surface_hover))
                 .hover(|s| s.bg(theme.surface_hover))
@@ -1176,7 +1313,7 @@ pub(crate) fn render_side_row(
             div()
                 .w_full()
                 .h(px(26.))
-                .pl(px(22.))
+                .pl(sidebar_row_indent(&theme))
                 .pr(DynamicSpacing::Base08.px(&theme))
                 .flex()
                 .items_center()
@@ -1192,10 +1329,13 @@ pub(crate) fn render_side_row(
                         cx.notify();
                     });
                 })
-                .child(icon(
-                    "icons/chevron-up.svg",
-                    IconSize::XSmall.px(&theme),
-                    theme.text_muted,
+                .child(sidebar_icon_slot(
+                    &theme,
+                    icon(
+                        "icons/chevron-up.svg",
+                        IconSize::XSmall.px(&theme),
+                        theme.text_muted,
+                    ),
                 ))
                 .child(
                     div()
@@ -1319,7 +1459,7 @@ pub(crate) fn render_side_row(
                 .border_1()
                 .border_color(theme.border.opacity(0.))
                 .flex()
-                .items_center()
+                .items_start()
                 .gap(DynamicSpacing::Base06.px(&theme))
                 .when(active, |card| {
                     card.bg(theme.surface_selected)
@@ -1379,22 +1519,31 @@ pub(crate) fn render_side_row(
             } else {
                 meta_ink
             };
-            let has_state = !matches!(lane, StatusLane::Idle | StatusLane::Unknown);
-            let row_slot =
-                div()
-                    .flex_none()
-                    .max_w(px(110.))
-                    .truncate()
-                    .text_size(TextSize::XSmall.px(&theme))
-                    .text_color(slot_ink)
-                    .child(slot_words.unwrap_or_else(|| {
-                        if show_updated {
-                            age
-                        } else {
-                            String::new()
-                        }
-                    }));
-            let status_details = Some(
+            let has_state = lane != StatusLane::Progress
+                && !matches!(lane, StatusLane::Idle | StatusLane::Unknown);
+            let tail_label = if status == Some(SessionStatus::Disconnected) {
+                SessionStatus::Disconnected.label()
+            } else {
+                status_lane_words(lane).unwrap_or_else(|| {
+                    if show_updated {
+                        age
+                    } else {
+                        String::new()
+                    }
+                })
+            };
+            // Progress owns the leading spinner. An empty trailing capsule
+            // would only repeat it, so the badge stays away unless the row
+            // still has an age to show.
+            let show_badge = lane != StatusLane::Progress || !tail_label.is_empty();
+            let row_slot = div()
+                .flex_none()
+                .max_w(px(110.))
+                .truncate()
+                .text_size(TextSize::XSmall.px(&theme))
+                .text_color(slot_ink)
+                .child(tail_label);
+            let status_details = (pinned || archived || show_badge).then(|| {
                 div()
                     .flex_none()
                     .flex()
@@ -1414,73 +1563,79 @@ pub(crate) fn render_side_row(
                             meta_ink,
                         ))
                     })
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(DynamicSpacing::Base02.px(&theme))
-                            .px(DynamicSpacing::Base04.px(&theme))
-                            .py(DynamicSpacing::Base01.px(&theme))
-                            .rounded(Radius::Small.px(&theme))
-                            .when(has_state, |badge| {
-                                badge.bg(status_lane_ink(lane, &theme).opacity(0.10))
-                            })
-                            .child(session_status_lane(*ix, lane, status, theme))
-                            .child(row_slot),
-                    ),
-            );
-            card = card.child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .gap(DynamicSpacing::Base04.px(&theme))
-                    // Keep session indicators beside the title.
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap(DynamicSpacing::Base06.px(&theme))
-                            .child(title)
-                            .children(status_details)
-                            .when(active && show_workspace, |line| {
-                                line.child(
-                                    div()
-                                        .flex_none()
-                                        .px(DynamicSpacing::Base04.px(&theme))
-                                        .py(DynamicSpacing::Base01.px(&theme))
-                                        .rounded(Radius::Small.px(&theme))
-                                        .bg(theme.accent.opacity(0.10))
-                                        .text_size(TextSize::XSmall.px(&theme))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.accent_text)
-                                        .child(tr!("sidebar.current")),
-                                )
-                            }),
-                    )
-                    // Line 2 — what was actually asked, one line. An empty
-                    // message (a session with nothing sent yet) drops the line.
-                    // The text sits in a flex row with `flex_1 min_w_0` like the
-                    // title: `truncate()` on a bare block collapses the line to
-                    // its ellipsis instead of filling the column.
-                    .when(show_summary && !message.is_empty(), |col| {
-                        col.child(
-                            div().w_full().flex().items_center().child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(TextSize::Small.px(&theme))
-                                    .line_height(BufferLineHeight::Standard.relative())
-                                    .text_color(theme.text_secondary)
-                                    .child(message),
-                            ),
+                    .when(show_badge, |line| {
+                        line.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(DynamicSpacing::Base02.px(&theme))
+                                .px(DynamicSpacing::Base04.px(&theme))
+                                .py(DynamicSpacing::Base01.px(&theme))
+                                .rounded(Radius::Small.px(&theme))
+                                .when(has_state, |badge| {
+                                    badge.bg(status_lane_ink(lane, &theme).opacity(0.10))
+                                })
+                                .when(lane != StatusLane::Progress, |badge| {
+                                    badge.child(session_status_lane(lane, status, theme))
+                                })
+                                .child(row_slot),
                         )
-                    }),
-            );
+                    })
+            });
+            card = card
+                .child(session_list_mark(*ix, lane, status, meta_ink, theme))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .justify_center()
+                        .gap(DynamicSpacing::Base04.px(&theme))
+                        // Keep session indicators beside the title.
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap(DynamicSpacing::Base06.px(&theme))
+                                .child(title)
+                                .children(status_details)
+                                .when(active && show_workspace, |line| {
+                                    line.child(
+                                        div()
+                                            .flex_none()
+                                            .px(DynamicSpacing::Base04.px(&theme))
+                                            .py(DynamicSpacing::Base01.px(&theme))
+                                            .rounded(Radius::Small.px(&theme))
+                                            .bg(theme.accent.opacity(0.10))
+                                            .text_size(TextSize::XSmall.px(&theme))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.accent_text)
+                                            .child(tr!("sidebar.current")),
+                                    )
+                                }),
+                        )
+                        // Line 2 — what was actually asked, one line. An empty
+                        // message (a session with nothing sent yet) drops the line.
+                        // The text sits in a flex row with `flex_1 min_w_0` like the
+                        // title: `truncate()` on a bare block collapses the line to
+                        // its ellipsis instead of filling the column.
+                        .when(show_summary && !message.is_empty(), |col| {
+                            col.child(
+                                div().w_full().flex().items_center().child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(TextSize::Small.px(&theme))
+                                        .line_height(BufferLineHeight::Standard.relative())
+                                        .text_color(theme.text_secondary)
+                                        .child(message),
+                                ),
+                            )
+                        }),
+                );
             // Row actions live on the right-click context menu — the same
             // gesture the rest of the app uses for row actions — so there is
             // no hover-revealed '…' and the title owns the whole line. The
@@ -3378,6 +3533,7 @@ fn clamp_cursor(index: usize, count: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::tokens::{ButtonSize, BORDER_WIDTH};
 
     #[gpui::test]
     fn row_rename_waits_for_the_target_session_state(cx: &mut gpui::TestAppContext) {
@@ -3477,6 +3633,33 @@ mod tests {
             divergence_labels(Some((3, 4))),
             (Some("↑3".to_string()), Some("↓4".to_string()))
         );
+    }
+
+    /// New Task, project names, session titles, and Show more share one label
+    /// edge. The 16px glyph stays on the line Hide Sidebar already uses.
+    #[test]
+    fn sidebar_labels_share_one_left_edge() {
+        let themes = [
+            crate::theme::Theme::dark(),
+            crate::theme::Theme::dark().with_ui(crate::theme::UiPrefs {
+                ui_font_size: 18.,
+                spacing_density: 80,
+                ..crate::theme::UiPrefs::default()
+            }),
+        ];
+        for theme in &themes {
+            assert!(
+                (sidebar_new_task_label_x(theme) - sidebar_list_label_x(theme)).abs() < 0.01,
+                "New Task and the list rows must start their text together"
+            );
+            let hide_sidebar_glyph = f32::from(theme.rems(0.75))
+                + f32::from(BORDER_WIDTH)
+                + f32::from(ButtonSize::Large.padding_x(theme));
+            assert!(
+                (sidebar_glyph_left(theme) - hide_sidebar_glyph).abs() < 0.01,
+                "the centered glyph must stay on the Hide Sidebar line"
+            );
+        }
     }
 
     /// The lane is the sidebar's whole answer to "what is this row doing", so

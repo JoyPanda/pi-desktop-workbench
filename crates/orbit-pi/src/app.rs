@@ -61,7 +61,9 @@ use crate::context_meter::{self, ContextMeterData, ContextPopup};
 use crate::custom_ui::{CustomCancel, CustomFrame, CustomInput, CustomUi, CustomUiSurfaces};
 use crate::dialog::{ApprovalRequest, Dialog, DialogRequest, DialogResponse};
 use crate::git_panel::GitPanel;
-use crate::mentions::{self, AcEntry, SharedAutocomplete, SlashCommand, Trigger, TriggerKind};
+use crate::mentions::{
+    self, AcEntry, MentionIndex, SharedAutocomplete, SlashCommand, Trigger, TriggerKind,
+};
 use crate::model_selector::{
     provider_icon, thinking_display, thinking_icon, ModelSelector, PickerKind,
 };
@@ -88,7 +90,7 @@ use crate::workspace_picker::{WorkspaceEntry, WorkspacePicker};
 const SIDEBAR_DEFAULT_W: f32 = 248.;
 const SIDEBAR_MIN_W: f32 = 200.;
 /// Sessions shown under each workspace group before "Show more" appears.
-const SIDEBAR_GROUP_SESSIONS_VISIBLE: usize = 3;
+const SIDEBAR_GROUP_SESSIONS_VISIBLE: usize = 5;
 /// Room the side-pane resize keeps for the transcript column.
 const PANE_MAX_RESERVE: f32 = 480.;
 
@@ -107,6 +109,9 @@ const CONTENT_MAX_W: f32 = 960.;
 
 /// Rows shown in the `/`-command and `@`-file autocomplete menu.
 const AUTOCOMPLETE_LIMIT: usize = 8;
+/// Watcher-driven workspace index rebuild throttle. A burst of file saves must
+/// not pay a full walk per event (the §30 `git worktree list` rule).
+const MENTION_REBUILD_INTERVAL: Duration = Duration::from_secs(2);
 /// Attachments — images, pasted-text pills, and files, together — that may
 /// ride along with one prompt.
 const MAX_ATTACHMENTS: usize = 8;
@@ -362,11 +367,11 @@ pub struct OrbitApp {
     /// the settled state with no launch animation.
     sidebar_slide_gen: u64,
     /// Whether a feature page (Files / Git / Usage / AI Review) was open on
-    /// the previous frame. A full-page Review pane yields only to a page that
+    /// the previous frame. A full-width dock yields only to a page that
     /// *opens* under it, never to one that was already there when the reader
     /// maximized.
     feature_open_last: bool,
-    /// Whether the Review pane was full-page on the previous frame. The
+    /// Whether the right dock was full-width on the previous frame. The
     /// rising edge opens the sessions sidebar, so a maximized review never
     /// strands the reader without a way to switch sessions.
     pane_full_last: bool,
@@ -417,6 +422,9 @@ pub struct OrbitApp {
     /// Settings → Agent: whether an agent call the reader has not toggled
     /// opens. Persisted to `~/.orbit-pi/agent-calls.json` (issue #80).
     agent_calls: crate::agent_call_display::AgentCallDisplay,
+    /// Settings → Behavior: open a thinking step while it streams.
+    /// Persisted to `~/.orbit-pi/thinking-display.json`.
+    expand_thinking: bool,
     /// Settings → Privacy: the session-retention policy. Persisted to
     /// `~/.orbit-pi/session-retention.json`; applied once per launch.
     retention: crate::session_retention::RetentionConfig,
@@ -546,8 +554,15 @@ pub struct OrbitApp {
     subagents: crate::subagent_status::SubagentBoard,
     subagent_scrolls: HashMap<String, ScrollHandle>,
     subagent_list_scroll: ScrollHandle,
-    /// Width of the subagent dock. Review and Project keep their own.
-    subagent_width: Pixels,
+    /// The right dock's tab list: Changes, Files, and subagent output.
+    right_dock: right_dock::RightDock,
+    /// Last `SidePane::reveal_epoch` the dock acted on.
+    dock_seen_reveal: u64,
+    /// Whether the dock's "+" menu is showing.
+    dock_add_menu_open: bool,
+    /// When the "+" menu was last dismissed by a press outside it, so the
+    /// same click cannot reopen it.
+    dock_menu_dismissed_at: Option<Instant>,
     /// Last scroll epoch placed into the open transcript, so a render does
     /// not pull the reader back to the anchor they are already on.
     subagent_scroll_placed: u64,
@@ -654,7 +669,7 @@ pub struct OrbitApp {
     /// Workspace groups whose session list is expanded past
     /// [`SIDEBAR_GROUP_SESSIONS_VISIBLE`]. The value is how many extra
     /// sessions are revealed; each "Show more" click adds one step of
-    /// [`SIDEBAR_GROUP_SESSIONS_VISIBLE`], so a long history grows three rows
+    /// [`SIDEBAR_GROUP_SESSIONS_VISIBLE`], so a long history grows five rows
     /// at a time instead of landing all at once.
     expanded_session_groups: HashMap<String, usize>,
     /// The projects Orbit lists in its sidebar — its own, user-curated folder
@@ -802,15 +817,28 @@ pub struct OrbitApp {
     last_ac_trigger: Option<(TriggerKind, String)>,
     /// Slash commands reported by pi (`get_commands` — extensions + skills).
     slash_commands: Vec<SlashCommand>,
-    /// Workspace files for `@`-mentions when `fd` is not available.
-    mention_files: Vec<String>,
-    mention_files_workspace: Option<PathBuf>,
-    /// Last `@` query searched with `fd`. Redraws reuse this instead of
-    /// spawning `fd` on every frame.
-    mention_fd_key: Option<(PathBuf, String)>,
-    mention_fd_hits: Vec<String>,
-    /// `fd` could not be started; `@` stays on the bounded directory walk.
-    mention_fd_missing: bool,
+    /// The last workspace snapshot and the `@` index built from it, shared with
+    /// the Explorer panel. One walk, one truth: `@` and the tree cannot
+    /// disagree about what exists.
+    workspace_index: Option<Arc<crate::explorer::walk::Snapshot>>,
+    mention_index: Option<Arc<MentionIndex>>,
+    mention_index_workspace: Option<PathBuf>,
+    /// The workspace changed since the index was built.
+    mention_index_stale: bool,
+    /// Bumped per rebuild; a late result whose generation no longer matches is
+    /// dropped.
+    mention_index_generation: u64,
+    /// Watcher-driven rebuild throttle (§30 pattern): a burst of saves must not
+    /// pay a full walk per event.
+    mention_index_due: Option<Instant>,
+    /// A trailing-edge rebuild is already scheduled for `mention_index_due`.
+    mention_rebuild_scheduled: bool,
+    /// `@` hits for (generation, query). `sync_autocomplete` runs every frame
+    /// and the popup asks again while rendering.
+    mention_query_memo: Option<(u64, String, Vec<String>)>,
+    /// Recently opened or sent `@path`s, most recent first. In-process only;
+    /// they order the empty `@` menu.
+    mention_recents: Vec<String>,
     /// Images queued to ride along with the next prompt (pasted or picked).
     attachments: Vec<Attachment>,
     /// Non-image files queued for the next prompt. They travel to pi as
@@ -1740,12 +1768,10 @@ impl OrbitApp {
 
         // Right side pane: Review (git diff).
         let sidepane = cx.new(SidePane::new);
-        let sidepane_sub = cx.observe(&sidepane, |this, pane, cx| {
-            // Review and the Explorer are mutually exclusive right docks.
-            // Catch every path that opens Review, not just the top-bar toggle.
-            if pane.read(cx).is_open() {
-                this.project_panel.update(cx, |panel, cx| panel.close(cx));
-            }
+        let sidepane_sub = cx.observe(&sidepane, |this, _pane, cx| {
+            // Review opens and closes through many paths (transcript cards,
+            // the Git page, the palette); the dock folds each into its tabs.
+            this.sync_dock(cx);
             // A full-width Review pane hides the terminal's chat column.
             this.sync_terminal_active(cx);
             cx.notify();
@@ -1774,12 +1800,13 @@ impl OrbitApp {
                         let _ = app_weak.update(cx, |app, cx| app.on_file_op(request, cx));
                     }
                 }),
-                Rc::new(move |cx: &mut App| {
-                    // The panel closes itself inside its own listener (it already
-                    // holds that entity's lease), so this only repaints the
-                    // shell. Calling back into `project_panel.update` here would
-                    // double-lease the entity and abort.
-                    let _ = app_weak.update(cx, |_app, cx| cx.notify());
+                Rc::new({
+                    let app_weak = app_weak.clone();
+                    move |cx: &mut App| {
+                        // The refresh button is a user action on a tree they are
+                        // looking at: skip the watcher throttle.
+                        let _ = app_weak.update(cx, |app, cx| app.invalidate_index(true, cx));
+                    }
                 }),
                 cx,
             )
@@ -1800,6 +1827,8 @@ impl OrbitApp {
         });
         let file_viewer_sub = cx.observe(&file_viewer, |this, viewer, cx| {
             let active = viewer.read(cx).active_display();
+            // What the user is reading orders the empty `@` menu.
+            this.note_recent_file(active.as_deref());
             this.project_panel
                 .update(cx, |panel, cx| panel.set_active(active, cx));
             cx.notify();
@@ -1939,6 +1968,7 @@ impl OrbitApp {
             auto_retry: true,
             auto_title: crate::auto_title::AutoTitleConfig::load(),
             agent_calls: crate::agent_call_display::AgentCallDisplay::load(),
+            expand_thinking: crate::thinking_display::ThinkingDisplay::load().expand_while_streaming,
             retention: crate::session_retention::RetentionConfig::load(),
             retention_ran: false,
             temp_files: crate::temp_files::TempFiles::default(),
@@ -1992,7 +2022,10 @@ impl OrbitApp {
             subagents: crate::subagent_status::SubagentBoard::default(),
             subagent_scrolls: HashMap::new(),
             subagent_list_scroll: ScrollHandle::new(),
-            subagent_width: px(crate::layout::subagent_width().unwrap_or(460.)),
+            right_dock: right_dock::RightDock::default(),
+            dock_seen_reveal: 0,
+            dock_add_menu_open: false,
+            dock_menu_dismissed_at: None,
             subagent_scroll_placed: 0,
             subagent_list_rows: 0,
             subagent_folds: HashMap::new(),
@@ -2093,11 +2126,15 @@ impl OrbitApp {
             autocomplete_dismissed: false,
             last_ac_trigger: None,
             slash_commands: Vec::new(),
-            mention_files: Vec::new(),
-            mention_files_workspace: None,
-            mention_fd_key: None,
-            mention_fd_hits: Vec::new(),
-            mention_fd_missing: false,
+            workspace_index: None,
+            mention_index: None,
+            mention_index_workspace: None,
+            mention_index_stale: false,
+            mention_index_generation: 0,
+            mention_index_due: None,
+            mention_rebuild_scheduled: false,
+            mention_query_memo: None,
+            mention_recents: Vec::new(),
             attachments: Vec::new(),
             files: Vec::new(),
             pasted_texts: Vec::new(),
@@ -2281,7 +2318,6 @@ impl OrbitApp {
                 review_sidepane.update(cx, |pane, cx| pane.show_file(path, cx));
                 let _ = review_app.update(cx, |app, cx| {
                     app.git_open = false;
-                    app.subagents.yield_dock();
                     cx.notify();
                 });
             }));
@@ -2467,6 +2503,11 @@ impl OrbitApp {
         self.worktree_fetch = self.worktree_fetch.wrapping_add(1);
         self.current_workspace = Some(cwd.clone());
         self.sync_review_context(cx);
+        // One walk feeds both the Explorer tree and `@`, so the picture is
+        // ready before either is asked for. (Deliberately here and not in
+        // `sync_review_context`: that runs on every session switch and turn
+        // checkpoint, and a walk per call is not free.)
+        self.ensure_mention_index(true, cx);
     }
 
     /// Push the workspace / session / turn context the Review pane and the
@@ -2517,14 +2558,10 @@ impl OrbitApp {
     }
 
     /// Whether the terminal panel should poll: visible only while no full-page
-    /// surface owns the window and Review is not full-width. Pushed from the
+    /// surface owns the window and the dock is not full-width. Pushed from the
     /// page toggles and the sidepane observer instead of every render.
     pub(super) fn sync_terminal_active(&mut self, cx: &mut Context<Self>) {
-        let pane_visible = self.sidepane.read(cx).is_open()
-            && !self.settings_open
-            && !self.usage_open
-            && self.dependencies_ready();
-        let pane_full = pane_visible && self.sidepane.read(cx).is_full_width();
+        let pane_full = self.dock_full_width(cx);
         let visible = self.terminal_panel.read(cx).is_open()
             && !self.settings_open
             && !self.usage_open
@@ -3642,6 +3679,7 @@ mod pi_update_ui;
 mod pickers;
 mod plugin_update_ui;
 mod retention_ui;
+mod right_dock;
 mod runtime;
 mod search;
 mod session;

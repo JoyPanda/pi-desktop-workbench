@@ -589,6 +589,47 @@ mod tests {
     }
 
     #[gpui::test]
+    fn collapsing_a_row_while_scrolled_up_keeps_the_anchor(cx: &mut gpui::TestAppContext) {
+        let state = MessageScrollerState::new(3);
+        let heights: RowHeights =
+            Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+        heights.borrow_mut().insert(2, 1600.);
+        let cx = cx.add_empty_window();
+        let probe = cx.update(|_, cx| {
+            cx.new(|_| TranscriptProbe {
+                state: state.clone(),
+                heights: heights.clone(),
+            })
+        });
+        draw_probe(cx, &probe);
+        // Far enough from the tail that a 200px shrink still leaves a full
+        // viewport of this row below the anchor. A bottom-aligned list pulls
+        // back to the tail only when the content under the anchor no longer
+        // fills the viewport; this case must not.
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: gpui::point(px(300.), px(200.)),
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(600.))),
+            ..Default::default()
+        });
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        let before = state.list_state().logical_scroll_top();
+        assert!(before.offset_in_item > px(0.));
+        let top = cx.debug_bounds("probe-row-2").unwrap().top();
+
+        heights.borrow_mut().insert(2, 1400.);
+        assert!(state.remeasure_items(2..3));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        assert_eq!(
+            state.list_state().logical_scroll_top().offset_in_item,
+            before.offset_in_item
+        );
+        assert_eq!(cx.debug_bounds("probe-row-2").unwrap().top(), top);
+        assert!(cx.debug_bounds("probe-row-2").unwrap().bottom() > px(400.));
+    }
+
+    #[gpui::test]
     fn streaming_and_appending_below_history_keep_the_visible_row_fixed(
         cx: &mut gpui::TestAppContext,
     ) {

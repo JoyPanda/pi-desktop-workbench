@@ -5,7 +5,7 @@
 //! a one-line preview. The dock shows one leaf. Inspect replies land in that
 //! leaf's cache; the dock scrolls only the leaf it is showing.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -17,8 +17,8 @@ use crate::theme::{self, Theme};
 use crate::transcript_view::{self, CopiedSections, ExpandedBlocks};
 use gpui::{
     canvas, div, fill, point, prelude::*, px, size, AnyElement, Background, Bounds, ClickEvent,
-    ClipboardItem, Context, CursorStyle, ElementId, FontWeight, IntoElement, Pixels, Render,
-    ScrollHandle, ScrollWheelEvent, Window,
+    ClipboardItem, Context, ElementId, FontWeight, IntoElement, Pixels, Render, ScrollHandle,
+    ScrollWheelEvent, Window,
 };
 use orbit_rpc::CommandBody;
 
@@ -29,12 +29,6 @@ const GROUP_H: f32 = 22.;
 /// messages sit below the anchor". Inspect replaces the window, so the anchor
 /// is a count, not a pixel locked to text that is about to be swapped out.
 const MESSAGE_ROW: f32 = 22.;
-
-pub(super) const SUBAGENT_MIN_W: f32 = 300.;
-pub(super) const SUBAGENT_MAX_W: f32 = 900.;
-
-/// Drag marker for the subagent dock's left edge.
-pub(super) struct SubagentResize;
 
 /// Painted fold keys for one leaf. Content hashes live on the board.
 pub(super) struct SubagentFoldUi {
@@ -56,6 +50,15 @@ impl SubagentFoldUi {
     }
 }
 
+/// Drag payload for the output pane's scrollbar thumb. The list thumb stays
+/// paint-only. `Cell` so the drag constructor can arm it without `&mut`.
+pub(super) struct SubagentThumbDrag {
+    pub leaf_id: String,
+    pub start_y: Cell<f32>,
+    pub start_offset: Cell<f32>,
+    pub armed: Cell<bool>,
+}
+
 struct SubagentDragGhost;
 
 impl Render for SubagentDragGhost {
@@ -65,11 +68,6 @@ impl Render for SubagentDragGhost {
 }
 
 impl OrbitApp {
-    pub(super) fn subagent_pane_width(&self) -> Pixels {
-        self.subagent_width
-            .clamp(px(SUBAGENT_MIN_W), px(SUBAGENT_MAX_W))
-    }
-
     /// Place the open transcript from its anchor when a new inspect arrived
     /// or the reader switched leaves. A wheel that only moves within the
     /// current window does not come through here, so it is not pulled back.
@@ -79,15 +77,22 @@ impl OrbitApp {
         if epoch != self.subagent_scroll_placed {
             self.subagent_scroll_placed = epoch;
             if self.subagents.is_open() {
-                if let Some(id) = self.subagents.selected_id().map(str::to_string) {
+                if let Some(id) = self.subagents.pane_key().map(str::to_string) {
                     let anchor = self.subagents.anchor(&id);
+                    let foreground = self.subagents.foreground_id().is_some();
                     let count = self.subagents.messages(&id).len();
                     let handle = self
                         .subagent_scrolls
                         .entry(id)
                         .or_insert_with(ScrollHandle::new)
                         .clone();
-                    if anchor.following || count == 0 {
+                    // A foreground body has no message rows, so `count == 0`
+                    // must not pull a reader who scrolled up back to the end.
+                    if foreground {
+                        if anchor.following {
+                            handle.scroll_to_bottom();
+                        }
+                    } else if anchor.following || count == 0 {
                         handle.scroll_to_bottom();
                     } else {
                         let index = count.saturating_sub(anchor.from_bottom.min(count));
@@ -132,13 +137,22 @@ impl OrbitApp {
                     .reconcile_code_folds(&owner, &layout, &open, &seeded);
             }
         }
-        let Some(id) = self.subagents.selected_id().map(str::to_string) else {
+        let Some(id) = self.subagents.pane_key().map(str::to_string) else {
             return;
         };
         if !self.subagents.is_open() {
             return;
         }
-        let sites = subagent_code_sites(&self.subagents, &id);
+        let sites = if self.subagents.foreground_id().is_some() {
+            let text = self
+                .transcript
+                .foreground_tool(&id)
+                .map(|tool| tool.text)
+                .unwrap_or_default();
+            transcript_view::markdown_code_sites(&text, 0)
+        } else {
+            subagent_code_sites(&self.subagents, &id)
+        };
         let hashes: Vec<u64> = sites
             .iter()
             .filter(|(_, _, hash)| self.subagents.code_expanded(&id, *hash))
@@ -161,8 +175,8 @@ impl OrbitApp {
     }
 
     pub(super) fn after_subagent_board(&mut self, cx: &mut Context<Self>) {
-        let free = !self.sidepane.read(cx).is_open() && !self.project_panel.read(cx).is_open();
-        self.subagents.consider_auto_open(free);
+        let free = self.right_dock.tabs().is_empty();
+        self.subagents.consider_auto_open(free, None);
         self.dispatch_subagent_inspects();
         cx.notify();
     }
@@ -198,25 +212,64 @@ impl OrbitApp {
         }
     }
 
+    /// A click on a subagent row: show its tab, or close the tab when it is
+    /// already on screen.
     fn open_subagent(&mut self, id: &str, cx: &mut Context<Self>) {
-        if self.subagents.click(id) {
-            self.sidepane.update(cx, |pane, cx| pane.close(cx));
-            self.project_panel.update(cx, |panel, cx| panel.close(cx));
+        let tab = super::right_dock::DockTab::Subagent(id.to_string());
+        if self.dock_visible() && self.right_dock.is_active(&tab) {
+            self.close_dock_tab(&tab, cx);
+        } else {
+            self.open_subagent_tab(id, cx);
         }
-        self.dispatch_subagent_inspects();
-        cx.notify();
     }
 
-    fn close_subagent_panel(&mut self, cx: &mut Context<Self>) {
-        self.subagents.close_explicit();
+    /// A click on a foreground Task row. Same dock hand-off as a background
+    /// leaf, without an inspect (a foreground tool has no async id).
+    pub(super) fn subagent_tool_opener(
+        &self,
+        cx: &Context<Self>,
+    ) -> crate::transcript_view::SubagentToolOpener {
+        let this = cx.weak_entity();
+        Rc::new(move |id, _window, cx| {
+            let _ = this.update(cx, |app, cx| app.open_foreground_tool(&id, cx));
+        })
+    }
+
+    fn open_foreground_tool(&mut self, id: &str, cx: &mut Context<Self>) {
+        let tab = super::right_dock::DockTab::Task(id.to_string());
+        if self.dock_visible() && self.right_dock.is_active(&tab) {
+            self.close_dock_tab(&tab, cx);
+        } else {
+            self.open_task_tab(id, cx);
+        }
+    }
+
+    /// Auto-open runs on a foreground start and on that tool's first text.
+    /// Later updates do not ask again, so closing Review does not pop the dock.
+    pub(super) fn consider_foreground_arm(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.transcript.take_foreground_arm() else {
+            return;
+        };
+        let free = self.right_dock.tabs().is_empty();
+        let lone = self.transcript.lone_running_subagent();
+        let foreground = lone.filter(|lone| lone == &id);
+        self.subagents
+            .consider_auto_open(free, foreground.as_deref());
         cx.notify();
     }
 
     fn copy_subagent(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.subagents.selected_id() else {
+        let Some(id) = self.subagents.pane_key() else {
             return;
         };
-        let text = self.subagents.copy_text(id);
+        let text = if self.subagents.foreground_id().is_some() {
+            self.transcript
+                .foreground_tool(id)
+                .map(|tool| tool.text)
+                .unwrap_or_default()
+        } else {
+            self.subagents.copy_text(id)
+        };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
     }
 
@@ -293,7 +346,10 @@ impl OrbitApp {
                 )
                 .into_any_element(),
             ListRow::Agent(id) => {
-                let open = self.subagents.is_open() && self.subagents.selected_id() == Some(&id);
+                let open = self.dock_visible()
+                    && self
+                        .right_dock
+                        .is_active(&super::right_dock::DockTab::Subagent(id.clone()));
                 let label = self.subagents.display_label(&id);
                 let preview = self.subagents.preview(&id);
                 let mark = self.subagents.state(&id).and_then(end_mark);
@@ -357,50 +413,51 @@ impl OrbitApp {
 
     pub(super) fn subagent_pane(&self, cx: &Context<Self>) -> AnyElement {
         let theme = *theme::get(cx);
-        let width = self.subagent_pane_width();
-        let leaf = self.subagents.viewed();
-        let id = leaf.map(|leaf| leaf.id.clone()).unwrap_or_default();
-        let label = self.subagents.display_label(&id);
-        let state = leaf.map(|leaf| leaf.state.clone()).unwrap_or_default();
-        let mark = end_mark(&state);
-        let stale = self.subagents.stale(&id);
-        let error_code = self.subagents.error_code(&id).map(str::to_string);
+        let foreground = self.subagents.foreground_id().map(str::to_string);
+        let (id, label, mark, stale, error_code) = if let Some(id) = foreground.clone() {
+            let tool = self.transcript.foreground_tool(&id);
+            let label = tool
+                .as_ref()
+                .map(|tool| tool.label.clone())
+                .unwrap_or_else(|| "Task".to_string());
+            let mark = match &tool {
+                Some(tool) if tool.running => None,
+                Some(tool) if tool.failed => Some("subagent.failed"),
+                Some(_) => Some("subagent.done"),
+                None => None,
+            };
+            (id, label, mark, false, None)
+        } else {
+            let leaf = self.subagents.viewed();
+            let id = leaf.map(|leaf| leaf.id.clone()).unwrap_or_default();
+            let label = self.subagents.display_label(&id);
+            let state = leaf.map(|leaf| leaf.state.clone()).unwrap_or_default();
+            let mark = end_mark(&state);
+            let stale = self.subagents.stale(&id);
+            let error_code = self.subagents.error_code(&id).map(str::to_string);
+            (id, label, mark, stale, error_code)
+        };
         let handle = self
             .subagent_scrolls
             .get(&id)
             .cloned()
             .unwrap_or_else(ScrollHandle::new);
+        // The tab body of the right dock: the dock owns the width, the resize
+        // handle, and the left hairline.
         div()
             .id("subagent-pane")
             .relative()
-            .flex_none()
-            .w(width)
-            .h_full()
+            .flex_1()
+            .w_full()
+            .min_h_0()
             .flex()
             .flex_col()
-            .min_h_0()
-            .pl(px(6.))
-            .child(
-                div()
-                    .id("subagent-resize-handle")
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left_0()
-                    .w(px(6.))
-                    .cursor(CursorStyle::ResizeLeftRight)
-                    .hover(|style| style.bg(theme.accent.opacity(0.4)))
-                    .on_drag(SubagentResize, |_, _, _, cx| cx.new(|_| SubagentDragGhost)),
-            )
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .bg(theme.surface)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(panel::RADIUS.px(&theme))
+                    .bg(theme.background)
                     .overflow_hidden()
                     .flex()
                     .flex_col()
@@ -409,10 +466,15 @@ impl OrbitApp {
                         mark,
                         stale,
                         error_code.as_deref(),
+                        !self.subagents.anchor(&id).following,
                         theme,
                         cx,
                     ))
-                    .child(self.subagent_body(&id, &handle, theme, cx)),
+                    .child(if foreground.is_some() {
+                        self.foreground_body(&id, &handle, theme, cx)
+                    } else {
+                        self.subagent_body(&id, &handle, theme, cx)
+                    }),
             )
             .into_any_element()
     }
@@ -423,6 +485,7 @@ impl OrbitApp {
         mark: Option<&'static str>,
         stale: bool,
         error_code: Option<&str>,
+        show_goto_end: bool,
         theme: Theme,
         cx: &Context<Self>,
     ) -> AnyElement {
@@ -470,6 +533,22 @@ impl OrbitApp {
                             .unwrap_or_else(|| tr!("subagent.stale")),
                     )
             }))
+            .children(show_goto_end.then(|| {
+                icon_button_frame(div().id("subagent-goto-end"), &theme, ButtonSize::Default)
+                    .group(BUTTON_GROUP)
+                    .tip(tr!("subagent.goto_end"))
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.surface_hover))
+                    .active(|style| style.opacity(PRESS_DIM))
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.jump_subagent_to_end(cx);
+                    }))
+                    .child(icon(
+                        "icons/arrow-down.svg",
+                        ButtonSize::Default.icon_size().px(&theme),
+                        theme.text_muted,
+                    ))
+            }))
             .child(
                 icon_button_frame(div().id("subagent-copy"), &theme, ButtonSize::Default)
                     .group(BUTTON_GROUP)
@@ -484,22 +563,59 @@ impl OrbitApp {
                         theme.text_muted,
                     )),
             )
-            .child(
-                icon_button_frame(div().id("subagent-close"), &theme, ButtonSize::Default)
-                    .group(BUTTON_GROUP)
-                    .tip(tr!("subagent.close"))
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.surface_hover))
-                    .active(|style| style.opacity(PRESS_DIM))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.close_subagent_panel(cx);
-                    }))
-                    .child(icon(
-                        "icons/x.svg",
-                        ButtonSize::Default.icon_size().px(&theme),
-                        theme.text_muted,
-                    )),
-            )
+            .into_any_element()
+    }
+
+    fn foreground_body(
+        &self,
+        id: &str,
+        handle: &ScrollHandle,
+        theme: Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let text = self
+            .transcript
+            .foreground_tool(id)
+            .map(|tool| tool.text)
+            .unwrap_or_default();
+        if text.is_empty() {
+            return div().flex_1().min_h_0().w_full().into_any_element();
+        }
+        let (expanded, copied) = self
+            .subagent_folds
+            .get(id)
+            .map(|ui| (ui.expanded.clone(), ui.copied.clone()))
+            .unwrap_or_else(|| {
+                (
+                    Rc::new(RefCell::new(HashSet::new())),
+                    Rc::new(RefCell::new(HashMap::new())),
+                )
+            });
+        let body = div()
+            .id(ElementId::Name(format!("subagent-body-{id}").into()))
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_y_scroll()
+            .track_scroll(handle)
+            .occlude()
+            .on_scroll_wheel(cx.listener(Self::on_subagent_wheel))
+            .flex()
+            .flex_col()
+            .p(DynamicSpacing::Base12.px(&theme))
+            .child(transcript_view::render_subagent_markdown(
+                &text, 0, theme, expanded, copied,
+            ));
+        div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(body)
+            .child(overlay_thumb(handle, theme.text_muted.opacity(0.45)))
+            .child(self.subagent_thumb_hit(id, handle, cx))
             .into_any_element()
     }
 
@@ -598,8 +714,120 @@ impl OrbitApp {
             .flex()
             .flex_col()
             .child(body)
-            .child(overlay_thumb(&handle, theme.text_muted.opacity(0.45)))
+            .child(overlay_thumb(handle, theme.text_muted.opacity(0.45)))
+            .child(self.subagent_thumb_hit(id, handle, cx))
             .into_any_element()
+    }
+
+    fn jump_subagent_to_end(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.subagents.pane_key().map(str::to_string) else {
+            return;
+        };
+        self.subagents.note_follow(&id, true, 0);
+        self.subagents.set_at_top(&id, false);
+        if let Some(handle) = self.subagent_scrolls.get(&id) {
+            handle.scroll_to_bottom();
+        }
+        cx.notify();
+    }
+
+    /// A press on the thumb starts a drag. The strip sits in the body's right
+    /// padding so it does not cover the text, and wheels there still scroll.
+    fn subagent_thumb_hit(
+        &self,
+        id: &str,
+        handle: &ScrollHandle,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let handle = handle.clone();
+        let leaf_id = id.to_string();
+        div()
+            .id("subagent-thumb-hit")
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(px(8.))
+            .on_scroll_wheel(cx.listener(Self::on_subagent_wheel))
+            .on_drag(
+                SubagentThumbDrag {
+                    leaf_id,
+                    start_y: Cell::new(0.),
+                    start_offset: Cell::new(0.),
+                    armed: Cell::new(false),
+                },
+                move |drag, _, window, cx| {
+                    // `on_drag` reports a point relative to the hit box. The
+                    // move events later are window coordinates, so both ends
+                    // of the drag use the pointer's window position.
+                    let position = window.mouse_position();
+                    let bounds = handle.bounds();
+                    let armed = thumb_contains(
+                        f32::from(bounds.origin.y),
+                        f32::from(bounds.size.height),
+                        f32::from(handle.max_offset().height),
+                        f32::from(handle.offset().y),
+                        f32::from(position.y),
+                    );
+                    drag.armed.set(armed);
+                    if armed {
+                        drag.start_y.set(f32::from(position.y));
+                        drag.start_offset.set(f32::from(handle.offset().y));
+                    }
+                    cx.new(|_| SubagentDragGhost)
+                },
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn drag_subagent_thumb(
+        &mut self,
+        leaf_id: &str,
+        armed: bool,
+        start_y: f32,
+        start_offset: f32,
+        y: Pixels,
+        cx: &mut Context<Self>,
+    ) {
+        if !armed {
+            return;
+        }
+        let Some(handle) = self.subagent_scrolls.get(leaf_id).cloned() else {
+            return;
+        };
+        let viewport = f32::from(handle.bounds().size.height);
+        let max = f32::from(handle.max_offset().height);
+        let Some(offset_y) = dragged_offset(start_offset, f32::from(y) - start_y, viewport, max)
+        else {
+            return;
+        };
+        let next = px(offset_y);
+        if next != handle.offset().y {
+            handle.set_offset(point(handle.offset().x, next));
+        }
+        self.note_subagent_offset(leaf_id, next, px(max));
+        cx.notify();
+    }
+
+    /// Stick to the newest line at the bottom. Anywhere above that, remember
+    /// how many messages sit below the reader so a later inspect does not
+    /// pull them back.
+    fn note_subagent_offset(&mut self, id: &str, offset_y: Pixels, max: Pixels) {
+        let at_bottom = max <= px(1.) || offset_y <= -max + px(1.);
+        if at_bottom {
+            self.subagents.note_follow(id, true, 0);
+            self.subagents.set_at_top(id, false);
+            return;
+        }
+        let count = self.subagents.messages(id).len();
+        let from_top = ((-f32::from(offset_y)) / MESSAGE_ROW).round().max(0.) as usize;
+        let from_bottom = count.saturating_sub(from_top.min(count));
+        self.subagents.note_follow(id, false, from_bottom);
+        let at_top = offset_y >= px(-1.);
+        self.subagents.set_at_top(id, at_top);
+        if at_top && self.subagents.foreground_id().is_none() {
+            self.dispatch_subagent_inspects();
+        }
     }
 
     fn on_subagent_list_wheel(
@@ -622,7 +850,7 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(id) = self.subagents.selected_id().map(str::to_string) else {
+        let Some(id) = self.subagents.pane_key().map(str::to_string) else {
             return;
         };
         let Some(handle) = self.subagent_scrolls.get(&id).cloned() else {
@@ -651,7 +879,7 @@ impl OrbitApp {
             self.subagents.note_follow(&id, false, from_bottom);
             let at_top = clamped >= px(-1.);
             self.subagents.set_at_top(&id, at_top);
-            if at_top {
+            if at_top && self.subagents.foreground_id().is_none() {
                 self.dispatch_subagent_inspects();
             }
         }
@@ -799,6 +1027,31 @@ fn thumb_rect(viewport: f32, max_scroll: f32, offset_y: f32) -> Option<(f32, f32
     Some((top, height))
 }
 
+/// `pointer_y` is in the window. The thumb's hit box is a few pixels taller
+/// than the painted mark so a drag can start on its edge.
+fn thumb_contains(
+    viewport_origin_y: f32,
+    viewport: f32,
+    max_scroll: f32,
+    offset_y: f32,
+    pointer_y: f32,
+) -> bool {
+    let Some((top, height)) = thumb_rect(viewport, max_scroll, offset_y) else {
+        return false;
+    };
+    let y = pointer_y - viewport_origin_y;
+    y >= top - 4. && y <= top + height + 4.
+}
+
+/// New scroll offset after dragging the thumb by `dy` pixels. The offset is
+/// 0 at the top and `-max_scroll` at the bottom.
+fn dragged_offset(start_offset: f32, dy: f32, viewport: f32, max_scroll: f32) -> Option<f32> {
+    let (_, height) = thumb_rect(viewport, max_scroll, start_offset)?;
+    let travel = (viewport - height).max(1.);
+    let scrolled = ((-start_offset) + dy / travel * max_scroll).clamp(0., max_scroll);
+    Some(-scrolled)
+}
+
 /// Paint-only thumb, the same mark the terminal uses. It is not a hit target:
 /// the wheel still scrolls the view underneath.
 fn overlay_thumb(handle: &ScrollHandle, color: gpui::Hsla) -> AnyElement {
@@ -833,7 +1086,7 @@ fn overlay_thumb(handle: &ScrollHandle, color: gpui::Hsla) -> AnyElement {
 
 #[cfg(test)]
 mod tests {
-    use super::thumb_rect;
+    use super::{dragged_offset, thumb_contains, thumb_rect};
 
     #[test]
     fn a_thumb_appears_only_when_the_content_overflows() {
@@ -849,5 +1102,18 @@ mod tests {
         assert!((height - (200. * 200. / 300.)).abs() < 0.01);
         let (top, height) = thumb_rect(200., 100., -100.).unwrap();
         assert!((top + height - 200.).abs() < 0.01);
+    }
+
+    #[test]
+    fn dragging_the_thumb_the_length_of_its_travel_reaches_the_bottom() {
+        let viewport = 200.;
+        let max_scroll = 100.;
+        let (_, height) = thumb_rect(viewport, max_scroll, 0.).unwrap();
+        let travel = viewport - height;
+        let end = dragged_offset(0., travel, viewport, max_scroll).unwrap();
+        assert!((end + max_scroll).abs() < 0.01);
+        let back = dragged_offset(end, -travel, viewport, max_scroll).unwrap();
+        assert!(back.abs() < 0.01);
+        assert!(!thumb_contains(10., viewport, 0., 0., 40.));
     }
 }

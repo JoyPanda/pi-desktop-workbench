@@ -26,61 +26,94 @@ struct ChipContent {
 
 impl OrbitApp {
     /// The filtered menu entries for the active trigger (empty when none).
-    pub(super) fn autocomplete_entries(&mut self, trigger: &Trigger) -> Vec<AcEntry> {
+    pub(super) fn autocomplete_entries(
+        &mut self,
+        trigger: &Trigger,
+        cx: &mut Context<Self>,
+    ) -> Vec<AcEntry> {
         match trigger.kind {
-            TriggerKind::Slash => mentions::filter_entries(
-                &trigger.query,
-                &[],
-                &self.slash_commands,
-                AUTOCOMPLETE_LIMIT,
-            ),
-            TriggerKind::At => self.at_entries(&trigger.query),
+            TriggerKind::Slash => {
+                mentions::filter_entries(&trigger.query, &self.slash_commands, AUTOCOMPLETE_LIMIT)
+            }
+            TriggerKind::At => self.at_entries(&trigger.query, cx),
         }
     }
 
-    /// `@` file rows. `fd` searches the whole workspace by name and skips
-    /// ignored directories. Without `fd`, the bounded directory walk remains.
-    pub(super) fn at_entries(&mut self, query: &str) -> Vec<AcEntry> {
-        self.at_paths(query)
+    /// `@` file rows, ranked from the shared workspace index.
+    pub(super) fn at_entries(&mut self, query: &str, cx: &mut Context<Self>) -> Vec<AcEntry> {
+        self.at_paths(query, cx)
             .into_iter()
-            .take(AUTOCOMPLETE_LIMIT)
             .map(|path| AcEntry::File { path })
             .collect()
     }
 
-    fn at_paths(&mut self, query: &str) -> Vec<String> {
-        let Some(root) = self.current_workspace.clone() else {
+    /// The `@` hits for `query`, memoised per index generation.
+    ///
+    /// `sync_autocomplete` runs every frame and the popup asks again while
+    /// rendering, so the same query is scored several times per keystroke; the
+    /// memo is what keeps a redraw from re-scanning the whole workspace.
+    fn at_paths(&mut self, query: &str, cx: &mut Context<Self>) -> Vec<String> {
+        if self.current_workspace.is_none() {
             return Vec::new();
-        };
-        if self
-            .mention_fd_key
-            .as_ref()
-            .is_some_and(|(cached_root, cached_query)| {
-                cached_root == &root && cached_query == query
-            })
-        {
-            return self.mention_fd_hits.clone();
         }
-        if !self.mention_fd_missing {
-            match mentions::search_fd(&root, query) {
-                mentions::FdSearch::Hits(hits) => {
-                    self.mention_fd_key = Some((root, query.to_string()));
-                    self.mention_fd_hits = hits.clone();
-                    return hits;
-                }
-                mentions::FdSearch::Missing => {
-                    self.mention_fd_missing = true;
-                }
+        self.ensure_mention_index(false, cx);
+        let generation = self.mention_index_generation;
+        if let Some((memo_generation, memo_query, hits)) = &self.mention_query_memo {
+            if *memo_generation == generation && memo_query == query {
+                return hits.clone();
             }
         }
-        self.ensure_mention_files();
-        mentions::filter_entries(query, &self.mention_files, &[], AUTOCOMPLETE_LIMIT)
-            .into_iter()
-            .filter_map(|entry| match entry {
-                AcEntry::File { path } => Some(path),
-                AcEntry::Command { .. } => None,
-            })
-            .collect()
+        let Some(index) = self.mention_index.clone() else {
+            return Vec::new();
+        };
+        let hits = if query.is_empty() {
+            // Empty `@`: what the user touched most recently, then the
+            // shallowest entries (Zed's recent-first menu).
+            let mut hits: Vec<String> = Vec::new();
+            for path in &self.mention_recents {
+                if hits.len() >= AUTOCOMPLETE_LIMIT {
+                    break;
+                }
+                if index.contains(path) && !hits.iter().any(|hit| hit == path) {
+                    hits.push(path.clone());
+                }
+            }
+            for path in index.query("", AUTOCOMPLETE_LIMIT) {
+                if hits.len() >= AUTOCOMPLETE_LIMIT {
+                    break;
+                }
+                if !hits.iter().any(|hit| hit == &path) {
+                    hits.push(path);
+                }
+            }
+            hits
+        } else {
+            index.query(query, AUTOCOMPLETE_LIMIT)
+        };
+        self.mention_query_memo = Some((generation, query.to_string(), hits.clone()));
+        hits
+    }
+
+    /// Note the workspace-relative path the user is looking at, for the empty
+    /// `@` menu's recent-first ordering. In-process only, MRU, deduped.
+    pub(super) fn note_recent_file(&mut self, path: Option<&str>) {
+        const RECENTS: usize = 32;
+        let Some(path) = path else { return };
+        if path.is_empty() || path.ends_with('/') {
+            return;
+        }
+        if self
+            .mention_recents
+            .first()
+            .is_some_and(|head| head == path)
+        {
+            return;
+        }
+        self.mention_recents.retain(|recent| recent != path);
+        self.mention_recents.insert(0, path.to_string());
+        self.mention_recents.truncate(RECENTS);
+        // The empty query is served from the memo; a new recent changes it.
+        self.mention_query_memo = None;
     }
 
     // ── per-session drafts ────────────────────────────────────────────
@@ -136,23 +169,136 @@ impl OrbitApp {
         cx.notify();
     }
 
-    /// (Re)build the workspace file cache when the workspace changed.
-    pub(super) fn ensure_mention_files(&mut self) {
-        if self.mention_files_workspace == self.current_workspace {
+    /// (Re)build the workspace index that both the Explorer tree and `@` read,
+    /// when it is stale and the throttle allows.
+    ///
+    /// `force` is for things the user just did and expects to see now — a
+    /// created file must exist in the tree it is revealed in — and skips the
+    /// throttle without skipping the generation guard.
+    pub(super) fn ensure_mention_index(&mut self, force: bool, cx: &mut Context<Self>) {
+        // The index root is the Explorer's: the open workspace, or the process
+        // directory when there is none. `@` keeps its own workspace gate, so a
+        // session-less composer still shows nothing.
+        let root = self
+            .current_workspace
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
+        let Some(root) = root else {
+            if self.mention_index.is_some() || self.mention_index_workspace.is_some() {
+                self.mention_index = None;
+                self.mention_index_workspace = None;
+                self.mention_index_stale = false;
+                self.mention_index_due = None;
+                self.mention_query_memo = None;
+                self.mention_recents.clear();
+            }
+            return;
+        };
+        if self.mention_index_workspace.as_ref() != Some(&root) {
+            self.mention_index_workspace = Some(root.clone());
+            self.mention_index = None;
+            self.mention_query_memo = None;
+            self.mention_recents.clear();
+            self.mention_index_stale = true;
+            self.mention_index_due = None;
+        }
+        if !self.mention_index_stale {
             return;
         }
-        self.mention_files_workspace = self.current_workspace.clone();
-        self.mention_files = self
-            .current_workspace
-            .as_deref()
-            .map(mentions::list_workspace_files)
-            .unwrap_or_default();
+        let now = Instant::now();
+        if !force {
+            if let Some(due) = self.mention_index_due {
+                if now < due {
+                    // Trailing edge: the last change of a save burst still lands.
+                    self.schedule_mention_rebuild(due, cx);
+                    return;
+                }
+            }
+        }
+        // Marked clean now, not when the walk lands: a change that arrives
+        // during the walk must re-arm instead of being swallowed by it.
+        self.mention_index_stale = false;
+        self.mention_index_due = Some(now + MENTION_REBUILD_INTERVAL);
+        self.mention_index_generation = self.mention_index_generation.wrapping_add(1);
+        let generation = self.mention_index_generation;
+        self.project_panel
+            .update(cx, |panel, cx| panel.set_loading(true, cx));
+        cx.spawn(async move |this, cx| {
+            let built = cx
+                .background_executor()
+                .spawn(async move {
+                    let snapshot = crate::explorer::walk::snapshot(&root);
+                    let index = mentions::MentionIndex::build(&snapshot.entries);
+                    // Git status is a subprocess; it must not run on the UI thread.
+                    let badges = crate::git::status_rows(&root)
+                        .map(|rows| {
+                            rows.into_iter()
+                                .map(|row| {
+                                    (
+                                        row.path.clone(),
+                                        crate::explorer::tree::StatusBadge::from_status(&row),
+                                    )
+                                })
+                                .collect::<HashMap<String, crate::explorer::tree::StatusBadge>>()
+                        })
+                        .unwrap_or_default();
+                    (snapshot, index, badges)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.mention_index_generation != generation {
+                    return;
+                }
+                let (snapshot, index, badges) = built;
+                let snapshot = Arc::new(snapshot);
+                this.workspace_index = Some(snapshot.clone());
+                this.mention_index = Some(Arc::new(index));
+                this.mention_query_memo = None;
+                this.project_panel.update(cx, |panel, cx| {
+                    panel.set_index(snapshot, badges, cx);
+                });
+                // A save during the walk re-armed the flag; land it now.
+                if this.mention_index_stale {
+                    this.ensure_mention_index(true, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Re-run the rebuild once the throttle window closes, so the last change
+    /// in a burst is not dropped on the floor.
+    fn schedule_mention_rebuild(&mut self, due: Instant, cx: &mut Context<Self>) {
+        if self.mention_rebuild_scheduled {
+            return;
+        }
+        self.mention_rebuild_scheduled = true;
+        let wait = due.saturating_duration_since(Instant::now());
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(wait).await;
+            let _ = this.update(cx, |this, cx| {
+                this.mention_rebuild_scheduled = false;
+                this.ensure_mention_index(false, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Something changed the workspace. `immediate` skips the throttle for
+    /// changes the user is waiting on (our own file operations).
+    pub(super) fn invalidate_index(&mut self, immediate: bool, cx: &mut Context<Self>) {
+        self.mention_index_stale = true;
+        if immediate {
+            self.mention_index_due = None;
+        }
+        self.ensure_mention_index(immediate, cx);
     }
 
     /// Derive the open/closed/highlight state from the composer text.
     /// The trigger is pure text state, so this runs every frame and the
     /// menu opens/closes by itself as the user types.
-    pub(super) fn sync_autocomplete(&mut self, cx: &Context<Self>) {
+    pub(super) fn sync_autocomplete(&mut self, cx: &mut Context<Self>) {
         let trigger = self.input.read(cx).active_trigger();
         let key = trigger.as_ref().map(|t| (t.kind, t.query.clone()));
         if key != self.last_ac_trigger {
@@ -167,14 +313,13 @@ impl OrbitApp {
                 let count = match trigger.kind {
                     TriggerKind::Slash => mentions::filter_entries(
                         &trigger.query,
-                        &[],
                         &self.slash_commands,
                         AUTOCOMPLETE_LIMIT,
                     )
                     .len(),
                     TriggerKind::At => {
                         drop(state);
-                        let count = self.at_entries(&trigger.query).len();
+                        let count = self.at_entries(&trigger.query, cx).len();
                         state = self.autocomplete.borrow_mut();
                         count
                     }
@@ -217,7 +362,7 @@ impl OrbitApp {
         let Some(trigger) = self.input.read(cx).active_trigger() else {
             return false;
         };
-        let entries = self.autocomplete_entries(&trigger);
+        let entries = self.autocomplete_entries(&trigger, cx);
         let Some(entry) = entries.into_iter().nth(highlighted) else {
             return false;
         };
@@ -287,7 +432,7 @@ impl OrbitApp {
             state.highlighted
         };
         let trigger = self.input.read(cx).active_trigger()?;
-        let entries = self.autocomplete_entries(&trigger);
+        let entries = self.autocomplete_entries(&trigger, cx);
         if entries.is_empty() {
             return None;
         }
@@ -409,6 +554,27 @@ impl OrbitApp {
                             .child(badge),
                     )
                 }),
+            );
+        }
+        // A truncated index says so, in a row that is deliberately not a
+        // picker entry: `state.count` never includes it, so ↑/↓/Enter cannot
+        // land on it.
+        if self
+            .workspace_index
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.truncated)
+        {
+            list = list.child(
+                div()
+                    .id("ac-truncated")
+                    .h(row_h)
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .px(DynamicSpacing::Base08.px(&theme))
+                    .text_size(picker::SECONDARY_TEXT.px(&theme))
+                    .text_color(theme.text_muted)
+                    .child(tr!("explorer.index_truncated")),
             );
         }
         // Full width of the chat box, so long paths are never cut.

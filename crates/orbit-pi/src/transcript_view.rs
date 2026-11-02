@@ -3,10 +3,10 @@
 //! Rows are plain GPUI flex trees (no component library): a user turn's text
 //! fills the same reading column as assistant prose, assistant turns are
 //! Start-aligned prose. A
-//! ghost copy/timestamp footer reveals on row hover. Settled: **Worked for**
-//! fold → thinking/tool cards → answer → files → copy footer. Live: thinking
-//! and activity cards → answer → files → **Working for** — work stays in
-//! sequence with the text as it arrives from the agent.
+//! ghost copy/timestamp footer reveals on row hover. Settled: thinking
+//! headers stay in step order, **Worked for** hides only pre-answer tools,
+//! then the answer. Live: an open thinking card (unless the reader turned
+//! that off) and activity cards stay in sequence with the text.
 //!
 //! Timestamps render on the footer when pi provides one (snapshot
 //! `timestamp` fields, or a wall-clock stamp taken at `message_end`).
@@ -57,7 +57,7 @@ use crate::theme::tokens::{
     button, context_menu, panel, picker, popover, BufferLineHeight, ButtonSize, DynamicSpacing,
     IconSize, Radius, StyledExt, TextSize, BORDER_WIDTH,
 };
-use crate::theme::{self, Theme, ThemeMode};
+use crate::theme::{self, Theme, ThemeMode, TypeScale};
 use crate::transcript::{ChatMessage, Step, SummaryRow, ToolCall, ToolFacts};
 
 use crate::markdown::{
@@ -76,6 +76,10 @@ pub(crate) type ImageOpener = Rc<dyn Fn(Arc<Image>, &mut Window, &mut App)>;
 /// Forks the open session through the assistant message at this index.
 /// Handed down from the app; the footer does not own the session.
 pub(crate) type ForkOpener = Rc<dyn Fn(usize, &mut Window, &mut App)>;
+
+/// Opens the right dock on a foreground `subagent` tool call. The card does
+/// not own the dock.
+pub(crate) type SubagentToolOpener = Rc<dyn Fn(String, &mut Window, &mut App)>;
 
 /// The transcript content column's max width.
 /// Normal message content keeps this centered measure. Assistant tables
@@ -162,9 +166,11 @@ pub(crate) type ExpandedBlocks = Rc<RefCell<HashSet<(usize, u64, usize)>>>;
 /// offset/limit so a wheel that no longer scrolls the card can be chained
 /// to the transcript (rather than swallowed by `occlude`).
 pub(crate) type ThinkingScrolls = Rc<RefCell<HashMap<(usize, usize), ScrollHandle>>>;
-/// "Thought" cards collapsed by the reader, keyed `(message_ix, step_ix)`.
-/// Missing means expanded — the default once the activity group is open.
-pub(crate) type CollapsedThoughts = Rc<RefCell<HashSet<(usize, usize)>>>;
+/// Explicit open/closed choice for a "Thought" card, keyed
+/// `(message_ix, step_ix)`. `true` is open, `false` is closed. Missing means
+/// the default: open only while that step is still reasoning and Settings →
+/// Behavior has "expand thinking" on.
+pub(crate) type CollapsedThoughts = Rc<RefCell<HashMap<(usize, usize), bool>>>;
 /// Live "Thought" cards the reader scrolled away from the newest line,
 /// keyed `(message_ix, step_ix)`. Missing means following: while a card
 /// streams, its view stays pinned to the bottom so each new line of
@@ -192,6 +198,8 @@ pub(crate) struct TranscriptView {
     /// What an agent call the reader has not toggled should do (Settings →
     /// Agent). See [`crate::agent_call_display`].
     pub agent_calls: AgentCallDisplay,
+    /// Open a thinking step while it is still reasoning (Settings → Behavior).
+    pub expand_thinking: bool,
     /// Per-tool detail-card open state, keyed `(message_ix, tool_ix)`.
     pub expanded_tools: ExpandedTools,
     pub copied: Rc<RefCell<HashMap<usize, Instant>>>,
@@ -244,6 +252,9 @@ pub(crate) struct TranscriptView {
     /// Forks through an assistant message; `None` hides the footer button
     /// (tests, and any surface that renders a transcript without a session).
     pub fork_session: Option<ForkOpener>,
+    /// Opens the right dock for a foreground `subagent` row. `None` keeps the
+    /// old inline expand (tests, and rows without a tool id).
+    pub subagent_tool: Option<SubagentToolOpener>,
     /// Message indices matching the open find query; `None` when find is
     /// closed. Rows get a quiet wash.
     pub search_hits: Option<Rc<RefCell<HashSet<usize>>>>,
@@ -1033,6 +1044,8 @@ struct RowPaint {
     /// What an agent call the reader has not toggled should do — the
     /// Settings → Agent preference (issue #80).
     agent_calls: AgentCallDisplay,
+    /// Open a thinking step while it is still reasoning.
+    expand_thinking: bool,
     live: bool,
     live_elapsed: Option<Duration>,
     /// Live output rate for the streaming row (`None` until meaningful).
@@ -1056,6 +1069,7 @@ struct RowPaint {
     hovered_usage: Rc<Cell<Option<usize>>>,
     image_opener: Option<ImageOpener>,
     fork_session: Option<ForkOpener>,
+    subagent_tool: Option<SubagentToolOpener>,
     search_hit: bool,
     search_active: bool,
     /// Tables alone can extend beyond the centered message column.
@@ -1090,6 +1104,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     // Copy: the mode is a three-way enum, so every row carries its own copy
     // instead of sharing a cell.
     let agent_calls = view.agent_calls;
+    let expand_thinking = view.expand_thinking;
     let expanded_tools = view.expanded_tools.clone();
     let copied = view.copied.clone();
     let copied_sections = view.copied_sections.clone();
@@ -1112,6 +1127,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let review_changes = view.review_changes.clone();
     let image_opener = view.image_opener.clone();
     let fork_session = view.fork_session.clone();
+    let subagent_tool = view.subagent_tool.clone();
     let search_hits = view.search_hits.clone();
     let search_active = view.search_active.clone();
 
@@ -1319,6 +1335,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 theme: *theme::get(cx),
                 nerd: nerd.clone(),
                 agent_calls,
+                expand_thinking,
                 live,
                 live_elapsed,
                 live_tps,
@@ -1339,6 +1356,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 hovered_usage: hovered_usage.clone(),
                 image_opener: image_opener.clone(),
                 fork_session: fork_session.clone(),
+                subagent_tool: subagent_tool.clone(),
                 search_hit: search_hits
                     .as_ref()
                     .is_some_and(|hits| hits.borrow().contains(&ix)),
@@ -2262,81 +2280,73 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
         .items_start()
         .gap(DynamicSpacing::Base08.px(&theme));
 
-    // The turn fold precedes the run's first work (collapsed turns
-    // hide the pre-answer work behind a single "Worked for" divider).
-    if !paint.live && message.has_hidden_work() {
-        content = content.child(render_turn_fold(
-            ix,
-            paint.fold_open,
-            message.elapsed,
-            theme,
-            paint.expanded_turns.clone(),
-            paint.scroller.clone(),
-        ));
-    }
-
-    // Every thought and tool call of the turn collects into ONE collapsible
-    // activity group: a tool-heavy turn reads as a single summary line
-    // ("Ran 2 commands · 3 file reads · 4 thoughts") that expands into all
-    // of its cards, instead of a stack of per-step "Ran …" rows.
-    let answer_start = message
-        .steps
-        .iter()
-        .position(|step| !step.text.trim().is_empty());
-    let work_start = message
-        .steps
-        .iter()
-        .position(|step| !step.thinking.is_empty() || !step.tools.is_empty());
-    // First step index whose post-answer work is NOT yet absorbed into a
-    // rendered activity group (see the in-sequence group block below).
+    // Thinking cards stay in step order and are never folded into Worked for.
+    // Tool groups split on a thought or on answer text. Pre-answer tool groups
+    // hide behind one Worked for line once the turn settles.
     let mut covered_until = 0usize;
+    let mut fold_placed = false;
+    let hide_pre_answer_tools = !paint.live && has_pre_answer_tools(&message.steps);
 
     for (step_ix, step) in message.steps.iter().enumerate() {
-        // The group sits where the turn's first work happened, so any text
-        // that preceded it stays above; the rest of the text follows below.
-        if Some(step_ix) == work_start {
-            let before_answer = answer_start.is_none_or(|answer| step_ix < answer);
-            // Pre-answer work hides behind the turn fold; later work stays
-            // visible as a collapsed, expandable group.
-            let show_work = paint.live || paint.fold_open || !before_answer;
-            if show_work {
-                // The group covers the work up to and including the step
-                // that produced the first answer text; work in later steps
-                // gets its own group further down, so tool calls stay in
-                // sequence with the text — live included: a turn that speaks
-                // and then works again must not hoist that work above the
-                // answer that preceded it.
-                let group_end = answer_start.map_or(message.steps.len(), |answer| answer + 1);
+        if !step.thinking.is_empty() {
+            let duration = step_thinking_duration(&message.steps, step_ix);
+            let thinking_live =
+                thinking_is_live(paint.live, step_ix + 1 == message.steps.len(), step);
+            content = content.child(render_thinking_body(
+                &step.thinking,
+                thinking_live,
+                thinking_live,
+                duration,
+                theme,
+                (ix, step_ix),
+                paint.scroller.clone(),
+                paint.thinking_scrolls.clone(),
+                paint.collapsed_thoughts.clone(),
+                paint.thinking_detached.clone(),
+                paint.expand_thinking,
+            ));
+        }
+
+        if !step.tools.is_empty() && step_ix >= covered_until {
+            let group_end = tool_group_end(&message.steps, step_ix);
+            covered_until = group_end;
+            let before_answer = group_is_before_answer(&message.steps, group_end);
+            if hide_pre_answer_tools && before_answer && !fold_placed {
+                content = content.child(render_turn_fold(
+                    ix,
+                    paint.fold_open,
+                    message.elapsed,
+                    theme,
+                    paint.expanded_turns.clone(),
+                    paint.scroller.clone(),
+                ));
+                fold_placed = true;
+            }
+            let hide = hide_pre_answer_tools && before_answer && !paint.fold_open;
+            if !hide {
                 let group_live = activity_group_is_live(paint.live, group_end, &message.steps);
                 let open = paint
                     .expanded_activities
                     .borrow()
-                    .get(&(ix, 0))
+                    .get(&(ix, step_ix))
                     .copied()
                     .unwrap_or_else(|| paint.agent_calls.open_by_default(group_live));
-                let group_has_work = message.steps[..group_end]
-                    .iter()
-                    .any(|step| !step.thinking.is_empty() || !step.tools.is_empty());
-                if group_has_work {
-                    content = content.child(render_activity_group(
-                        ix,
-                        0..group_end,
-                        &message.steps,
-                        open,
-                        group_live,
-                        theme,
-                        paint.nerd.as_ref(),
-                        paint.agent_calls,
-                        paint.expanded_activities.clone(),
-                        paint.expanded_tools.clone(),
-                        paint.copied_sections.clone(),
-                        paint.expanded_sections.clone(),
-                        paint.scroller.clone(),
-                        paint.thinking_scrolls.clone(),
-                        paint.collapsed_thoughts.clone(),
-                        paint.thinking_detached.clone(),
-                    ));
-                }
+                content = content.child(render_activity_group(
+                    ix,
+                    step_ix..group_end,
+                    &message.steps,
+                    open,
+                    group_live,
+                    theme,
+                    paint.nerd.as_ref(),
+                    paint.agent_calls,
+                    paint.expanded_activities.clone(),
+                    paint.expanded_tools.clone(),
+                    paint.copied_sections.clone(),
+                    paint.expanded_sections.clone(),
+                    paint.scroller.clone(),
+                    paint.subagent_tool.clone(),
+                ));
             }
         }
 
@@ -2346,6 +2356,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
             let prose = step.text.as_str();
             content = content.child(
                 div()
+                    .debug_selector(move || format!("assistant-step-{ix}-{step_ix}"))
                     .w_full()
                     .min_w_0()
                     .pt(DynamicSpacing::Base04.px(&theme))
@@ -2363,57 +2374,6 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                         Some(paint.table_breakout),
                     )),
             );
-        }
-
-        // Work in a step that FOLLOWS answer text (the assistant spoke,
-        // then kept thinking/calling tools) renders as its own group here,
-        // in sequence, instead of being pulled up into the first group.
-        // The group absorbs every following work-only step, so a run of
-        // tool calls between two text blocks is ONE group ("Ran 4
-        // commands · 5 thoughts"), never a stack of per-step rows. While
-        // live, the currently streaming work-only step is absorbed too,
-        // so the group sits where the agent actually resumed working.
-        if answer_start.is_some_and(|answer| step_ix > answer)
-            && step_ix >= covered_until
-            && (!step.thinking.is_empty() || !step.tools.is_empty())
-        {
-            let has_work = |j: usize| {
-                let s = &message.steps[j];
-                !s.thinking.is_empty() || !s.tools.is_empty()
-            };
-            let mut group_end = step_ix + 1;
-            while group_end < message.steps.len()
-                && message.steps[group_end].text.trim().is_empty()
-                && has_work(group_end)
-            {
-                group_end += 1;
-            }
-            covered_until = group_end;
-            let group_live = activity_group_is_live(paint.live, group_end, &message.steps);
-            let open = paint
-                .expanded_activities
-                .borrow()
-                .get(&(ix, step_ix))
-                .copied()
-                .unwrap_or_else(|| paint.agent_calls.open_by_default(group_live));
-            content = content.child(render_activity_group(
-                ix,
-                step_ix..group_end,
-                &message.steps,
-                open,
-                group_live,
-                theme,
-                paint.nerd.as_ref(),
-                paint.agent_calls,
-                paint.expanded_activities.clone(),
-                paint.expanded_tools.clone(),
-                paint.copied_sections.clone(),
-                paint.expanded_sections.clone(),
-                paint.scroller.clone(),
-                paint.thinking_scrolls.clone(),
-                paint.collapsed_thoughts.clone(),
-                paint.thinking_detached.clone(),
-            ));
         }
     }
 
@@ -2539,13 +2499,12 @@ fn render_assistant_error(error: &str, ix: usize, theme: Theme) -> AnyElement {
         .into_any_element()
 }
 
-/// The turn's activity summary: counts every tool kind and every thought
-/// across the turn's steps — "Ran 7 commands · 4 thoughts", "Ran 1 file
-/// read · 1 thought", "Ran 2 commands · 3 file reads · 1 file edit".
+/// The group's activity summary: counts every tool kind across its steps —
+/// "Ran 7 commands", "Ran 1 file read", "Ran 2 commands · 3 file reads".
+/// Thoughts render as their own cards, so they are not counted here.
 fn activity_title(steps: &[Step], live: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
-    let (mut commands, mut reads, mut edits, mut other, mut thoughts) =
-        (0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut commands, mut reads, mut edits, mut other) = (0usize, 0usize, 0usize, 0usize);
     for step in steps {
         for tool in &step.tools {
             match tool.name.as_str() {
@@ -2556,9 +2515,6 @@ fn activity_title(steps: &[Step], live: bool) -> String {
                 "edit" | "write" => edits += 1,
                 _ => other += 1,
             }
-        }
-        if !step.thinking.is_empty() {
-            thoughts += 1;
         }
     }
     let unit = |count: usize, one: &str, other: &str| {
@@ -2596,17 +2552,6 @@ fn activity_title(steps: &[Step], live: bool) -> String {
             "transcript_view.ran_tool_other",
         ));
     }
-    if thoughts > 0 {
-        parts.push(if live {
-            tr!("transcript.thinking")
-        } else {
-            unit(
-                thoughts,
-                "transcript_view.thought_one",
-                "transcript_view.thought_other",
-            )
-        });
-    }
     if parts.is_empty() {
         return if live {
             tr!("transcript.working")
@@ -2617,11 +2562,9 @@ fn activity_title(steps: &[Step], live: bool) -> String {
     parts.join(" · ")
 }
 
-/// A turn's activity group: a single collapsed summary line ("Ran 2
-/// commands · 3 file reads · 4 thoughts") that expands into every thought
-/// and tool card in `range`. Pre-answer work is one group keyed `(ix, 0)`;
-/// work after the answer gets its own group per step so it stays in
-/// sequence with the text.
+/// A run of tool calls between thoughts: a collapsed summary line ("Ran 2
+/// commands · 3 file reads") that expands into the tool cards in `range`.
+/// Keyed `(message_ix, start step)`. Thoughts are not members of the group.
 #[allow(clippy::too_many_arguments)]
 fn render_activity_group(
     ix: usize,
@@ -2637,15 +2580,12 @@ fn render_activity_group(
     copied_sections: CopiedSections,
     expanded_sections: ExpandedSections,
     scroller: MessageScrollerState,
-    thinking_scrolls: ThinkingScrolls,
-    collapsed_thoughts: CollapsedThoughts,
-    thinking_detached: ThinkingDetached,
+    subagent_tool: Option<SubagentToolOpener>,
 ) -> impl IntoElement {
     let steps = &all_steps[range.clone()];
     let title = activity_title(steps, live);
     // Leading glyph cluster: one icon per distinct work kind (fixed
-    // canonical order, the reasoning bulb last) so a folded group reads as
-    // "what ran", not another line of prose.
+    // canonical order) so a folded group reads as "what ran".
     let icons = activity_group_icons(steps);
     let any_failed = steps
         .iter()
@@ -2767,31 +2707,7 @@ fn render_activity_group(
             .flex_col()
             .gap(DynamicSpacing::Base08.px(&theme));
         let mut tool_base = tool_base;
-        for (step_ix, step) in steps.iter().enumerate() {
-            if !step.thinking.is_empty() {
-                let duration = step_thinking_duration(all_steps, range.start + step_ix);
-                // Only the turn's last step can still be streaming; earlier
-                // thoughts are settled and must not chase the live edge.
-                // Measured against ALL steps, not this group: a live group
-                // can end before the turn's last (still-streaming) step.
-                // The card also settles the moment its step moves on to
-                // answer text or a tool call — pi sends no `thinking_end`, so
-                // the turn's own end is too late to close it.
-                let thinking_live =
-                    thinking_is_live(live, range.start + step_ix + 1 == all_steps.len(), step);
-                body = body.child(render_thinking_body(
-                    &step.thinking,
-                    thinking_live,
-                    thinking_live,
-                    duration,
-                    theme,
-                    (ix, range.start + step_ix),
-                    scroller.clone(),
-                    thinking_scrolls.clone(),
-                    collapsed_thoughts.clone(),
-                    thinking_detached.clone(),
-                ));
-            }
+        for step in steps {
             body = body.children(step.tools.iter().enumerate().map(|(tool_ix, tool)| {
                 let flat = tool_base + tool_ix;
                 // Only the turn's newest call can still be running; every
@@ -2815,6 +2731,7 @@ fn render_activity_group(
                     copied_sections.clone(),
                     expanded_sections.clone(),
                     scroller.clone(),
+                    subagent_tool.clone(),
                 )
             }));
             tool_base += step.tools.len();
@@ -2851,6 +2768,108 @@ fn thinking_is_live(live: bool, is_last_step: bool, step: &Step) -> bool {
     live && is_last_step && step.text.trim().is_empty() && step.tools.is_empty()
 }
 
+/// Whether the thinking card shows its body. An explicit reader choice wins.
+/// Otherwise the body is open only while this step is still reasoning and
+/// the expand-thinking setting is on. Streaming-open because of the setting
+/// is not stored, so the card collapses when the step ends.
+fn thought_body_open(
+    key: (usize, usize),
+    streaming: bool,
+    expand_while_streaming: bool,
+    explicit: &HashMap<(usize, usize), bool>,
+) -> bool {
+    explicit
+        .get(&key)
+        .copied()
+        .unwrap_or(streaming && expand_while_streaming)
+}
+
+/// Record a click on a thinking card. Streaming-open from the setting is not
+/// an entry, so the first click stores the opposite of that effective state.
+fn toggle_thought(
+    key: (usize, usize),
+    streaming: bool,
+    expand_while_streaming: bool,
+    explicit: &mut HashMap<(usize, usize), bool>,
+) {
+    let open = thought_body_open(key, streaming, expand_while_streaming, explicit);
+    explicit.insert(key, !open);
+}
+
+/// End of a tool group that starts at `start`. Following steps join only
+/// while they are tool-only: a thought or answer text starts a new segment.
+fn tool_group_end(steps: &[Step], start: usize) -> usize {
+    let mut end = start + 1;
+    while end < steps.len()
+        && steps[end].thinking.is_empty()
+        && steps[end].text.trim().is_empty()
+        && !steps[end].tools.is_empty()
+    {
+        end += 1;
+    }
+    end
+}
+
+/// Index of the first step that has spoken. Whitespace does not count.
+fn first_spoken_step(steps: &[Step]) -> Option<usize> {
+    steps.iter().position(|step| !step.text.trim().is_empty())
+}
+
+/// A tool group sits before the first answer when it ends at or before that
+/// step. A turn that never speaks treats every tool group as pre-answer.
+fn group_is_before_answer(steps: &[Step], group_end: usize) -> bool {
+    match first_spoken_step(steps) {
+        Some(answer) => group_end <= answer,
+        None => true,
+    }
+}
+
+/// Pre-answer tools are what the Worked-for fold hides. Thinking does not
+/// count, and tools on the step that first speaks do not either.
+fn has_pre_answer_tools(steps: &[Step]) -> bool {
+    let end = first_spoken_step(steps).unwrap_or(steps.len());
+    steps[..end].iter().any(|step| !step.tools.is_empty())
+}
+
+/// What a thinking card does with its own scroll on this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ThinkingScroll {
+    /// Closed, or the step has finished. Leave the scroll flag alone.
+    Idle,
+    /// Still following the newest line.
+    Follow,
+    /// The reader scrolled up and has not come back.
+    Detached,
+    /// Back within about a pixel of the bottom. Clear detach and follow.
+    Rejoin,
+}
+
+fn thinking_scroll_action(
+    collapsed: bool,
+    streaming: bool,
+    detached: bool,
+    at_bottom: bool,
+) -> ThinkingScroll {
+    if collapsed || !streaming {
+        return ThinkingScroll::Idle;
+    }
+    if !detached {
+        return ThinkingScroll::Follow;
+    }
+    if at_bottom {
+        ThinkingScroll::Rejoin
+    } else {
+        ThinkingScroll::Detached
+    }
+}
+
+/// The thinking card is at its newest line. Offsets run from `0` (top) to
+/// `-max` (bottom). A card that cannot scroll (`max` about 0) counts as
+/// bottom, including the first frame before layout.
+fn thinking_is_at_bottom(offset_y: Pixels, max: Pixels) -> bool {
+    max <= px(1.) || (offset_y + max).abs() < px(1.)
+}
+
 /// Whether an activity group is the one still streaming: the row must be
 /// live, the group must include the turn's newest step, and that step must
 /// not have moved on to answer text. Older groups settle as soon as a newer
@@ -2863,10 +2882,10 @@ fn activity_group_is_live(row_live: bool, group_end: usize, all_steps: &[Step]) 
             .is_some_and(|step| step.text.trim().is_empty())
 }
 
-/// The reasoning card body inside a turn's activity group ("Thinking" live,
-/// "Thought" settled). The header collapses/expands the reasoning; tall
-/// reasoning scrolls inside a height-capped card so a long chain of thought
-/// never pushes the answer off-screen.
+/// The reasoning card ("Thinking" live, "Thought" settled). The header
+/// collapses and expands the reasoning; tall reasoning scrolls inside a
+/// height-capped card so a long chain of thought never pushes the answer
+/// off-screen. The card is not a member of the activity group.
 #[allow(clippy::too_many_arguments)]
 fn render_thinking_body(
     thinking: &str,
@@ -2879,6 +2898,7 @@ fn render_thinking_body(
     thinking_scrolls: ThinkingScrolls,
     collapsed_thoughts: CollapsedThoughts,
     thinking_detached: ThinkingDetached,
+    expand_while_streaming: bool,
 ) -> impl IntoElement {
     let label = if live {
         tr!("transcript.thinking")
@@ -2896,19 +2916,31 @@ fn render_thinking_body(
         tr!("transcript.for_duration", duration = elapsed)
     });
     let detail = cap_chars(thinking, THINKING_TEXT_CAP);
-    let collapsed = collapsed_thoughts.borrow().contains(&key);
+    let collapsed = !thought_body_open(
+        key,
+        streaming,
+        expand_while_streaming,
+        &collapsed_thoughts.borrow(),
+    );
     let handle = thinking_scrolls
         .borrow_mut()
         .entry(key)
         .or_default()
         .clone();
-    // While reasoning streams, keep the newest line in view: the card is
-    // height-capped and would otherwise stay parked at the top while text
-    // keeps growing below the fold. The reader's own scroll away from the
-    // bottom detaches the card until they return (see
-    // `chain_thinking_scroll`).
-    if streaming && !thinking_detached.borrow().contains(&key) {
-        handle.scroll_to_bottom();
+    // While reasoning streams and the card is open, keep the newest line in
+    // view. Detach is written only by the wheel handler. Coming back within
+    // about a pixel of the bottom clears it and follows again. A collapsed
+    // card must not call `scroll_to_bottom` — that flag would apply the next
+    // time the reader opens it.
+    let detached = thinking_detached.borrow().contains(&key);
+    let at_bottom = thinking_is_at_bottom(handle.offset().y, handle.max_offset().height);
+    match thinking_scroll_action(collapsed, streaming, detached, at_bottom) {
+        ThinkingScroll::Follow => handle.scroll_to_bottom(),
+        ThinkingScroll::Rejoin => {
+            thinking_detached.borrow_mut().remove(&key);
+            handle.scroll_to_bottom();
+        }
+        ThinkingScroll::Idle | ThinkingScroll::Detached => {}
     }
     let id = (key.0 as u64) << 16 | key.1 as u64;
     // The reasoning glyph: brand accent while the card streams (with a slow
@@ -3002,11 +3034,12 @@ fn render_thinking_body(
                     let collapsed_thoughts = collapsed_thoughts.clone();
                     let scroller = scroller.clone();
                     move |_, _, cx| {
-                        let mut set = collapsed_thoughts.borrow_mut();
-                        if !set.remove(&key) {
-                            set.insert(key);
-                        }
-                        drop(set);
+                        toggle_thought(
+                            key,
+                            streaming,
+                            expand_while_streaming,
+                            &mut collapsed_thoughts.borrow_mut(),
+                        );
                         scroller.remeasure_toggle(key.0);
                         cx.refresh_windows();
                     }
@@ -3400,6 +3433,7 @@ fn render_activity_card(
     copied_sections: CopiedSections,
     expanded_sections: ExpandedSections,
     scroller: MessageScrollerState,
+    subagent_tool: Option<SubagentToolOpener>,
 ) -> AnyElement {
     // A structured questionnaire gets its own card — the raw arguments JSON
     // and the generic "Command/Arguments" detail would bury the question.
@@ -3673,18 +3707,30 @@ fn render_activity_card(
     if tool.failed {
         card = card.child(render_tool_error_strip(tool, !detail_shown, theme));
     }
-    card = card.when(has_detail, |row| {
-        let scroller = scroller.clone();
-        row.on_click(move |_, _, cx| {
-            let mut open = expanded_tools.borrow_mut();
-            if !open.remove(&key) {
-                open.insert(key);
-            }
-            drop(open);
-            scroller.remeasure_toggle(key.0);
-            cx.refresh_windows();
-        })
+    let open_pane = subagent_tool.and_then(|opener| {
+        tool.id
+            .clone()
+            .filter(|_| crate::transcript::is_subagent_tool(&tool.name))
+            .map(|id| (opener, id))
     });
+    if let Some((opener, tool_id)) = open_pane {
+        card = card.cursor_pointer().on_click(move |_, window, cx| {
+            opener(tool_id.clone(), window, cx);
+        });
+    } else {
+        card = card.when(has_detail, |row| {
+            let scroller = scroller.clone();
+            row.on_click(move |_, _, cx| {
+                let mut open = expanded_tools.borrow_mut();
+                if !open.remove(&key) {
+                    open.insert(key);
+                }
+                drop(open);
+                scroller.remeasure_toggle(key.0);
+                cx.refresh_windows();
+            })
+        });
+    }
 
     if tool_open && has_detail {
         card = card.child(render_tool_detail(
@@ -4950,6 +4996,7 @@ fn render_turn_fold(
 ) -> impl IntoElement {
     let label = fold_label(elapsed);
     div()
+        .debug_selector(move || format!("turn-fold-{ix}"))
         .w_full()
         .h(px(24.))
         .flex()
@@ -5795,10 +5842,28 @@ pub(crate) fn render_markdown_document(text: &str, theme: Theme) -> impl IntoEle
 pub(crate) fn render_subagent_markdown(
     text: &str,
     message_ix: usize,
-    theme: Theme,
+    mut theme: Theme,
     expanded: ExpandedBlocks,
     copied: CopiedSections,
 ) -> impl IntoElement + use<> {
+    // The pane reads at the tool-name size (12px). Headings stay semibold
+    // at that size; the main transcript keeps its own scale.
+    theme.type_scale = TypeScale {
+        body: 12.,
+        body_line: 18.,
+        h1: 12.,
+        h1_line: 18.,
+        h2: 12.,
+        h2_line: 18.,
+        h3: 12.,
+        h3_line: 18.,
+        h4: 12.,
+        h4_line: 18.,
+        code: 12.,
+        code_line: 18.,
+        aside: 12.,
+        aside_line: 18.,
+    };
     render_prose(
         text,
         subagent_message_ix(message_ix),
@@ -7392,9 +7457,8 @@ pub(crate) fn activity_icon(name: &str) -> &'static str {
 }
 
 /// One glyph per distinct work kind in a group, deduped and ordered
-/// canonically (run → read → edit → web → other), the reasoning bulb last
-/// when any step thought. The cluster is an index of what ran; the counts
-/// in the title stay the truth.
+/// canonically (run → read → edit → web → other). Thoughts are their own
+/// cards, so the cluster does not carry a reasoning bulb.
 fn activity_group_icons(steps: &[Step]) -> Vec<&'static str> {
     let mut icons: Vec<&'static str> = Vec::new();
     for step in steps {
@@ -7406,9 +7470,6 @@ fn activity_group_icons(steps: &[Step]) -> Vec<&'static str> {
         }
     }
     icons.sort_unstable_by_key(|icon| activity_icon_rank(icon));
-    if steps.iter().any(|step| !step.thinking.is_empty()) {
-        icons.push("icons/tools/thinking.svg");
-    }
     // Six glyphs is all a compact summary chip can afford before the cluster
     // starts competing with the title.
     icons.truncate(6);
@@ -7653,6 +7714,120 @@ mod tests {
     }
 
     #[test]
+    fn thought_body_opens_only_while_streaming_unless_the_reader_chose() {
+        let key = (0, 1);
+        let none = HashMap::new();
+        assert!(thought_body_open(key, true, true, &none));
+        assert!(!thought_body_open(key, true, false, &none));
+        assert!(!thought_body_open(key, false, true, &none));
+        let mut explicit = HashMap::new();
+        explicit.insert(key, true);
+        assert!(thought_body_open(key, false, false, &explicit));
+        explicit.insert(key, false);
+        assert!(!thought_body_open(key, true, true, &explicit));
+    }
+
+    #[test]
+    fn tool_groups_split_on_thoughts_and_answer_text() {
+        let tool = || ToolCall {
+            name: "bash".into(),
+            summary: String::new(),
+            path: None,
+            added: 0,
+            removed: 0,
+            id: None,
+            args: None,
+            output: None,
+            failed: false,
+            facts: Default::default(),
+        };
+        let steps = vec![
+            Step {
+                thinking: "one".into(),
+                tools: vec![tool()],
+                ..Step::default()
+            },
+            Step {
+                tools: vec![tool()],
+                ..Step::default()
+            },
+            Step {
+                thinking: "two".into(),
+                tools: vec![tool()],
+                ..Step::default()
+            },
+            Step {
+                text: "answer".into(),
+                tools: vec![tool()],
+                ..Step::default()
+            },
+        ];
+        assert_eq!(tool_group_end(&steps, 0), 2);
+        assert_eq!(tool_group_end(&steps, 2), 3);
+        assert_eq!(tool_group_end(&steps, 3), 4);
+        assert!(group_is_before_answer(&steps, 2));
+        assert!(group_is_before_answer(&steps, 3));
+        assert!(!group_is_before_answer(&steps, 4));
+        assert!(has_pre_answer_tools(&steps));
+        let thinking_only = vec![Step {
+            thinking: "only".into(),
+            ..Step::default()
+        }];
+        assert!(!has_pre_answer_tools(&thinking_only));
+    }
+
+    #[test]
+    fn thinking_card_is_at_bottom_within_a_pixel() {
+        assert!(thinking_is_at_bottom(px(0.), px(0.)));
+        assert!(thinking_is_at_bottom(px(-100.), px(100.)));
+        assert!(thinking_is_at_bottom(px(-99.2), px(100.)));
+        assert!(!thinking_is_at_bottom(px(-90.), px(100.)));
+    }
+
+    #[test]
+    fn a_collapsed_thinking_card_does_not_follow() {
+        assert_eq!(
+            thinking_scroll_action(true, true, false, false),
+            ThinkingScroll::Idle
+        );
+        assert_eq!(
+            thinking_scroll_action(true, true, true, true),
+            ThinkingScroll::Idle
+        );
+        assert_eq!(
+            thinking_scroll_action(false, false, false, true),
+            ThinkingScroll::Idle
+        );
+        assert_eq!(
+            thinking_scroll_action(false, true, false, false),
+            ThinkingScroll::Follow
+        );
+        assert_eq!(
+            thinking_scroll_action(false, true, true, false),
+            ThinkingScroll::Detached
+        );
+        assert_eq!(
+            thinking_scroll_action(false, true, true, true),
+            ThinkingScroll::Rejoin
+        );
+    }
+
+    #[test]
+    fn streaming_open_from_the_switch_is_not_stored_until_the_reader_clicks() {
+        let key = (0, 0);
+        let mut explicit = HashMap::new();
+        assert!(thought_body_open(key, true, true, &explicit));
+        assert!(
+            explicit.is_empty(),
+            "an open card caused by the switch is not written"
+        );
+        toggle_thought(key, true, true, &mut explicit);
+        assert_eq!(explicit.get(&key), Some(&false));
+        explicit.insert(key, true);
+        assert!(thought_body_open(key, false, false, &explicit));
+    }
+
+    #[test]
     fn activity_title_aggregates_every_step() {
         let tool = |name: &str| ToolCall {
             name: name.to_string(),
@@ -7682,11 +7857,11 @@ mod tests {
         ];
         assert_eq!(
             activity_title(&steps, false),
-            "Ran 1 command · Ran 1 file read · Ran 1 file edit · 2 thoughts"
+            "Ran 1 command · Ran 1 file read · Ran 1 file edit"
         );
         assert_eq!(
             activity_title(&steps, true),
-            "Ran 1 command · Ran 1 file read · Ran 1 file edit · Thinking"
+            "Ran 1 command · Ran 1 file read · Ran 1 file edit"
         );
         assert_eq!(activity_title(&[], false), "Worked");
     }
@@ -7712,7 +7887,8 @@ mod tests {
                 .collect(),
             ..Step::default()
         };
-        // Canonical order regardless of arrival order, deduped, bulb last.
+        // Canonical order regardless of arrival order, deduped. Thoughts are
+        // not part of the cluster.
         let icons = activity_group_icons(&[
             step("", &["read", "bash", "edit", "read", "bash"]),
             step("hmm", &["bash"]),
@@ -7723,15 +7899,9 @@ mod tests {
                 "icons/tools/bash.svg",
                 "icons/tools/read.svg",
                 "icons/tools/edit.svg",
-                "icons/tools/thinking.svg",
             ]
         );
-        // A thought-only group carries just the bulb; a tools-only group
-        // carries none.
-        assert_eq!(
-            activity_group_icons(&[step("hmm", &[])]),
-            vec!["icons/tools/thinking.svg"]
-        );
+        assert!(activity_group_icons(&[step("hmm", &[])]).is_empty());
         assert_eq!(
             activity_group_icons(&[step("", &["bash", "shell"])]),
             vec!["icons/tools/bash.svg"]
@@ -9191,6 +9361,7 @@ mod tests {
             expanded_turns: Rc::new(RefCell::new(HashSet::new())),
             expanded_files: Rc::new(RefCell::new(HashSet::new())),
             agent_calls: crate::agent_call_display::AgentCallDisplay::FollowRun,
+            expand_thinking: true,
             expanded_activities: Rc::new(RefCell::new(HashMap::new())),
             expanded_tools: Rc::new(RefCell::new(HashSet::new())),
             copied: Rc::new(RefCell::new(HashMap::new())),
@@ -9198,7 +9369,7 @@ mod tests {
             expanded_sections: Rc::new(RefCell::new(HashSet::new())),
             expanded_blocks: Rc::new(RefCell::new(HashSet::new())),
             thinking_scrolls: Rc::new(RefCell::new(HashMap::new())),
-            collapsed_thoughts: Rc::new(RefCell::new(HashSet::new())),
+            collapsed_thoughts: Rc::new(RefCell::new(HashMap::new())),
             thinking_detached: Rc::new(RefCell::new(HashSet::new())),
             hovered_turn: Rc::new(Cell::new(None)),
             hovered_usage: Rc::new(Cell::new(None)),
@@ -9215,6 +9386,7 @@ mod tests {
             review_changes: None,
             image_opener: None,
             fork_session: None,
+            subagent_tool: None,
             search_hits: None,
             search_active: None,
         }
@@ -10087,6 +10259,154 @@ mod tests {
                 "paragraphs must not overlap"
             );
         }
+    }
+
+    #[gpui::test]
+    fn thoughts_stay_beside_split_tool_groups_and_out_of_the_fold(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let tool = |name: &str| ToolCall {
+            name: name.into(),
+            summary: name.into(),
+            path: None,
+            added: 0,
+            removed: 0,
+            id: None,
+            args: None,
+            output: None,
+            failed: false,
+            facts: Default::default(),
+        };
+        let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![ChatMessage {
+            user: false,
+            summary: None,
+            steps: vec![
+                Step {
+                    thinking: "first thought".into(),
+                    tools: vec![tool("bash")],
+                    ..Step::default()
+                },
+                Step {
+                    thinking: "second thought".into(),
+                    tools: vec![tool("read")],
+                    ..Step::default()
+                },
+                Step {
+                    text: "the answer".into(),
+                    ..Step::default()
+                },
+            ],
+            images: Vec::new(),
+            elapsed: Some(Duration::from_secs(3)),
+            finished_at: None,
+            error: None,
+            aborted: false,
+        }]));
+        let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+        let paint = |cx: &mut gpui::VisualTestContext, open: bool, live: bool| {
+            let scroller = MessageScrollerState::new(1);
+            let view = cx.update(|_, cx| {
+                cx.new(|_| SelectTestView {
+                    messages: messages.clone(),
+                    state: state.clone(),
+                    scroller,
+                    main_width: px(900.),
+                    open_work: open,
+                    live,
+                })
+            });
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(1200.)),
+                |_, _| view.clone(),
+            );
+        };
+
+        // GPUI keeps debug bounds from the frame before last, so the
+        // thinking-only draw has to happen before any fold is painted.
+        messages.borrow_mut()[0].steps = vec![Step {
+            thinking: "only thought".into(),
+            ..Step::default()
+        }];
+        paint(cx, false, false);
+        assert!(cx.debug_bounds("thought-card-0-0").is_some());
+        assert!(
+            cx.debug_bounds("turn-fold-0").is_none(),
+            "thinking alone does not draw Worked for"
+        );
+
+        messages.borrow_mut()[0].steps = vec![
+            Step {
+                thinking: "first thought".into(),
+                tools: vec![tool("bash")],
+                ..Step::default()
+            },
+            Step {
+                thinking: "second thought".into(),
+                tools: vec![tool("read")],
+                ..Step::default()
+            },
+            Step {
+                thinking: "closing thought".into(),
+                text: "the answer".into(),
+                ..Step::default()
+            },
+        ];
+        paint(cx, true, false);
+        let thought0 = cx.debug_bounds("thought-card-0-0").expect("first thought");
+        let group0 = cx.debug_bounds("activity-group-0-0").expect("first tools");
+        let thought1 = cx.debug_bounds("thought-card-0-1").expect("second thought");
+        let group1 = cx.debug_bounds("activity-group-0-1").expect("second tools");
+        let fold = cx.debug_bounds("turn-fold-0").expect("worked-for fold");
+        assert!(thought0.top() < fold.top());
+        assert!(fold.top() < group0.top());
+        assert!(group0.top() < thought1.top());
+        assert!(thought1.top() < group1.top());
+        let thought2 = cx
+            .debug_bounds("thought-card-0-2")
+            .expect("thought on the answer step");
+        let answer = cx.debug_bounds("assistant-step-0-2").expect("answer text");
+        assert!(group1.top() < thought2.top());
+        assert!(thought2.top() < answer.top());
+        assert!(cx.debug_bounds("tool-card-0-0").is_some());
+        assert!(cx.debug_bounds("tool-card-0-1").is_some());
+        let copies = state
+            .borrow()
+            .blocks
+            .iter()
+            .filter(|block| block.text.contains("first thought"))
+            .count();
+        assert_eq!(
+            copies, 0,
+            "a settled thought is one card, not a second copy"
+        );
+
+        paint(cx, false, false);
+        assert!(cx.debug_bounds("thought-card-0-0").is_some());
+        assert!(cx.debug_bounds("thought-card-0-1").is_some());
+        assert!(cx.debug_bounds("turn-fold-0").is_some());
+        assert!(cx.debug_bounds("activity-group-0-0").is_none());
+        assert!(cx.debug_bounds("tool-card-0-0").is_none());
+
+        messages.borrow_mut()[0].steps = vec![
+            Step {
+                thinking: "first thought".into(),
+                tools: vec![tool("bash")],
+                ..Step::default()
+            },
+            Step {
+                thinking: "streaming thought unique".into(),
+                ..Step::default()
+            },
+        ];
+        paint(cx, true, true);
+        let streaming_copies = state
+            .borrow()
+            .blocks
+            .iter()
+            .filter(|block| block.text.contains("streaming thought unique"))
+            .count();
+        assert_eq!(streaming_copies, 1, "an open thought is not painted twice");
     }
 
     #[gpui::test]

@@ -91,6 +91,7 @@ crates/orbit-pi/        GPUI app — window, shell, chat, settings
   src/auth.rs           non-sensitive provider-auth state machine for the auth.* RPC namespace (login/cancel/timeout/restart recovery)
   src/transcript.rs     virtualized messages (snapshot + stream)
   src/transcript_view.rs Waku-style transcript paint (rail, activity cards, copy); plain-GPUI message rows (no component library)
+  src/thinking_display.rs  expand-thinking preference (`~/.orbit-pi/thinking-display.json`): stream reasoning open, or keep it one line
   src/message_scroller.rs tail-following list + jump-to-latest (original, plain gpui ListState)
   src/mermaid/          native Mermaid subset renderer: flowchart parse (incl. subgraph groups)
                         + layered layout (flowchart.rs), gpui painting (render.rs), text metrics
@@ -110,7 +111,7 @@ crates/orbit-pi/        GPUI app — window, shell, chat, settings
   src/sessions.rs       reads ~/.pi/agent/sessions (+ debounced session-store watcher)
   src/watch.rs          shared debounced fs watching (workspace tree for Review/Git)
   src/explorer/         workspace file tree + file editor
-    walk.rs             gitignore-aware background snapshot (`ignore` crate)
+    walk.rs             gitignore-aware background snapshot (`ignore` crate); the one workspace index, shared with `@` mentions
     tree.rs             pure tree: expand/collapse, filter, git badges
     panel.rs            ProjectPanel entity: right dock, virtualized tree
     viewer.rs           FileViewer entity: editable code/text, markdown/image views, autosave
@@ -223,7 +224,7 @@ Look-up order:
 | `rust-i18n` 4.2 | `t!` lookups, YAML locales | https://docs.rs/rust-i18n/4.2.0 | `locales/en.yml` is the source of truth; other locales are generated. Placeholder binding names must match the key exactly. Never hard-code user-facing English. |
 | `rfd` 0.15 | file pickers (attach, screenshots, export) | https://docs.rs/rfd/0.15.0 | Use `AsyncFileDialog`, or gpui's `prompt_for_paths` for folders. **Never** the blocking `FileDialog`: it runs a nested main-thread modal loop that re-enters the app and panics with `already borrowed`. |
 | `include_dir` 0.7 | `assets/` as a `gpui::AssetSource` | https://docs.rs/include_dir/0.7.0 | Packaged builds must not read assets from cwd. |
-| `ignore` 0.4 | gitignore-aware workspace walk | https://docs.rs/ignore/0.4.0 | Walk off the UI thread and post a snapshot; do not hand-roll `read_dir`. |
+| `ignore` 0.4 | gitignore-aware workspace walk | https://docs.rs/ignore/0.4.0 | Walk off the UI thread and post a snapshot; do not hand-roll `read_dir`. `require_git(false)` so a plain folder's `.gitignore` counts, `parents(false)` so an ancestor's does not, `filter_entry` to drop `.git`/OS metadata once hidden entries are indexed. |
 | `notify-debouncer-mini` 0.7 | session-store and workspace watchers | https://docs.rs/notify-debouncer-mini/0.7.0 | Debounce, scan off-thread, only drain a list on the heartbeat. |
 | `serde` / `serde_json` 1 | JSONL envelopes, on-disk stores | https://serde.rs | Permissive protocol parsing: unknown shapes pass through as raw JSON; no `deny_unknown_fields` on RPC types. |
 | `anyhow` 1 | context on fallible plumbing | https://docs.rs/anyhow/1 | `Context` at boundaries; no `unwrap`/`expect` in a render path or on RPC data. |
@@ -386,7 +387,7 @@ stack is gone; do not resurrect it.
 | Sessions | `sessions.rs`, `app/session.rs` | Reads pi sessions from `~/.pi/agent/sessions/`; supports new/open/switch/clone, workspace grouping, parked background processes, and session persistence. |
 | RPC | `crates/orbit-rpc/` | One `pi --mode rpc` child per live session, JSONL over stdio, permissive event parsing, typed commands for the currently used protocol surface. |
 | Transcript | `transcript.rs`, `transcript_view.rs`, `message_scroller.rs` | Virtualized streaming transcript with tail-following, jump-to-latest, tool activity, markdown/code rendering, find, and error states. |
-| Composer | `composer.rs`, `app/composer_ops.rs` | Multiline input, commands, file mentions, image attachments, queued follow-ups, steer, abort, and access/workflow controls. |
+| Composer | `composer.rs`, `app/composer_ops.rs` | Multiline input, commands, file mentions (`mentions::MentionIndex` — in-process ranking of the shared workspace index, no `fd` subprocess), image attachments, queued follow-ups, steer, abort, and access/workflow controls. |
 | Explorer / Files | `src/explorer/` | Gitignore-aware workspace tree, keyboard navigation, file editor, Markdown/image views, autosave, file operations, and honest binary/oversized/non-UTF-8 states. |
 | Review / Git | `review.rs`, `sidepane.rs`, `git.rs`, `git_panel.rs`, `worktree.rs`, `worktree_setup.rs`, `app/worktrees.rs` | Diff review, changed-file navigation, Git status/history/graph, staging, commit, branch operations, GitHub issue/PR workflows where `gh` is available, and Git worktrees as first-class workspaces (optional setup script, sessions rooted in the worktree). |
 | Agent controls | `access.rs`, `workflow.rs` | Supervised/Auto-accept edits/Full access and Plan/Build/Ask workflow modes. These are extension-backed controls, not a sandbox. |

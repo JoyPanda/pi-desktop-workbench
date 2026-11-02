@@ -29,8 +29,6 @@ const MAX_PX: f32 = 4000.;
 pub struct Layout {
     pub sidebar_width: Option<f32>,
     pub sidepane_width: Option<f32>,
-    pub explorer_width: Option<f32>,
-    pub subagent_width: Option<f32>,
     pub terminal_height: Option<f32>,
 }
 
@@ -41,8 +39,6 @@ impl Layout {
         Self {
             sidebar_width: field(value, "sidebar_width"),
             sidepane_width: field(value, "sidepane_width"),
-            explorer_width: field(value, "explorer_width"),
-            subagent_width: field(value, "subagent_width"),
             terminal_height: field(value, "terminal_height"),
         }
     }
@@ -66,8 +62,6 @@ impl Layout {
             json!({
                 "sidebar_width": self.sidebar_width,
                 "sidepane_width": self.sidepane_width,
-                "explorer_width": self.explorer_width,
-                "subagent_width": self.subagent_width,
                 "terminal_height": self.terminal_height,
             })
             .to_string(),
@@ -106,12 +100,6 @@ pub fn sidebar_width() -> Option<f32> {
 pub fn sidepane_width() -> Option<f32> {
     with_store(|store| store.layout.sidepane_width)
 }
-pub fn explorer_width() -> Option<f32> {
-    with_store(|store| store.layout.explorer_width)
-}
-pub fn subagent_width() -> Option<f32> {
-    with_store(|store| store.layout.subagent_width)
-}
 pub fn terminal_height() -> Option<f32> {
     with_store(|store| store.layout.terminal_height)
 }
@@ -133,14 +121,6 @@ pub fn set_sidebar_width(px: f32) {
 pub fn set_sidepane_width(px: f32) {
     let now = Instant::now();
     with_store(|store| record(store, now, |layout| layout.sidepane_width = Some(px)));
-}
-pub fn set_explorer_width(px: f32) {
-    let now = Instant::now();
-    with_store(|store| record(store, now, |layout| layout.explorer_width = Some(px)));
-}
-pub fn set_subagent_width(px: f32) {
-    let now = Instant::now();
-    with_store(|store| record(store, now, |layout| layout.subagent_width = Some(px)));
 }
 pub fn set_terminal_height(px: f32) {
     let now = Instant::now();
@@ -177,15 +157,11 @@ mod tests {
         let layout = Layout {
             sidebar_width: Some(248.),
             sidepane_width: Some(460.),
-            explorer_width: Some(300.),
-            subagent_width: Some(460.),
             terminal_height: Some(260.),
         };
         let value = json!({
             "sidebar_width": layout.sidebar_width,
             "sidepane_width": layout.sidepane_width,
-            "explorer_width": layout.explorer_width,
-            "subagent_width": layout.subagent_width,
             "terminal_height": layout.terminal_height,
         });
         assert_eq!(Layout::from_value(&value), layout);
@@ -196,12 +172,11 @@ mod tests {
         let value = json!({
             "sidebar_width": 248.,
             "sidepane_width": 10.,      // below MIN_PX
-            "explorer_width": 99999.,   // above MAX_PX
+            "terminal_height": 99999., // above MAX_PX
         });
         let layout = Layout::from_value(&value);
         assert_eq!(layout.sidebar_width, Some(248.));
         assert_eq!(layout.sidepane_width, None);
-        assert_eq!(layout.explorer_width, None);
         assert_eq!(layout.terminal_height, None);
     }
 

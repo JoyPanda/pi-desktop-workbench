@@ -321,10 +321,10 @@ impl OrbitApp {
             busy: running,
             session_id: self.session_id.clone(),
             sidebar_visible: self.sidebar_visible,
-            side_panel_visible: self.sidepane.read(cx).is_open(),
+            side_panel_visible: self.dock_visible(),
             terminal_visible: self.terminal_panel.read(cx).is_open(),
             terminal_tabs: self.terminal_panel.read(cx).tab_count(),
-            project_panel_visible: self.project_panel.read(cx).is_open(),
+            project_panel_visible: self.files_docked(cx),
             can_choose_model: !self.available_models.is_empty() && !running,
             can_choose_thinking: self.can_choose_thinking() && !running,
             mcp_servers: self
@@ -487,14 +487,7 @@ impl OrbitApp {
                 self.toggle_sidebar(window, cx);
                 cx.notify();
             }
-            CommandId::ToggleSidePanel => {
-                // Opening Review replaces the Git page and the subagent dock.
-                if !self.sidepane.read(cx).is_open() {
-                    self.close_git_for_review(cx);
-                    self.subagents.yield_dock();
-                }
-                self.sidepane.update(cx, |pane, cx| pane.toggle(cx));
-            }
+            CommandId::ToggleSidePanel => self.toggle_side_panel(cx),
             CommandId::ToggleTerminal => {
                 self.terminal_panel
                     .update(cx, |panel, cx| panel.toggle(window, cx));
@@ -511,8 +504,7 @@ impl OrbitApp {
             CommandId::PrevTerminalTab => {
                 self.on_prev_terminal_tab(&crate::PrevTerminalTab, window, cx);
             }
-            // Route through the app so opening the tree also closes Review;
-            // the two docks are mutually exclusive.
+            // Route through the app: opening the tree adds (or shows) its dock tab.
             CommandId::ToggleProjectPanel => self.toggle_project_panel(cx),
             CommandId::GitTabChanges => self.on_git_tab(0, window, cx),
             CommandId::GitTabHistory => self.on_git_tab(1, window, cx),

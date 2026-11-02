@@ -427,14 +427,16 @@ partially entered answers, and background requests wait instead of being denied.
 Opening the session restores its surface; waiting sessions remain busy and visible
 under collapsed project groups. Custom terminal surfaces still cancel on departure.
 
-Session rows spend exactly one glyph on execution state, in a fixed 16px **status
-lane** at the leading edge of the row's state line (`status_lane`, `status_lane_icon`,
-`status_lane_ink`, `status_lane_words`): accent spinner while running, amber lock for
-an approval gate or chat glyph for a question, green check for a read result, green
-eye for an unread one, red cross for a failure or a dead process, mute stop for an
-aborted run, and no glyph at all for Idle / Unknown (the lane still reserves its
-width). Only the spinner animates. Blocked, unread, and failed states add words in
-place of the age, so colour is never the only signal; the tooltip names the rest.
+Session rows lead with a list marker in the sidebar's icon column: a muted dot, or the
+accent spinner while `status_lane` is Progress (Running, Retrying, Compacting). That
+spinner is the only animated glyph, and it is not repeated in the trailing badge. Every
+other execution state still spends one trailing glyph (`status_lane_icon`,
+`status_lane_ink`, `status_lane_words`): amber lock for an approval gate or chat glyph
+for a question, green check for a read result, green eye for an unread one, red cross
+for a failure or a dead process, mute stop for an aborted run, and no trailing glyph
+for Idle / Unknown. Only the spinner animates. Blocked, unread, and failed states add
+words in place of the age, so colour is never the only signal; the tooltip names the
+rest, including which in-progress kind the leading spinner is.
 
 A turn that settles while the user is not reading it leaves a separate unread mark on
 its row (`OrbitApp::awaiting_review`) — a green eye with "Needs review", or a red cross
@@ -559,6 +561,15 @@ expanded or always collapsed instead. The mode is a global Orbit UI preference
 (`~/.orbit-pi/agent-calls.json`, `agent_call_display.rs`), not a pi setting; an
 explicit per-group or per-call toggle always wins, so the setting only moves the
 default and never fights the reader.
+
+Expand thinking — Settings → Behavior, stored in
+`~/.orbit-pi/thinking-display.json` (`thinking_display.rs`) — defaults on.
+While a step is still reasoning and the reader has not chosen, its card is
+open. When that step ends the card collapses to one line; an explicit open or
+close survives the end of the step. Turning the setting off keeps streaming
+thoughts on that one line until the reader opens one. Thinking cards stay in
+step order, beside the tool groups they split, and are never folded into
+Worked for. Worked for hides only tools that happened before the first answer.
 
 The sessions sidebar reads as three levels, not one: the "Projects" section
 label in muted 12px, a project group header in the accent's hue at body-ink

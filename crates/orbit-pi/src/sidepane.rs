@@ -19,8 +19,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    div, prelude::*, px, AnyElement, ClickEvent, Context, CursorStyle, Entity, FontWeight,
-    ListAlignment, ListOffset, ListState, MouseDownEvent, Pixels, Render, ScrollHandle,
+    div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWeight, ListAlignment,
+    ListOffset, ListState, MouseDownEvent, Pixels, Render, ScrollHandle,
     StatefulInteractiveElement, Window,
 };
 
@@ -38,8 +38,7 @@ use crate::git;
 use crate::review::{self, ExpansionDirection, GapPosition, LineKind, Snapshot, Source};
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    context_menu, input, panel, picker, popover, ButtonSize, DynamicSpacing, IconSize, Radius,
-    TextSize,
+    context_menu, input, picker, popover, ButtonSize, DynamicSpacing, IconSize, Radius, TextSize,
 };
 use crate::theme::{self, Theme, ThemeMode};
 use crate::usage::tooltip::Tooltip;
@@ -50,8 +49,9 @@ const PANE_MIN_W: f32 = 300.;
 /// Ceiling a left-edge drag can reach. Full width is exempt from this cap — it
 /// deliberately takes the whole column beside the sidebar.
 const PANE_MAX_W: f32 = 900.;
-/// Below this width the ±stats collapse out of the toolbar.
-const STATS_MIN_PANE_W: f32 = 380.;
+/// Below this width (or while the diff is truncated) the ±stats collapse out of
+/// the toolbar, which also carries the tree toggle and refresh.
+const STATS_MIN_PANE_W: f32 = 440.;
 /// Below this width the changed-files tree is hidden (responsive).
 const TREE_MIN_PANE_W: f32 = 440.;
 /// Directory tree column width range.
@@ -86,6 +86,10 @@ pub type SectionActions = std::rc::Rc<dyn Fn(&str, bool, Theme) -> Option<AnyEle
 pub struct SidePane {
     /// Whether the pane is shown at all (toggled from the top bar).
     open: bool,
+    /// Bumps whenever a caller asks for the pane to be shown (Review, a file,
+    /// a turn), so the app can surface its dock tab even when `open` was
+    /// already true.
+    reveal_epoch: u64,
     /// Render as an embedded review browser instead of a docked pane: the
     /// chrome (width, resize handle, and the full-width/close controls) is
     /// dropped and width decisions use [`SidePane::available_width`], so the
@@ -190,6 +194,7 @@ impl SidePane {
             .max(PANE_MIN_W));
         Self {
             open: false,
+            reveal_epoch: 0,
             embedded: false,
             width,
             available_width: width,
@@ -235,14 +240,29 @@ impl SidePane {
     // ── state entry points (called from the app shell) ─────────────────
 
     /// Show/hide the pane (top-bar toggle).
+    #[cfg(test)]
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
-        self.open = !self.open;
-        if !self.open {
+        if self.open {
+            self.open = false;
             self.source_menu_open = false;
-        } else if self.review_stale && !self.review_loading {
-            self.load_review(cx);
+        } else {
+            self.reveal();
+            if self.review_stale && !self.review_loading {
+                self.load_review(cx);
+            }
         }
         cx.notify();
+    }
+
+    /// Mark the pane open and tell the app a caller wants it on screen.
+    fn reveal(&mut self) {
+        self.open = true;
+        self.reveal_epoch = self.reveal_epoch.wrapping_add(1);
+    }
+
+    /// Counts every request to show the pane; see the `reveal_epoch` field.
+    pub fn reveal_epoch(&self) -> u64 {
+        self.reveal_epoch
     }
 
     pub fn is_open(&self) -> bool {
@@ -283,14 +303,14 @@ impl SidePane {
         cx.notify();
     }
 
-    /// Whether the pane has taken the window's full width (the chat column
-    /// and the sessions sidebar yield to it).
+    /// Whether the right dock has taken the window's full width (the chat column
+    /// yields to it and the sessions sidebar opens beside it).
     pub fn is_full_width(&self) -> bool {
         self.full_width
     }
 
     /// Leave Full width and restore the docked width. The app calls this when
-    /// a feature page opens or the sessions sidebar is toggled — both need the
+    /// a feature page or a file opens, or the dock is hidden — all need the
     /// window back.
     pub fn leave_full_width(&mut self, cx: &mut Context<Self>) {
         if !self.full_width {
@@ -566,25 +586,20 @@ impl SidePane {
         self.mark_review_stale(cx);
     }
 
-    /// Close the pane if it is open. Used when the Explorer opens — the two
-    /// right docks are mutually exclusive.
+    /// Close the pane if it is open (its dock tab closes with it).
     pub fn close(&mut self, cx: &mut Context<Self>) {
         if !self.open {
             return;
         }
         self.open = false;
         self.source_menu_open = false;
-        // A pane that comes back later must not come back as a full-width
-        // sheet; restore the width the reader dialed in.
-        self.full_width = false;
-        self.width = self.restore_width.max(px(PANE_MIN_W));
         cx.notify();
     }
 
     /// Open Review on the working tree's **Uncommitted** changes — the
     /// top-bar `+N -M` diff-stat chip's action.
     pub fn show_uncommitted(&mut self, cx: &mut Context<Self>) {
-        self.open = true;
+        self.reveal();
         if self.source != Source::Uncommitted {
             self.source = Source::Uncommitted;
             self.source_menu_open = false;
@@ -600,7 +615,7 @@ impl SidePane {
     /// Open Review on the working tree and select `path` — the Git page's
     /// changed-file rows call this so a row opens its diff.
     pub fn show_file(&mut self, path: String, cx: &mut Context<Self>) {
-        self.open = true;
+        self.reveal();
         if self.source != Source::Uncommitted {
             self.source = Source::Uncommitted;
             self.clear_diff();
@@ -616,7 +631,7 @@ impl SidePane {
     /// Open the pane on Review — wired to the transcript's changed-files
     /// cards' "Review" buttons and the command palette.
     pub fn show_review(&mut self, cx: &mut Context<Self>) {
-        self.open = true;
+        self.reveal();
         if self.review_stale && !self.review_loading {
             self.load_review(cx);
         }
@@ -912,7 +927,7 @@ impl SidePane {
     /// conversation turn, not a Git checkpoint. A missing turn stays on Last
     /// Turn so a non-repo workspace does not fall through to Uncommitted.
     pub fn show_review_turn(&mut self, turn: Option<usize>, cx: &mut Context<Self>) {
-        self.open = true;
+        self.reveal();
         match turn.filter(|turn| *turn > 0) {
             Some(turn_count) => {
                 let target = Source::LastTurn { turn_count };
@@ -1100,9 +1115,9 @@ impl SidePane {
     // ── rendering ──────────────────────────────────────────────────────
 
     fn body(&mut self, window: &Window, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
-        // Embedded drops the header row (there is no tree toggle or refresh
-        // there) and the changed-files tree: the host surface shows the source
-        // toolbar and the diff list, exactly like the Review pane's flat view.
+        // Embedded drops the toolbar (there is no tree toggle or refresh there)
+        // and the changed-files tree: the host surface shows the diff list,
+        // exactly like the Review pane's flat view.
         if !self.embedded {
             self.sync_tree_rows(cx);
         }
@@ -1119,104 +1134,44 @@ impl SidePane {
         let tree_available = !self.embedded && self.pane_width() >= px(TREE_MIN_PANE_W);
         let tree_visible = tree_available && self.tree_open;
 
-        // Header row: title + tree toggle + refresh + the panel-window
-        // controls (full width, close). Embedded drops the panel-window
-        // controls — they belong to the dock, not the host surface.
-        let mut head = div()
-            .h(px(PANE_ROW_H))
-            .flex()
-            .items_center()
-            .gap_1()
-            .pl(DynamicSpacing::Base12.px(&theme))
-            // The top bar above owns the caption buttons; the dock below it
-            // never shares their row.
-            .pr(DynamicSpacing::Base06.px(&theme))
-            .border_b_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_primary)
-                    .child(tr!("sidepane.review")),
-            )
-            .children(tree_available.then(|| {
-                icon_button_frame(div().id("review-tree-toggle"), &theme, ButtonSize::Default)
-                    .group(BUTTON_GROUP)
-                    .tip(tr!("sidepane.toggle_tree"))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.surface_hover))
-                    .active(|s| s.opacity(PRESS_DIM))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_tree(cx)))
-                    .child(icon(
-                        "icons/folder.svg",
-                        ButtonSize::Default.icon_size().px(&theme),
-                        if self.tree_open {
-                            theme.text_primary
-                        } else {
-                            theme.text_muted
-                        },
-                    ))
-            }))
-            .child(
-                icon_button_frame(div().id("review-refresh"), &theme, ButtonSize::Default)
-                    .group(BUTTON_GROUP)
-                    .tip(tr!("common.refresh"))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.surface_hover))
-                    .active(|s| s.opacity(PRESS_DIM))
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.refresh_from_button(cx);
-                    }))
-                    .child(refresh_glyph(
-                        "review-spinner",
-                        ButtonSize::Default.icon_size().px(&theme),
-                        self.review_loading || self.refresh_spin_until.is_some(),
-                        theme.text_muted,
-                        theme,
-                    )),
-            );
-
-        if !self.embedded {
-            head = head
-                .child(self.view_toggle(
-                    "review-full-width",
-                    ButtonSize::Default,
-                    if self.full_width {
-                        "icons/arrow-shrink.svg"
+        // Tree toggle and refresh sit at the end of the toolbar row. The dock's
+        // tab already names this view, so there is no title row above; the
+        // panel-window controls (full width, hide) live on the dock's tab bar.
+        let tree_toggle = tree_available.then(|| {
+            icon_button_frame(div().id("review-tree-toggle"), &theme, ButtonSize::Default)
+                .group(BUTTON_GROUP)
+                .tip(tr!("sidepane.toggle_tree"))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.surface_hover))
+                .active(|s| s.opacity(PRESS_DIM))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_tree(cx)))
+                .child(icon(
+                    "icons/folder.svg",
+                    ButtonSize::Default.icon_size().px(&theme),
+                    if self.tree_open {
+                        theme.text_primary
                     } else {
-                        "icons/arrow-expand.svg"
+                        theme.text_muted
                     },
-                    self.full_width,
-                    true,
-                    if self.full_width {
-                        tr!("sidepane.restore_width")
-                    } else {
-                        tr!("sidepane.full_width")
-                    },
-                    Self::toggle_full_width,
-                    theme,
-                    cx,
                 ))
-                .child(
-                    icon_button_frame(div().id("pane-close"), &theme, ButtonSize::Default)
-                        .group(BUTTON_GROUP)
-                        .tip(tr!("common.close"))
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.surface_hover))
-                        .active(|s| s.opacity(PRESS_DIM))
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close(cx)))
-                        .child(icon(
-                            "icons/x.svg",
-                            ButtonSize::Default.icon_size().px(&theme),
-                            theme.text_muted,
-                        )),
-                );
-        }
+        });
+        let refresh_button =
+            icon_button_frame(div().id("review-refresh"), &theme, ButtonSize::Default)
+                .group(BUTTON_GROUP)
+                .tip(tr!("common.refresh"))
+                .cursor_pointer()
+                .hover(|s| s.bg(theme.surface_hover))
+                .active(|s| s.opacity(PRESS_DIM))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.refresh_from_button(cx);
+                }))
+                .child(refresh_glyph(
+                    "review-spinner",
+                    ButtonSize::Default.icon_size().px(&theme),
+                    self.review_loading || self.refresh_spin_until.is_some(),
+                    theme.text_muted,
+                    theme,
+                ));
 
         // The source filter belongs to the docked Review pane. The Git page's
         // embedded browser always shows the working tree split into Staged and
@@ -1257,8 +1212,8 @@ impl SidePane {
                 .into_any_element()
         });
 
-        // Toolbar: the source filter chip, the diff view toggles, and the
-        // live ±stats.
+        // Toolbar: the source filter chip, the diff view toggles, the live
+        // ±stats, then the tree toggle and refresh.
         let toolbar = div()
             .h(px(PANE_ROW_H))
             .flex()
@@ -1283,7 +1238,7 @@ impl SidePane {
                 (!self.embedded)
                     .then(|| self.view_toggle_group("review", ButtonSize::Default, theme, cx)),
             )
-            .children((!compact).then(|| {
+            .children((!compact && !truncated).then(|| {
                 div()
                     .flex()
                     .items_center()
@@ -1292,11 +1247,13 @@ impl SidePane {
                     .font_weight(FontWeight::MEDIUM)
                     .child(div().text_color(theme.success).child(format!("+{added}")))
                     .child(div().text_color(theme.error).child(format!("-{removed}")))
-            }));
+            }))
+            .children(tree_toggle)
+            .child(refresh_button);
 
         let content = self.render_content(window, theme, tree_visible, cx);
 
-        // Embedded drops the dock title row and the toolbar: the host surface
+        // Embedded drops the toolbar: the host surface
         // already names the view, and every grouped section strip carries the
         // browser controls. Only a truncation warning still needs its own row.
         let mut column = div().flex_1().min_h_0().flex().flex_col();
@@ -1316,7 +1273,7 @@ impl SidePane {
                 );
             }
         } else {
-            column = column.child(head).child(toolbar);
+            column = column.child(toolbar);
         }
         column.child(content).into_any_element()
     }
@@ -2411,44 +2368,24 @@ impl Render for SidePane {
         }
         let theme = *theme::get(cx);
         let body = self.body(window, theme, cx);
+        // The tab body of the right dock: the dock owns the width, the
+        // resize handle, and the left hairline. The menus stay outside the
+        // clipped shell so they are not cut off at its edge.
         div()
             .id("side-pane")
             .debug_selector(|| "side-pane".to_string())
             .relative()
-            .flex_none()
-            .w(self.width)
-            .h_full()
-            .pl(DynamicSpacing::Base12.px(&theme))
+            .flex_1()
+            .w_full()
+            .min_h_0()
             .flex()
             .flex_col()
-            .min_h_0()
-            .child(
-                div()
-                    .id("side-pane-resize-handle")
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    // Sit on the card's left border (the 12px gutter, minus
-                    // half the handle width), not the panel's outer edge, so
-                    // the edge users see is the edge they can grab.
-                    .left(px(9.))
-                    .w(px(6.))
-                    .cursor(CursorStyle::ResizeLeftRight)
-                    .hover(|style| style.bg(theme.accent.opacity(0.4)))
-                    .on_drag(SidePaneResize, |_, _, _, cx| cx.new(|_| DragGhost)),
-            )
-            // The dock reads as a rounded card, like the Git/Usage cards in
-            // the main column. The menus stay outside this clipped shell so
-            // they are not cut off at its corners.
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .w_full()
                     .bg(theme.background)
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded(panel::RADIUS.px(&theme))
                     .overflow_hidden()
                     .flex()
                     .flex_col()
@@ -2461,7 +2398,7 @@ impl Render for SidePane {
 }
 
 /// An invisible drag ghost — resizing leaves no floating preview.
-struct DragGhost;
+pub struct DragGhost;
 
 /// Whether `ix` begins a hunk: an explicit hunk header, or the first
 /// addition/deletion of a change run. Full-context snapshots carry no
@@ -2765,7 +2702,14 @@ mod tests {
             });
         });
         let viewport = || gpui::size(px(900.), px(700.));
-        let _ = cx.draw(point(px(0.), px(0.)), viewport(), |_, _| pane.clone());
+        let _ = cx.draw(point(px(0.), px(0.)), viewport(), |_, _| {
+            div()
+                .w(px(460.))
+                .h(px(700.))
+                .flex()
+                .flex_col()
+                .child(pane.clone())
+        });
 
         let scroller = cx.update(|_, cx| pane.read(cx).h_scroll.bounds());
         assert!(
@@ -2789,7 +2733,14 @@ mod tests {
             delta: gpui::ScrollDelta::Pixels(point(px(-240.), px(0.))),
             ..Default::default()
         });
-        let _ = cx.draw(point(px(0.), px(0.)), viewport(), |_, _| pane.clone());
+        let _ = cx.draw(point(px(0.), px(0.)), viewport(), |_, _| {
+            div()
+                .w(px(460.))
+                .h(px(700.))
+                .flex()
+                .flex_col()
+                .child(pane.clone())
+        });
         let offset = cx.update(|_, cx| pane.read(cx).h_scroll.offset().x);
         assert!(
             offset < px(0.),

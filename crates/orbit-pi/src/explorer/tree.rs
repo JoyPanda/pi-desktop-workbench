@@ -65,6 +65,8 @@ pub struct Node {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    /// A `.`-prefixed segment; the panel hides these unless asked.
+    pub is_hidden: bool,
     pub children: Vec<Node>,
 }
 
@@ -86,18 +88,14 @@ impl TreeIndex {
     /// Build the tree from a flat snapshot and a badge map. Missing
     /// intermediate directories are synthesized, so a file always has its
     /// ancestors even if the walker's directory list is sparse.
-    pub fn build(snapshot: Snapshot, badges: HashMap<String, StatusBadge>) -> Self {
+    pub fn build(snapshot: &Snapshot, badges: HashMap<String, StatusBadge>) -> Self {
         let mut root = Node {
             is_dir: true,
             ..Node::default()
         };
-        for dir in &snapshot.dirs {
-            let parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
-            insert(&mut root, &parts, true);
-        }
-        for file in &snapshot.files {
-            let parts: Vec<&str> = file.split('/').filter(|p| !p.is_empty()).collect();
-            insert(&mut root, &parts, false);
+        for entry in &snapshot.entries {
+            let parts: Vec<&str> = entry.path.split('/').filter(|p| !p.is_empty()).collect();
+            insert(&mut root, &parts, entry.is_dir, entry.is_hidden);
         }
         sort_children(&mut root);
 
@@ -112,7 +110,11 @@ impl TreeIndex {
             root,
             badges,
             dirty_dirs,
-            file_count: snapshot.files.len(),
+            file_count: snapshot
+                .entries
+                .iter()
+                .filter(|entry| !entry.is_dir)
+                .count(),
             truncated: snapshot.truncated,
         }
     }
@@ -125,7 +127,7 @@ impl TreeIndex {
     }
 }
 
-fn insert(node: &mut Node, parts: &[&str], is_dir: bool) {
+fn insert(node: &mut Node, parts: &[&str], is_dir: bool, is_hidden: bool) {
     let Some((name, rest)) = parts.split_first() else {
         return;
     };
@@ -141,6 +143,13 @@ fn insert(node: &mut Node, parts: &[&str], is_dir: bool) {
                 name: (*name).to_string(),
                 path: path.clone(),
                 is_dir: rest.is_empty() && is_dir,
+                // A synthesized intermediate directory carries its own
+                // segment's hiddenness; the leaf is authoritative.
+                is_hidden: if rest.is_empty() {
+                    is_hidden
+                } else {
+                    name.starts_with('.')
+                },
                 children: Vec::new(),
             });
             node.children.len() - 1
@@ -148,9 +157,10 @@ fn insert(node: &mut Node, parts: &[&str], is_dir: bool) {
     };
     if rest.is_empty() {
         node.children[index].is_dir = is_dir;
+        node.children[index].is_hidden = is_hidden;
     } else {
         node.children[index].is_dir = true;
-        insert(&mut node.children[index], rest, is_dir);
+        insert(&mut node.children[index], rest, is_dir, is_hidden);
     }
 }
 
@@ -225,17 +235,23 @@ impl Row {
 /// Flatten the tree into the rows the panel paints. With an empty filter this
 /// is a plain expand/collapse walk; a non-empty filter reveals only matching
 /// files, their ancestor directories, and — when a directory name matches —
-/// that directory's whole subtree.
-pub fn visible_rows(index: &TreeIndex, expanded: &HashSet<String>, filter: &str) -> Vec<Row> {
+/// that directory's whole subtree. Hidden entries are skipped unless
+/// `show_hidden`; a hidden directory takes its whole subtree with it.
+pub fn visible_rows(
+    index: &TreeIndex,
+    expanded: &HashSet<String>,
+    filter: &str,
+    show_hidden: bool,
+) -> Vec<Row> {
     let needle = filter.trim().to_lowercase();
     let mut rows = Vec::new();
     if needle.is_empty() {
         for child in &index.root.children {
-            push_expanded(index, child, 0, expanded, &mut rows);
+            push_expanded(index, child, 0, expanded, show_hidden, &mut rows);
         }
     } else {
         for child in &index.root.children {
-            push_matching(index, child, 0, &needle, &mut rows);
+            push_matching(index, child, 0, &needle, show_hidden, &mut rows);
         }
     }
     rows
@@ -246,13 +262,17 @@ fn push_expanded(
     node: &Node,
     depth: usize,
     expanded: &HashSet<String>,
+    show_hidden: bool,
     out: &mut Vec<Row>,
 ) {
+    if node.is_hidden && !show_hidden {
+        return;
+    }
     let is_expanded = node.is_dir && expanded.contains(&node.path);
     out.push(row_for(index, node, depth, is_expanded));
     if is_expanded {
         for child in &node.children {
-            push_expanded(index, child, depth + 1, expanded, out);
+            push_expanded(index, child, depth + 1, expanded, show_hidden, out);
         }
     }
 }
@@ -262,21 +282,32 @@ fn push_matching(
     node: &Node,
     depth: usize,
     needle: &str,
+    show_hidden: bool,
     out: &mut Vec<Row>,
 ) -> bool {
+    if node.is_hidden && !show_hidden {
+        return false;
+    }
     let self_match = node.name.to_lowercase().contains(needle);
     if node.is_dir {
         if self_match {
             out.push(row_for(index, node, depth, true));
             for child in &node.children {
-                push_all(index, child, depth + 1, out);
+                push_all(index, child, depth + 1, show_hidden, out);
             }
             return true;
         }
         let mut child_rows = Vec::new();
         let mut any = false;
         for child in &node.children {
-            any |= push_matching(index, child, depth + 1, needle, &mut child_rows);
+            any |= push_matching(
+                index,
+                child,
+                depth + 1,
+                needle,
+                show_hidden,
+                &mut child_rows,
+            );
         }
         if any {
             out.push(row_for(index, node, depth, true));
@@ -291,10 +322,13 @@ fn push_matching(
     }
 }
 
-fn push_all(index: &TreeIndex, node: &Node, depth: usize, out: &mut Vec<Row>) {
+fn push_all(index: &TreeIndex, node: &Node, depth: usize, show_hidden: bool, out: &mut Vec<Row>) {
+    if node.is_hidden && !show_hidden {
+        return;
+    }
     out.push(row_for(index, node, depth, node.is_dir));
     for child in &node.children {
-        push_all(index, child, depth + 1, out);
+        push_all(index, child, depth + 1, show_hidden, out);
     }
 }
 
@@ -318,16 +352,31 @@ mod tests {
     use super::*;
 
     fn snapshot(dirs: &[&str], files: &[&str]) -> Snapshot {
+        let mut entries = Vec::new();
+        for dir in dirs {
+            entries.push(walk_entry(dir, true));
+        }
+        for file in files {
+            entries.push(walk_entry(file, false));
+        }
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
         Snapshot {
-            dirs: dirs.iter().map(|s| s.to_string()).collect(),
-            files: files.iter().map(|s| s.to_string()).collect(),
+            entries,
             truncated: false,
+        }
+    }
+
+    fn walk_entry(path: &str, is_dir: bool) -> crate::explorer::walk::Entry {
+        crate::explorer::walk::Entry {
+            path: path.to_string(),
+            is_dir,
+            is_hidden: crate::explorer::walk::is_hidden_path(path),
         }
     }
 
     fn index() -> TreeIndex {
         TreeIndex::build(
-            snapshot(
+            &snapshot(
                 &["src", "src/app", "empty"],
                 &["README.md", "src/main.rs", "src/app/view.rs"],
             ),
@@ -354,7 +403,7 @@ mod tests {
     #[test]
     fn collapsed_root_shows_only_top_level() {
         let index = index();
-        let rows = visible_rows(&index, &HashSet::new(), "");
+        let rows = visible_rows(&index, &HashSet::new(), "", false);
         assert_eq!(paths(&rows), vec!["empty", "src", "README.md"]);
         assert!(rows[1].is_dir());
         assert!(!rows[1].expanded());
@@ -366,7 +415,7 @@ mod tests {
     fn expanding_reveals_children_with_indentation() {
         let index = index();
         let expanded = HashSet::from(["src".to_string()]);
-        let rows = visible_rows(&index, &expanded, "");
+        let rows = visible_rows(&index, &expanded, "", false);
         assert_eq!(
             paths(&rows),
             vec!["empty", "src", "src/app", "src/main.rs", "README.md"]
@@ -380,7 +429,7 @@ mod tests {
     #[test]
     fn filter_reveals_matches_and_ancestors() {
         let index = index();
-        let rows = visible_rows(&index, &HashSet::new(), "view");
+        let rows = visible_rows(&index, &HashSet::new(), "view", false);
         assert_eq!(paths(&rows), vec!["src", "src/app", "src/app/view.rs"]);
         assert!(
             rows[0].expanded(),
@@ -392,7 +441,7 @@ mod tests {
     #[test]
     fn filter_on_directory_reveals_whole_subtree() {
         let index = index();
-        let rows = visible_rows(&index, &HashSet::new(), "app");
+        let rows = visible_rows(&index, &HashSet::new(), "app", false);
         assert_eq!(
             paths(&rows),
             vec!["src", "src/app", "src/app/view.rs"],
@@ -403,15 +452,15 @@ mod tests {
     #[test]
     fn filter_is_case_insensitive_and_prunes() {
         let index = index();
-        let rows = visible_rows(&index, &HashSet::new(), "README");
+        let rows = visible_rows(&index, &HashSet::new(), "README", false);
         assert_eq!(paths(&rows), vec!["README.md"]);
-        assert!(visible_rows(&index, &HashSet::new(), "nope").is_empty());
+        assert!(visible_rows(&index, &HashSet::new(), "nope", false).is_empty());
     }
 
     #[test]
     fn missing_intermediate_dirs_are_synthesized() {
-        let index = TreeIndex::build(snapshot(&[], &["a/b/c.rs"]), HashMap::new());
-        let rows = visible_rows(&index, &index.all_dir_paths(), "");
+        let index = TreeIndex::build(&snapshot(&[], &["a/b/c.rs"]), HashMap::new());
+        let rows = visible_rows(&index, &index.all_dir_paths(), "", false);
         assert_eq!(paths(&rows), vec!["a", "a/b", "a/b/c.rs"]);
     }
 
@@ -428,7 +477,31 @@ mod tests {
         let index = index();
         let all = index.all_dir_paths();
         assert_eq!(all.len(), 3, "src, src/app, empty");
-        assert_eq!(visible_rows(&index, &all, "").len(), 6);
+        assert_eq!(visible_rows(&index, &all, "", false).len(), 6);
+    }
+
+    #[test]
+    fn hidden_entries_need_show_hidden() {
+        let index = TreeIndex::build(
+            &snapshot(
+                &[".claude", "src"],
+                &[".env", ".claude/settings.json", "src/main.rs"],
+            ),
+            HashMap::new(),
+        );
+        let all = index.all_dir_paths();
+        let visible = visible_rows(&index, &all, "", false);
+        assert_eq!(paths(&visible), vec!["src", "src/main.rs"]);
+        // A hidden directory takes its subtree with it.
+        assert!(!visible.iter().any(|row| row.path.contains("claude")));
+
+        let shown = visible_rows(&index, &all, "", true);
+        assert!(paths(&shown).contains(&".env"));
+        assert!(paths(&shown).contains(&".claude/settings.json"));
+
+        // The filter obeys the same rule.
+        assert!(visible_rows(&index, &HashSet::new(), "claude", false).is_empty());
+        assert!(!visible_rows(&index, &HashSet::new(), "claude", true).is_empty());
     }
 
     #[test]

@@ -157,6 +157,23 @@ pub(crate) fn running_spinner(
     spinning_icon("icons/running-spinner.svg", id, size, color, theme)
 }
 
+/// Turns of a repeating spin, read from a wall clock.
+///
+/// The animation wrapper still requests the next frame. Its delta restarts at
+/// 0 when the element's id path changes, or when the element misses a layout,
+/// so the angle comes from this clock. The phase is an integer modulo: a
+/// float second-count loses resolution after a long uptime and would stall
+/// the arc. Reduce-motion never calls this.
+fn spinner_turns(period: Duration) -> f32 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    let origin = ORIGIN.get_or_init(Instant::now);
+    let period_ns = period.as_nanos().max(1);
+    let phase = origin.elapsed().as_nanos() % period_ns;
+    phase as f32 / period_ns as f32
+}
+
 fn spinning_icon(
     path: &'static str,
     id: impl Into<ElementId>,
@@ -172,15 +189,12 @@ fn spinning_icon(
     if theme.ui.reduce_motion {
         return svg.into_any_element();
     }
-    svg.with_animation(
-        id,
-        Animation::new(Duration::from_millis(900)).repeat(),
-        |svg, delta| {
-            svg.with_transformation(Transformation::rotate(radians(
-                delta * std::f32::consts::TAU,
-            )))
-        },
-    )
+    const SPIN: Duration = Duration::from_millis(900);
+    svg.with_animation(id, Animation::new(SPIN).repeat(), |svg, _delta| {
+        svg.with_transformation(Transformation::rotate(radians(
+            spinner_turns(SPIN) * std::f32::consts::TAU,
+        )))
+    })
     .into_any_element()
 }
 
@@ -849,15 +863,6 @@ pub(crate) fn window_drag_region(el: gpui::Div) -> gpui::Div {
 pub(crate) fn embedded_image(path: &'static str, height: f32) -> impl IntoElement + use<> {
     img(ImageSource::Resource(Resource::Embedded(path.into())))
         .h(px(height))
-        .flex_none()
-}
-
-/// Same as [`embedded_image`], but sized by width; the height follows the
-/// source's aspect ratio. Use for the wordmark, which is laid out to span the
-/// sidebar's content width.
-pub(crate) fn embedded_image_w(path: &'static str, width: Pixels) -> impl IntoElement + use<> {
-    img(ImageSource::Resource(Resource::Embedded(path.into())))
-        .w(width)
         .flex_none()
 }
 

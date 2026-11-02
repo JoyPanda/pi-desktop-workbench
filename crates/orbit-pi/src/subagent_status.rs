@@ -168,11 +168,12 @@ pub struct SubagentBoard {
     request_leaf: HashMap<String, String>,
     next_request: u64,
     selected: Option<String>,
+    /// Foreground `subagent` tool call the panel is showing. Mutually exclusive
+    /// with `selected`: the pane key is this id when set, otherwise the leaf.
+    foreground: Option<String>,
     open: bool,
     /// The reader closed the panel; do not auto-open again this session.
     explicitly_closed: bool,
-    /// Review or Project took the dock; do not snap the panel back when they close.
-    yielded: bool,
     omitted_runs: u64,
     list_following: bool,
     /// Bumps when the open transcript should be placed from its anchor.
@@ -196,9 +197,9 @@ impl Default for SubagentBoard {
             request_leaf: HashMap::new(),
             next_request: 1,
             selected: None,
+            foreground: None,
             open: false,
             explicitly_closed: false,
-            yielded: false,
             omitted_runs: 0,
             list_following: true,
             scroll_epoch: 0,
@@ -209,11 +210,22 @@ impl Default for SubagentBoard {
 
 impl SubagentBoard {
     pub fn is_open(&self) -> bool {
-        self.open && self.viewed().is_some()
+        self.open && (self.foreground.is_some() || self.viewed().is_some())
     }
 
+    #[cfg(test)]
     pub fn selected_id(&self) -> Option<&str> {
         self.selected.as_deref()
+    }
+
+    /// The id the dock paints, scrolls, and copies: a foreground tool, or the
+    /// selected background leaf.
+    pub fn pane_key(&self) -> Option<&str> {
+        self.foreground.as_deref().or(self.selected.as_deref())
+    }
+
+    pub fn foreground_id(&self) -> Option<&str> {
+        self.foreground.as_deref()
     }
 
     pub fn list_following(&self) -> bool {
@@ -496,43 +508,77 @@ impl SubagentBoard {
         self.order.retain(|id| self.leaves.contains_key(id));
         let held = self.held.as_ref().map(|leaf| leaf.id.clone());
         let selected = self.selected.clone();
+        let foreground = self.foreground.clone();
         self.expanded_code.retain(|id, _| {
             self.leaves.contains_key(id)
                 || held.as_ref() == Some(id)
                 || selected.as_ref() == Some(id)
+                || foreground.as_ref() == Some(id)
         });
     }
 
-    /// `docks_free` is false when Review or Project already owns the right dock.
+    /// `docks_free` is false when the right dock already holds a tab.
     /// Passing `false` skips the check the caller already made; the board still
-    /// refuses when the reader dismissed or yielded the panel.
-    pub fn consider_auto_open(&mut self, docks_free: bool) {
-        if self.open || self.explicitly_closed || self.yielded || !docks_free {
+    /// refuses when the reader dismissed the panel.
+    ///
+    /// Background leaves stay in the list until the reader clicks one. A
+    /// foreground id opens only when that list is empty.
+    pub fn consider_auto_open(&mut self, docks_free: bool, foreground: Option<&str>) {
+        if self.open || self.explicitly_closed || !docks_free {
             return;
         }
-        if self.order.len() == 1 {
-            self.selected = Some(self.order[0].clone());
-            self.open = true;
-            self.scroll_epoch = self.scroll_epoch.saturating_add(1);
+        if self.order.is_empty() {
+            if let Some(id) = foreground {
+                self.show_foreground(id);
+            }
         }
     }
 
     /// Open `id`, or close the panel when it is already showing `id`.
+    #[cfg(test)]
     pub fn click(&mut self, id: &str) -> bool {
         if !self.leaves.contains_key(id)
             && self.held.as_ref().map(|leaf| leaf.id.as_str()) != Some(id)
         {
             return self.open;
         }
-        if self.open && self.selected.as_deref() == Some(id) {
+        if self.open && self.foreground.is_none() && self.selected.as_deref() == Some(id) {
             self.close_explicit();
             return false;
         }
+        self.foreground = None;
         self.selected = Some(id.to_string());
         self.open = true;
-        self.yielded = false;
         self.scroll_epoch = self.scroll_epoch.saturating_add(1);
         true
+    }
+
+    /// Open the foreground tool, or close the panel when it is already showing
+    /// that tool. Clears the background selection.
+    #[cfg(test)]
+    pub fn show_tool(&mut self, id: &str) -> bool {
+        if self.open && self.pane_key() == Some(id) {
+            self.close_explicit();
+            return false;
+        }
+        self.show_foreground(id);
+        true
+    }
+
+    fn show_foreground(&mut self, id: &str) {
+        self.foreground = Some(id.to_string());
+        self.selected = None;
+        self.open = true;
+        self.note_follow(id, true, 0);
+        self.scroll_epoch = self.scroll_epoch.saturating_add(1);
+    }
+
+    /// A growing foreground body sticks to the bottom only while the reader is
+    /// following. Ending the tool does not call this.
+    pub fn note_foreground_growth(&mut self, id: &str) {
+        if self.foreground.as_deref() == Some(id) && self.anchor(id).following {
+            self.scroll_epoch = self.scroll_epoch.saturating_add(1);
+        }
     }
 
     pub fn close_explicit(&mut self) {
@@ -540,12 +586,41 @@ impl SubagentBoard {
         self.explicitly_closed = true;
     }
 
-    /// Review or Project replaced this panel. The reader's place is kept, and
-    /// closing that other dock does not snap this one back open.
-    pub fn yield_dock(&mut self) {
-        if self.open {
-            self.open = false;
-            self.yielded = true;
+    /// Whether `id` is a background run the board can still show: a live row,
+    /// or the one kept after the snapshot dropped it.
+    pub fn knows(&self, id: &str) -> bool {
+        self.leaves.contains_key(id) || self.held.as_ref().is_some_and(|leaf| leaf.id == id)
+    }
+
+    /// Show background run `id` without the toggle [`Self::click`] has: the
+    /// right dock's tab strip decides what closes. `false` when the run is gone.
+    pub fn focus_leaf(&mut self, id: &str) -> bool {
+        if !self.knows(id) {
+            return false;
+        }
+        if self.open && self.foreground.is_none() && self.selected.as_deref() == Some(id) {
+            return true;
+        }
+        self.foreground = None;
+        self.selected = Some(id.to_string());
+        self.open = true;
+        self.scroll_epoch = self.scroll_epoch.saturating_add(1);
+        true
+    }
+
+    /// Show foreground tool `id` without the toggle [`Self::show_tool`] has.
+    /// A tool the reader already scrolled keeps its place.
+    pub fn focus_tool(&mut self, id: &str) {
+        if self.open && self.foreground.as_deref() == Some(id) {
+            return;
+        }
+        if self.anchors.contains_key(id) {
+            self.foreground = Some(id.to_string());
+            self.selected = None;
+            self.open = true;
+            self.scroll_epoch = self.scroll_epoch.saturating_add(1);
+        } else {
+            self.show_foreground(id);
         }
     }
 
@@ -961,7 +1036,7 @@ mod tests {
         let line = r#"PI_SUBAGENT_ASYNC_JSON:{"kind":"pi-subagents.async-status-snapshot","version":1,"omitted":{"runs":0,"children":0},"runs":[{"id":"5b00972b-528b-4208-b6c6-2f22e4fa8b9e","kind":"subagent","label":"reviewer","state":"running","startedAt":1793101321957,"updatedAt":1793101326306,"activity":{"currentTool":"code_query"},"turnCount":1,"children":[{"id":"step:0","kind":"step","label":"review","state":"running","startedAt":1793101321980,"updatedAt":1793101326306,"turnCount":1}]}]}"#;
         let mut board = SubagentBoard::default();
         board.apply_async_lines(&[line.to_string()]);
-        board.consider_auto_open(true);
+        board.consider_auto_open(true, None);
         let rows = board.rows();
         assert_eq!(rows.len(), 1);
         let ListRow::Agent(id) = &rows[0] else {
@@ -974,9 +1049,110 @@ mod tests {
         assert_eq!(leaf.child_id.as_deref(), Some("step:0"));
         assert!(leaf.group.is_none());
         assert!(
-            board.is_open(),
-            "a single agent opens when the dock is free"
+            !board.is_open(),
+            "a background leaf waits in the list until the reader clicks it"
         );
+        assert!(board.list_shown());
+    }
+
+    fn one_worker(board: &mut SubagentBoard) -> String {
+        board.apply_snapshot_value(&snapshot(
+            json!([run(
+                "run-a",
+                "worker",
+                "running",
+                1,
+                2,
+                json!([child("step:0", "worker", 2)])
+            )]),
+            0,
+        ));
+        let ListRow::Agent(id) = &board.rows()[0] else {
+            panic!("expected one agent row");
+        };
+        id.clone()
+    }
+
+    #[test]
+    fn a_foreground_target_opens_the_panel_on_its_own() {
+        let mut board = SubagentBoard::default();
+        board.consider_auto_open(true, Some("tool-1"));
+        assert!(board.is_open());
+        assert_eq!(board.foreground_id(), Some("tool-1"));
+        assert_eq!(board.pane_key(), Some("tool-1"));
+        assert!(board.selected_id().is_none());
+    }
+
+    #[test]
+    fn foreground_auto_open_stops_after_close_yield_busy_or_open() {
+        let mut busy = SubagentBoard::default();
+        busy.consider_auto_open(false, Some("tool-1"));
+        assert!(!busy.is_open());
+
+        let mut board = SubagentBoard::default();
+        assert!(board.show_tool("tool-1"));
+        let epoch = board.scroll_epoch();
+        board.note_foreground_growth("tool-1");
+        assert!(board.scroll_epoch() > epoch);
+        board.note_follow("tool-1", false, 0);
+        let parked = board.scroll_epoch();
+        board.note_foreground_growth("tool-1");
+        assert_eq!(board.scroll_epoch(), parked);
+
+        let mut closed = SubagentBoard::default();
+        assert!(closed.show_tool("tool-1"));
+        assert!(!closed.show_tool("tool-1"));
+        assert!(!closed.is_open());
+        closed.consider_auto_open(true, Some("tool-2"));
+        assert!(!closed.is_open());
+
+        let mut open = SubagentBoard::default();
+        open.show_tool("tool-1");
+        open.consider_auto_open(true, Some("tool-2"));
+        assert_eq!(open.foreground_id(), Some("tool-1"));
+    }
+
+    #[test]
+    fn a_background_leaf_replaces_the_foreground_target() {
+        let mut board = SubagentBoard::default();
+        board.show_tool("tool-1");
+        let leaf = one_worker(&mut board);
+        assert!(board.click(&leaf));
+        assert!(board.foreground_id().is_none());
+        assert_eq!(board.selected_id(), Some(leaf.as_str()));
+        assert!(board.is_open());
+
+        let mut auto = SubagentBoard::default();
+        one_worker(&mut auto);
+        auto.consider_auto_open(true, Some("tool-1"));
+        assert!(auto.foreground_id().is_none());
+        assert!(auto.selected_id().is_none());
+        assert!(!auto.is_open());
+
+        let mut both = SubagentBoard::default();
+        both.apply_snapshot_value(&snapshot(
+            json!([
+                run(
+                    "run-a",
+                    "worker",
+                    "running",
+                    1,
+                    2,
+                    json!([child("step:0", "a", 2)])
+                ),
+                run(
+                    "run-b",
+                    "reviewer",
+                    "running",
+                    1,
+                    3,
+                    json!([child("step:0", "b", 3)])
+                ),
+            ]),
+            0,
+        ));
+        both.consider_auto_open(true, Some("tool-1"));
+        assert!(!both.is_open());
     }
 
     #[test]
@@ -1045,7 +1221,7 @@ mod tests {
             json!([run("a", "reviewer", "running", 1, 10, json!([]))]),
             0,
         ));
-        board.consider_auto_open(true);
+        assert!(board.click("a"));
         let id = board.selected_id().unwrap().to_string();
         let request = board.alloc_request_id();
         board.note_inflight(&id, &request, 80);
@@ -1130,19 +1306,23 @@ mod tests {
     }
 
     #[test]
-    fn explicit_close_blocks_auto_open() {
+    fn a_background_leaf_opens_only_from_a_click() {
         let mut board = SubagentBoard::default();
         board.apply_snapshot_value(&snapshot(
             json!([run("a", "reviewer", "running", 1, 10, json!([]))]),
             0,
         ));
-        board.consider_auto_open(true);
+        board.consider_auto_open(true, None);
+        assert!(!board.is_open());
+        assert!(board.list_shown());
+        assert!(board.click("a"));
         assert!(board.is_open());
         board.close_explicit();
         board.apply_snapshot_value(&snapshot(
             json!([run("a", "reviewer", "running", 1, 11, json!([]))]),
             0,
         ));
+        board.consider_auto_open(true, None);
         assert!(!board.is_open());
     }
 
@@ -1306,20 +1486,6 @@ mod tests {
         assert!(board.due().is_empty());
         assert!(!board.list_shown());
         assert_eq!(board.preview("a"), "done");
-    }
-
-    #[test]
-    fn yielding_the_dock_does_not_snap_the_panel_back() {
-        let mut board = SubagentBoard::default();
-        board.apply_snapshot_value(&snapshot(
-            json!([run("a", "reviewer", "running", 1, 10, json!([]))]),
-            0,
-        ));
-        board.consider_auto_open(true);
-        board.yield_dock();
-        board.consider_auto_open(true);
-        assert!(!board.is_open());
-        assert_eq!(board.selected_id(), Some("a"));
     }
 
     #[test]
