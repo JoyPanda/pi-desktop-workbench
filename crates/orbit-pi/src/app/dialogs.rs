@@ -40,14 +40,18 @@ impl OrbitApp {
                     self.open_dialog(request, cx);
                 }
             }
-            // `notify` is a user-facing toast — render it as one, and keep a
-            // row in the feed (live-only) so it is not lost once the toast
-            // fades. `setStatus` stays on the quiet transient status line.
+            // `notify` is a user-facing notice. The feed row is live-only (pi
+            // does not store it), so it stays even when the toast is off —
+            // otherwise a closed In-app toasts switch would drop the message.
+            // The bottom-right card follows that switch. `setStatus` stays on
+            // the quiet transient status line.
             "notify" => {
                 if let Some(message) = value.get("message").and_then(Value::as_str) {
                     self.transcript
                         .push_notice(&tr!("transcript.extension_notice"), message);
-                    self.toast_info(message.to_owned());
+                    if self.notification_prefs.toasts {
+                        self.toast_info(message.to_owned());
+                    }
                     cx.notify();
                 }
             }
@@ -431,5 +435,47 @@ impl OrbitApp {
             Some(option) => self.respond_to_approval(Some(option), window, cx),
             None => self.respond_to_approval(None, window, cx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extension_notify(app: &mut OrbitApp, message: &str, cx: &mut Context<OrbitApp>) {
+        app.handle_extension_ui_request(
+            "n1".into(),
+            "notify",
+            &serde_json::json!({ "message": message, "notifyType": "info" }),
+            cx,
+        );
+    }
+
+    #[gpui::test]
+    fn extension_notify_skips_the_corner_card_when_in_app_toasts_are_off(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app = cx.update(|cx| cx.new(OrbitApp::new));
+        app.update(cx, |app, cx| {
+            app.notification_prefs.toasts = false;
+            assert!(app.transcript.append_user_message("hello", Vec::new()));
+            extension_notify(app, "3 plans", cx);
+            assert!(app.toasts.is_empty());
+            assert_eq!(app.transcript.message_count(), 2);
+        });
+    }
+
+    #[gpui::test]
+    fn extension_notify_raises_a_corner_card_when_in_app_toasts_are_on(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let app = cx.update(|cx| cx.new(OrbitApp::new));
+        app.update(cx, |app, cx| {
+            app.notification_prefs.toasts = true;
+            assert!(app.transcript.append_user_message("hello", Vec::new()));
+            extension_notify(app, "3 plans", cx);
+            assert_eq!(app.toasts.items()[0].title, "3 plans");
+            assert_eq!(app.transcript.message_count(), 2);
+        });
     }
 }

@@ -541,8 +541,9 @@ the session is reopened.
 
 Extension notices are visible in the transcript: a pi `custom` message with
 `display: true` (a plugin's injected plan summary, say) renders as a notice card
-(`SummaryRow.notice = Some(customType)`), as does an extension `notify`, which
-also still raises its toast. Notice rows are live rows only for `notify` (pi
+(`SummaryRow.notice = Some(customType)`), as does an extension `notify`. The
+`notify` toast follows the In-app toasts switch; with it off, only the feed
+row remains. Notice rows are live rows only for `notify` (pi
 stores no `notify`; a reload drops it) and persistent for `custom` messages.
 `display: false` context is never shown. A `notify` that arrives before any
 conversation row is held and lands just ahead of the first message, so an empty
