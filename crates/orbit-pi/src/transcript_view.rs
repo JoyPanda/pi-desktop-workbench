@@ -77,10 +77,6 @@ pub(crate) type ImageOpener = Rc<dyn Fn(Arc<Image>, &mut Window, &mut App)>;
 /// Handed down from the app; the footer does not own the session.
 pub(crate) type ForkOpener = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
-/// Opens the right dock on a foreground `subagent` tool call. The card does
-/// not own the dock.
-pub(crate) type SubagentToolOpener = Rc<dyn Fn(String, &mut Window, &mut App)>;
-
 /// The transcript content column's max width.
 /// Normal message content keeps this centered measure. Assistant tables
 /// break out to the transcript pane's width; their scroll viewport must not
@@ -252,9 +248,6 @@ pub(crate) struct TranscriptView {
     /// Forks through an assistant message; `None` hides the footer button
     /// (tests, and any surface that renders a transcript without a session).
     pub fork_session: Option<ForkOpener>,
-    /// Opens the right dock for a foreground `subagent` row. `None` keeps the
-    /// old inline expand (tests, and rows without a tool id).
-    pub subagent_tool: Option<SubagentToolOpener>,
     /// Message indices matching the open find query; `None` when find is
     /// closed. Rows get a quiet wash.
     pub search_hits: Option<Rc<RefCell<HashSet<usize>>>>,
@@ -1069,7 +1062,6 @@ struct RowPaint {
     hovered_usage: Rc<Cell<Option<usize>>>,
     image_opener: Option<ImageOpener>,
     fork_session: Option<ForkOpener>,
-    subagent_tool: Option<SubagentToolOpener>,
     search_hit: bool,
     search_active: bool,
     /// Tables alone can extend beyond the centered message column.
@@ -1127,7 +1119,6 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let review_changes = view.review_changes.clone();
     let image_opener = view.image_opener.clone();
     let fork_session = view.fork_session.clone();
-    let subagent_tool = view.subagent_tool.clone();
     let search_hits = view.search_hits.clone();
     let search_active = view.search_active.clone();
 
@@ -1356,7 +1347,6 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 hovered_usage: hovered_usage.clone(),
                 image_opener: image_opener.clone(),
                 fork_session: fork_session.clone(),
-                subagent_tool: subagent_tool.clone(),
                 search_hit: search_hits
                     .as_ref()
                     .is_some_and(|hits| hits.borrow().contains(&ix)),
@@ -2345,7 +2335,6 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                     paint.copied_sections.clone(),
                     paint.expanded_sections.clone(),
                     paint.scroller.clone(),
-                    paint.subagent_tool.clone(),
                 ));
             }
         }
@@ -2580,7 +2569,6 @@ fn render_activity_group(
     copied_sections: CopiedSections,
     expanded_sections: ExpandedSections,
     scroller: MessageScrollerState,
-    subagent_tool: Option<SubagentToolOpener>,
 ) -> impl IntoElement {
     let steps = &all_steps[range.clone()];
     let title = activity_title(steps, live);
@@ -2731,7 +2719,6 @@ fn render_activity_group(
                     copied_sections.clone(),
                     expanded_sections.clone(),
                     scroller.clone(),
-                    subagent_tool.clone(),
                 )
             }));
             tool_base += step.tools.len();
@@ -3433,7 +3420,6 @@ fn render_activity_card(
     copied_sections: CopiedSections,
     expanded_sections: ExpandedSections,
     scroller: MessageScrollerState,
-    subagent_tool: Option<SubagentToolOpener>,
 ) -> AnyElement {
     // A structured questionnaire gets its own card — the raw arguments JSON
     // and the generic "Command/Arguments" detail would bury the question.
@@ -3707,30 +3693,18 @@ fn render_activity_card(
     if tool.failed {
         card = card.child(render_tool_error_strip(tool, !detail_shown, theme));
     }
-    let open_pane = subagent_tool.and_then(|opener| {
-        tool.id
-            .clone()
-            .filter(|_| crate::transcript::is_subagent_tool(&tool.name))
-            .map(|id| (opener, id))
+    card = card.when(has_detail, |row| {
+        let scroller = scroller.clone();
+        row.on_click(move |_, _, cx| {
+            let mut open = expanded_tools.borrow_mut();
+            if !open.remove(&key) {
+                open.insert(key);
+            }
+            drop(open);
+            scroller.remeasure_toggle(key.0);
+            cx.refresh_windows();
+        })
     });
-    if let Some((opener, tool_id)) = open_pane {
-        card = card.cursor_pointer().on_click(move |_, window, cx| {
-            opener(tool_id.clone(), window, cx);
-        });
-    } else {
-        card = card.when(has_detail, |row| {
-            let scroller = scroller.clone();
-            row.on_click(move |_, _, cx| {
-                let mut open = expanded_tools.borrow_mut();
-                if !open.remove(&key) {
-                    open.insert(key);
-                }
-                drop(open);
-                scroller.remeasure_toggle(key.0);
-                cx.refresh_windows();
-            })
-        });
-    }
 
     if tool_open && has_detail {
         card = card.child(render_tool_detail(
@@ -9386,7 +9360,6 @@ mod tests {
             review_changes: None,
             image_opener: None,
             fork_session: None,
-            subagent_tool: None,
             search_hits: None,
             search_active: None,
         }

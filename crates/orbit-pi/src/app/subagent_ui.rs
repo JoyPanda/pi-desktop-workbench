@@ -79,20 +79,13 @@ impl OrbitApp {
             if self.subagents.is_open() {
                 if let Some(id) = self.subagents.pane_key().map(str::to_string) {
                     let anchor = self.subagents.anchor(&id);
-                    let foreground = self.subagents.foreground_id().is_some();
                     let count = self.subagents.messages(&id).len();
                     let handle = self
                         .subagent_scrolls
                         .entry(id)
                         .or_insert_with(ScrollHandle::new)
                         .clone();
-                    // A foreground body has no message rows, so `count == 0`
-                    // must not pull a reader who scrolled up back to the end.
-                    if foreground {
-                        if anchor.following {
-                            handle.scroll_to_bottom();
-                        }
-                    } else if anchor.following || count == 0 {
+                    if anchor.following || count == 0 {
                         handle.scroll_to_bottom();
                     } else {
                         let index = count.saturating_sub(anchor.from_bottom.min(count));
@@ -143,16 +136,7 @@ impl OrbitApp {
         if !self.subagents.is_open() {
             return;
         }
-        let sites = if self.subagents.foreground_id().is_some() {
-            let text = self
-                .transcript
-                .foreground_tool(&id)
-                .map(|tool| tool.text)
-                .unwrap_or_default();
-            transcript_view::markdown_code_sites(&text, 0)
-        } else {
-            subagent_code_sites(&self.subagents, &id)
-        };
+        let sites = subagent_code_sites(&self.subagents, &id);
         let hashes: Vec<u64> = sites
             .iter()
             .filter(|(_, _, hash)| self.subagents.code_expanded(&id, *hash))
@@ -175,8 +159,6 @@ impl OrbitApp {
     }
 
     pub(super) fn after_subagent_board(&mut self, cx: &mut Context<Self>) {
-        let free = self.right_dock.tabs().is_empty();
-        self.subagents.consider_auto_open(free, None);
         self.dispatch_subagent_inspects();
         cx.notify();
     }
@@ -223,54 +205,11 @@ impl OrbitApp {
         }
     }
 
-    /// A click on a foreground Task row. Same dock hand-off as a background
-    /// leaf, without an inspect (a foreground tool has no async id).
-    pub(super) fn subagent_tool_opener(
-        &self,
-        cx: &Context<Self>,
-    ) -> crate::transcript_view::SubagentToolOpener {
-        let this = cx.weak_entity();
-        Rc::new(move |id, _window, cx| {
-            let _ = this.update(cx, |app, cx| app.open_foreground_tool(&id, cx));
-        })
-    }
-
-    fn open_foreground_tool(&mut self, id: &str, cx: &mut Context<Self>) {
-        let tab = super::right_dock::DockTab::Task(id.to_string());
-        if self.dock_visible() && self.right_dock.is_active(&tab) {
-            self.close_dock_tab(&tab, cx);
-        } else {
-            self.open_task_tab(id, cx);
-        }
-    }
-
-    /// Auto-open runs on a foreground start and on that tool's first text.
-    /// Later updates do not ask again, so closing Review does not pop the dock.
-    pub(super) fn consider_foreground_arm(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.transcript.take_foreground_arm() else {
-            return;
-        };
-        let free = self.right_dock.tabs().is_empty();
-        let lone = self.transcript.lone_running_subagent();
-        let foreground = lone.filter(|lone| lone == &id);
-        self.subagents
-            .consider_auto_open(free, foreground.as_deref());
-        cx.notify();
-    }
-
     fn copy_subagent(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.subagents.pane_key() else {
             return;
         };
-        let text = if self.subagents.foreground_id().is_some() {
-            self.transcript
-                .foreground_tool(id)
-                .map(|tool| tool.text)
-                .unwrap_or_default()
-        } else {
-            self.subagents.copy_text(id)
-        };
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        cx.write_to_clipboard(ClipboardItem::new_string(self.subagents.copy_text(id)));
     }
 
     pub(super) fn subagent_list(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -413,30 +352,13 @@ impl OrbitApp {
 
     pub(super) fn subagent_pane(&self, cx: &Context<Self>) -> AnyElement {
         let theme = *theme::get(cx);
-        let foreground = self.subagents.foreground_id().map(str::to_string);
-        let (id, label, mark, stale, error_code) = if let Some(id) = foreground.clone() {
-            let tool = self.transcript.foreground_tool(&id);
-            let label = tool
-                .as_ref()
-                .map(|tool| tool.label.clone())
-                .unwrap_or_else(|| "Task".to_string());
-            let mark = match &tool {
-                Some(tool) if tool.running => None,
-                Some(tool) if tool.failed => Some("subagent.failed"),
-                Some(_) => Some("subagent.done"),
-                None => None,
-            };
-            (id, label, mark, false, None)
-        } else {
-            let leaf = self.subagents.viewed();
-            let id = leaf.map(|leaf| leaf.id.clone()).unwrap_or_default();
-            let label = self.subagents.display_label(&id);
-            let state = leaf.map(|leaf| leaf.state.clone()).unwrap_or_default();
-            let mark = end_mark(&state);
-            let stale = self.subagents.stale(&id);
-            let error_code = self.subagents.error_code(&id).map(str::to_string);
-            (id, label, mark, stale, error_code)
-        };
+        let leaf = self.subagents.viewed();
+        let id = leaf.map(|leaf| leaf.id.clone()).unwrap_or_default();
+        let label = self.subagents.display_label(&id);
+        let state = leaf.map(|leaf| leaf.state.clone()).unwrap_or_default();
+        let mark = end_mark(&state);
+        let stale = self.subagents.stale(&id);
+        let error_code = self.subagents.error_code(&id).map(str::to_string);
         let handle = self
             .subagent_scrolls
             .get(&id)
@@ -470,11 +392,7 @@ impl OrbitApp {
                         theme,
                         cx,
                     ))
-                    .child(if foreground.is_some() {
-                        self.foreground_body(&id, &handle, theme, cx)
-                    } else {
-                        self.subagent_body(&id, &handle, theme, cx)
-                    }),
+                    .child(self.subagent_body(&id, &handle, theme, cx)),
             )
             .into_any_element()
     }
@@ -563,59 +481,6 @@ impl OrbitApp {
                         theme.text_muted,
                     )),
             )
-            .into_any_element()
-    }
-
-    fn foreground_body(
-        &self,
-        id: &str,
-        handle: &ScrollHandle,
-        theme: Theme,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let text = self
-            .transcript
-            .foreground_tool(id)
-            .map(|tool| tool.text)
-            .unwrap_or_default();
-        if text.is_empty() {
-            return div().flex_1().min_h_0().w_full().into_any_element();
-        }
-        let (expanded, copied) = self
-            .subagent_folds
-            .get(id)
-            .map(|ui| (ui.expanded.clone(), ui.copied.clone()))
-            .unwrap_or_else(|| {
-                (
-                    Rc::new(RefCell::new(HashSet::new())),
-                    Rc::new(RefCell::new(HashMap::new())),
-                )
-            });
-        let body = div()
-            .id(ElementId::Name(format!("subagent-body-{id}").into()))
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .overflow_y_scroll()
-            .track_scroll(handle)
-            .occlude()
-            .on_scroll_wheel(cx.listener(Self::on_subagent_wheel))
-            .flex()
-            .flex_col()
-            .p(DynamicSpacing::Base12.px(&theme))
-            .child(transcript_view::render_subagent_markdown(
-                &text, 0, theme, expanded, copied,
-            ));
-        div()
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .flex()
-            .flex_col()
-            .child(body)
-            .child(overlay_thumb(handle, theme.text_muted.opacity(0.45)))
-            .child(self.subagent_thumb_hit(id, handle, cx))
             .into_any_element()
     }
 
@@ -825,7 +690,7 @@ impl OrbitApp {
         self.subagents.note_follow(id, false, from_bottom);
         let at_top = offset_y >= px(-1.);
         self.subagents.set_at_top(id, at_top);
-        if at_top && self.subagents.foreground_id().is_none() {
+        if at_top {
             self.dispatch_subagent_inspects();
         }
     }
@@ -879,7 +744,7 @@ impl OrbitApp {
             self.subagents.note_follow(&id, false, from_bottom);
             let at_top = clamped >= px(-1.);
             self.subagents.set_at_top(&id, at_top);
-            if at_top && self.subagents.foreground_id().is_none() {
+            if at_top {
                 self.dispatch_subagent_inspects();
             }
         }

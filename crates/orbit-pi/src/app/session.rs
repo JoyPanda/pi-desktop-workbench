@@ -1407,7 +1407,6 @@ impl OrbitApp {
             // the process channel streams in from the next tick on.
             self.adopt_client(parked.client);
             self.transcript = parked.transcript;
-            self.transcript.prepare_foreground_resume();
             self.turns = parked.turns;
             self.push_turn_records(cx);
             self.busy = parked.busy;

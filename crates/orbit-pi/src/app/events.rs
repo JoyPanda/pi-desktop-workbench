@@ -468,12 +468,6 @@ impl OrbitApp {
             if self.transcript.apply_event(event) {
                 cx.notify();
             }
-            self.consider_foreground_arm(cx);
-            if let Event::ToolExecutionUpdate { value } = event {
-                if let Some(id) = value.get("toolCallId").and_then(serde_json::Value::as_str) {
-                    self.subagents.note_foreground_growth(id);
-                }
-            }
         }
         self.busy = self.execution.status().is_in_progress();
         if let Some(path) = &self.current_session_path {
@@ -807,7 +801,6 @@ impl OrbitApp {
             }
             changed |= parked.transcript.apply_event(&event);
         }
-        parked.transcript.discard_foreground_arm();
         parked.busy = parked.execution.status().is_in_progress();
         ParkedDrain {
             changed,

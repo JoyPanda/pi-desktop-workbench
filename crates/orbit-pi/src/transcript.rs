@@ -613,8 +613,7 @@ fn tool_result_parts(value: &Value) -> Option<(String, Option<Value>, bool, Tool
     Some((id, output, failed, facts))
 }
 
-/// Body text the foreground dock can render. Only a string counts; every
-/// other result shape is blank.
+/// Joined text of a normalized tool result. Only a string counts.
 fn tool_body_text(output: Option<&Value>) -> String {
     match output {
         Some(Value::String(text)) => text.clone(),
@@ -622,19 +621,10 @@ fn tool_body_text(output: Option<&Value>) -> String {
     }
 }
 
-/// The dock and the transcript card share this: only the `subagent` tool,
-/// not the "Task" label that also covers `task` and `agent`.
-pub(crate) fn is_subagent_tool(name: &str) -> bool {
+/// Only the `subagent` tool. The "Task" label also covers `task` and `agent`,
+/// which stay ordinary tool cards.
+fn is_subagent_tool(name: &str) -> bool {
     name == "subagent"
-}
-
-/// Title and body of one foreground `subagent` call, scanned from the
-/// messages themselves so a reopened session still has the final text.
-pub(crate) struct ForegroundTool {
-    pub label: String,
-    pub text: String,
-    pub running: bool,
-    pub failed: bool,
 }
 
 /// Normalize a `tool_execution_*` result payload for display. pi wraps
@@ -1038,16 +1028,6 @@ pub struct Transcript {
     /// `toolCallId` -> `(message_ix, tool_ix)` so `tool_execution_end` results
     /// land on the right row.
     tool_positions: ToolPositions,
-    /// Foreground `subagent` calls that have started and not yet ended.
-    /// Abort often skips `tool_execution_end`; `clear_live_state` drops these.
-    running_tools: HashSet<String>,
-    /// A `subagent` that just started, or just received its first text. The
-    /// app takes this once per event to decide whether to auto-open the dock.
-    foreground_arm: Option<String>,
-    /// After a warm resume, the lone running foreground tool. Its next update
-    /// arms auto-open once. Later updates do not, so closing Review does not
-    /// pop the dock.
-    resume_foreground: Option<String>,
     /// Rail tick currently hovered (drives the turn preview card).
     hovered_turn: Rc<Cell<Option<usize>>>,
     /// Assistant row whose footer usage metric is hovered (drives the
@@ -1137,9 +1117,6 @@ impl Transcript {
             collapsed_thoughts: Rc::new(RefCell::new(HashMap::new())),
             thinking_detached: Rc::new(RefCell::new(HashSet::new())),
             tool_positions: Rc::new(RefCell::new(HashMap::new())),
-            running_tools: HashSet::new(),
-            foreground_arm: None,
-            resume_foreground: None,
             hovered_turn: Rc::new(Cell::new(None)),
             hovered_usage: Rc::new(Cell::new(None)),
             rail_hint_dismissed: Rc::new(Cell::new(hint_seen(RAIL_HINT_KEY))),
@@ -1304,9 +1281,6 @@ impl Transcript {
         self.collapsed_thoughts.borrow_mut().clear();
         self.thinking_detached.borrow_mut().clear();
         self.tool_positions.borrow_mut().clear();
-        self.running_tools.clear();
-        self.foreground_arm = None;
-        self.resume_foreground = None;
         self.hovered_turn.set(None);
         self.rail_scroll.set_offset(point(px(0.), px(0.)));
         self.rail_autoscroll.set(None);
@@ -1348,9 +1322,6 @@ impl Transcript {
         self.collapsed_thoughts.borrow_mut().clear();
         self.thinking_detached.borrow_mut().clear();
         self.tool_positions.borrow_mut().clear();
-        self.running_tools.clear();
-        self.foreground_arm = None;
-        self.resume_foreground = None;
         self.hovered_turn.set(None);
         self.rail_scroll.set_offset(point(px(0.), px(0.)));
         self.rail_autoscroll.set(None);
@@ -2002,93 +1973,6 @@ impl Transcript {
         false
     }
 
-    /// The label of one `subagent` call, found like [`Self::foreground_tool`]
-    /// but without building its output text: cheap enough for the per-frame
-    /// checks the right dock makes while output streams.
-    pub(crate) fn foreground_label(&self, id: &str) -> Option<String> {
-        let messages = self.messages.borrow();
-        for message in messages.iter().rev() {
-            for step in message.steps.iter().rev() {
-                for tool in step.tools.iter().rev() {
-                    if tool.id.as_deref() != Some(id) || !is_subagent_tool(&tool.name) {
-                        continue;
-                    }
-                    return Some(
-                        tool.args
-                            .as_ref()
-                            .and_then(|args| args.get("agent"))
-                            .and_then(Value::as_str)
-                            .filter(|agent| !agent.is_empty())
-                            .unwrap_or("Task")
-                            .to_string(),
-                    );
-                }
-            }
-        }
-        None
-    }
-
-    /// One `subagent` call, found by walking messages from the tail. History
-    /// keeps `toolCall.id` after `load` clears `tool_positions`.
-    pub(crate) fn foreground_tool(&self, id: &str) -> Option<ForegroundTool> {
-        let messages = self.messages.borrow();
-        for message in messages.iter().rev() {
-            for step in message.steps.iter().rev() {
-                for tool in step.tools.iter().rev() {
-                    if tool.id.as_deref() != Some(id) || !is_subagent_tool(&tool.name) {
-                        continue;
-                    }
-                    let label = tool
-                        .args
-                        .as_ref()
-                        .and_then(|args| args.get("agent"))
-                        .and_then(Value::as_str)
-                        .filter(|agent| !agent.is_empty())
-                        .unwrap_or("Task")
-                        .to_string();
-                    let running = self.running_tools.contains(id) && self.streaming.get().is_some();
-                    return Some(ForegroundTool {
-                        label,
-                        text: tool_body_text(tool.output.as_ref()),
-                        running,
-                        failed: tool.failed,
-                    });
-                }
-            }
-        }
-        None
-    }
-
-    /// The only `subagent` still running, when there is exactly one.
-    pub(crate) fn lone_running_subagent(&self) -> Option<String> {
-        if self.streaming.get().is_none() || self.running_tools.len() != 1 {
-            return None;
-        }
-        self.running_tools.iter().next().cloned()
-    }
-
-    pub(crate) fn take_foreground_arm(&mut self) -> Option<String> {
-        self.foreground_arm.take()
-    }
-
-    pub(crate) fn discard_foreground_arm(&mut self) {
-        self.foreground_arm = None;
-    }
-
-    /// Drop an arm left over from parked events, and remember the one running
-    /// foreground tool so its next update can auto-open.
-    pub(crate) fn prepare_foreground_resume(&mut self) {
-        self.foreground_arm = None;
-        self.resume_foreground = self.lone_running_subagent();
-    }
-
-    fn note_resume_foreground_update(&mut self, id: &str, subagent: bool) {
-        if subagent && self.resume_foreground.as_deref() == Some(id) {
-            self.resume_foreground = None;
-            self.foreground_arm = Some(id.to_string());
-        }
-    }
-
     /// `tool_execution_start` upserts the call on the streaming message and
     /// records where its result should land; `tool_execution_end` attaches it.
     fn on_tool_execution(&mut self, value: &Value, end: bool) -> bool {
@@ -2097,9 +1981,6 @@ impl Transcript {
             .and_then(Value::as_str)
             .map(str::to_string);
         if end {
-            if let Some(id) = id.as_deref() {
-                self.running_tools.remove(id);
-            }
             let Some(id) = id.as_deref() else {
                 return false;
             };
@@ -2121,9 +2002,10 @@ impl Transcript {
                 let prev_text = tool_body_text(tool.output.as_ref());
                 let before = (tool.output.clone(), tool.failed, tool.facts.clone());
                 tool.facts = result.map(ToolFacts::from_result).unwrap_or_default();
-                // A foreground subagent's end often carries no text. Keep the
-                // body the updates already showed. Other tools still take the
-                // end payload, including a structured result.
+                // A subagent's end often carries no text. Keep the body the
+                // updates already showed, so the expanded card still has it.
+                // Other tools still take the end payload, including a
+                // structured result.
                 let keep_body =
                     is_subagent_tool(&tool.name) && next_text.is_empty() && !prev_text.is_empty();
                 if !keep_body {
@@ -2210,10 +2092,6 @@ impl Transcript {
             self.tool_positions
                 .borrow_mut()
                 .insert(id.clone(), (mix, step_ix, position));
-            if is_subagent_tool(&name) {
-                self.running_tools.insert(id.clone());
-                self.foreground_arm = Some(id.clone());
-            }
         }
         drop(messages);
         if created {
@@ -2261,22 +2139,13 @@ impl Transcript {
         else {
             return false;
         };
-        let subagent = is_subagent_tool(&tool.name);
         if tool.output.as_ref() == Some(&output) && tool.facts == facts {
-            drop(messages);
-            self.note_resume_foreground_update(id, subagent);
             return false;
         }
-        let previous = tool_body_text(tool.output.as_ref());
-        let next = tool_body_text(Some(&output));
         tool.output = Some(output);
         tool.facts = facts;
         let detail_open = self.expanded_tools.borrow().contains(&(mix, flat_ix));
         drop(messages);
-        self.note_resume_foreground_update(id, subagent);
-        if subagent && previous.is_empty() && !next.is_empty() {
-            self.foreground_arm = Some(id.to_string());
-        }
         if detail_open {
             self.remeasure_row(mix);
         }
@@ -2817,9 +2686,6 @@ impl Transcript {
     /// Drop live streaming state so the working indicator and stop
     /// affordances clear even if a message end was missed.
     fn clear_live_state(&mut self) {
-        self.running_tools.clear();
-        self.foreground_arm = None;
-        self.resume_foreground = None;
         self.streaming.set(None);
         self.step_mark.set(None);
         self.stream_started.set(None);
@@ -2949,7 +2815,6 @@ impl Transcript {
         review_changes: Option<crate::transcript_view::ReviewOpener>,
         image_opener: Option<crate::transcript_view::ImageOpener>,
         fork_session: Option<crate::transcript_view::ForkOpener>,
-        subagent_tool: Option<crate::transcript_view::SubagentToolOpener>,
         search_hits: Option<HashSet<usize>>,
         search_active: Option<usize>,
         cx: &gpui::App,
@@ -3012,7 +2877,6 @@ impl Transcript {
                 review_changes,
                 image_opener,
                 fork_session,
-                subagent_tool,
                 search_hits: search_hits.map(|hits| Rc::new(RefCell::new(hits))),
                 search_active: search_active.map(|ix| Rc::new(Cell::new(Some(ix)))),
             },
@@ -4960,28 +4824,42 @@ mod tests {
         });
     }
 
+    fn subagent_output(transcript: &Transcript, id: &str) -> Option<(String, bool)> {
+        let messages = transcript.messages.borrow();
+        for message in messages.iter().rev() {
+            for tool in message.tools() {
+                if tool.id.as_deref() == Some(id) {
+                    let text = tool
+                        .output
+                        .as_ref()
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string();
+                    return Some((text, tool.failed));
+                }
+            }
+        }
+        None
+    }
+
     #[test]
-    fn foreground_subagent_body_follows_updates_and_keeps_an_empty_end() {
+    fn subagent_output_follows_updates_and_keeps_an_empty_end() {
         let mut transcript = Transcript::new();
         transcript.apply_event(&Event::MessageStart {
             value: json!({"role": "assistant", "content": ""}),
         });
         start_subagent(&mut transcript, "s1", "reviewer");
-        assert_eq!(transcript.take_foreground_arm().as_deref(), Some("s1"));
-        assert_eq!(transcript.lone_running_subagent().as_deref(), Some("s1"));
-        let tool = transcript.foreground_tool("s1").unwrap();
-        assert_eq!(tool.label, "reviewer");
-        assert!(tool.running);
-        assert!(tool.text.is_empty());
+        assert_eq!(subagent_output(&transcript, "s1"), Some(("".into(), false)));
 
         update_subagent(&mut transcript, "s1", "hello");
-        assert_eq!(transcript.take_foreground_arm().as_deref(), Some("s1"));
-        assert_eq!(transcript.foreground_tool("s1").unwrap().text, "hello");
-        update_subagent(&mut transcript, "s1", "hello\nmore");
-        assert!(transcript.take_foreground_arm().is_none());
         assert_eq!(
-            transcript.foreground_tool("s1").unwrap().text,
-            "hello\nmore"
+            subagent_output(&transcript, "s1"),
+            Some(("hello".into(), false))
+        );
+        update_subagent(&mut transcript, "s1", "hello\nmore");
+        assert_eq!(
+            subagent_output(&transcript, "s1"),
+            Some(("hello\nmore".into(), false))
         );
 
         transcript.apply_event(&Event::ToolExecutionEnd {
@@ -4991,10 +4869,10 @@ mod tests {
                 "isError": false
             }),
         });
-        let tool = transcript.foreground_tool("s1").unwrap();
-        assert_eq!(tool.text, "hello\nmore");
-        assert!(!tool.running);
-        assert!(transcript.lone_running_subagent().is_none());
+        assert_eq!(
+            subagent_output(&transcript, "s1"),
+            Some(("hello\nmore".into(), false))
+        );
 
         start_subagent(&mut transcript, "s2", "worker");
         update_subagent(&mut transcript, "s2", "draft");
@@ -5005,27 +4883,10 @@ mod tests {
                 "isError": true
             }),
         });
-        let tool = transcript.foreground_tool("s2").unwrap();
-        assert_eq!(tool.text, "final");
-        assert!(tool.failed);
-        assert!(!tool.running);
-    }
-
-    #[test]
-    fn resume_arms_the_next_update_of_the_lone_running_subagent() {
-        let mut transcript = Transcript::new();
-        transcript.apply_event(&Event::MessageStart {
-            value: json!({"role": "assistant", "content": ""}),
-        });
-        start_subagent(&mut transcript, "s1", "reviewer");
-        update_subagent(&mut transcript, "s1", "hello");
-        assert_eq!(transcript.take_foreground_arm().as_deref(), Some("s1"));
-        transcript.discard_foreground_arm();
-        transcript.prepare_foreground_resume();
-        update_subagent(&mut transcript, "s1", "hello\nmore");
-        assert_eq!(transcript.take_foreground_arm().as_deref(), Some("s1"));
-        update_subagent(&mut transcript, "s1", "hello\nmore\nagain");
-        assert!(transcript.take_foreground_arm().is_none());
+        assert_eq!(
+            subagent_output(&transcript, "s2"),
+            Some(("final".into(), true))
+        );
     }
 
     #[test]
@@ -5057,41 +4918,6 @@ mod tests {
         let messages = transcript.messages.borrow();
         let tool = messages[0].tools().next().unwrap();
         assert_eq!(tool.output.as_ref().and_then(Value::as_str), Some(""));
-    }
-
-    #[test]
-    fn two_running_subagents_are_not_a_single_target_and_abort_clears_them() {
-        let mut transcript = Transcript::new();
-        transcript.apply_event(&Event::MessageStart {
-            value: json!({"role": "assistant", "content": ""}),
-        });
-        transcript.apply_event(&Event::ToolExecutionStart {
-            value: json!({
-                "toolCallId": "task-1",
-                "toolName": "task",
-                "args": {}
-            }),
-        });
-        start_subagent(&mut transcript, "a", "worker");
-        start_subagent(&mut transcript, "b", "reviewer");
-        assert!(transcript.lone_running_subagent().is_none());
-
-        transcript.apply_event(&Event::ToolExecutionEnd {
-            value: json!({
-                "toolCallId": "a",
-                "result": {"content": [{"type": "text", "text": "done"}]},
-                "isError": false
-            }),
-        });
-        assert_eq!(transcript.lone_running_subagent().as_deref(), Some("b"));
-        assert!(!transcript.foreground_tool("a").unwrap().running);
-        assert!(transcript.foreground_tool("b").unwrap().running);
-
-        start_subagent(&mut transcript, "c", "worker");
-        transcript.apply_event(&Event::AgentEnd { will_retry: false });
-        assert!(!transcript.foreground_tool("b").unwrap().running);
-        assert!(!transcript.foreground_tool("c").unwrap().running);
-        assert!(transcript.lone_running_subagent().is_none());
     }
 
     #[test]

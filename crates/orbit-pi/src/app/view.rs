@@ -1045,7 +1045,6 @@ impl Render for OrbitApp {
                                     Some(self.review_opener(cx)),
                                     Some(self.image_opener(cx)),
                                     Some(self.fork_opener(cx)),
-                                    Some(self.subagent_tool_opener(cx)),
                                     self.search_hits(),
                                     self.search_active(),
                                     cx,

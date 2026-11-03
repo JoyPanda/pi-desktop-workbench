@@ -37,8 +37,6 @@ pub(super) enum DockTab {
     Files,
     /// A background subagent run, by leaf id.
     Subagent(String),
-    /// A foreground `subagent` tool call, by tool-call id.
-    Task(String),
 }
 
 /// The dock's tab list. See the module docs for who owns the truth.
@@ -189,7 +187,6 @@ impl OrbitApp {
                 DockTab::Changes => self.sidepane.read(cx).is_open(),
                 DockTab::Files => self.project_panel.read(cx).is_open(),
                 DockTab::Subagent(id) => self.subagents.knows(id),
-                DockTab::Task(id) => self.transcript.foreground_label(id).is_some(),
             };
             if alive {
                 ordered.push(tab.clone());
@@ -222,7 +219,6 @@ impl OrbitApp {
             Some(DockTab::Subagent(id)) => {
                 self.subagents.focus_leaf(&id);
             }
-            Some(DockTab::Task(id)) => self.subagents.focus_tool(&id),
             _ => {}
         }
         // An empty dock has nothing to be wide, and must not reopen as a full
@@ -238,19 +234,9 @@ impl OrbitApp {
         if !self.subagents.is_open() {
             return None;
         }
-        match (self.subagents.foreground_id(), self.subagents.pane_key()) {
-            (Some(id), _) => Some(DockTab::Task(id.to_string())),
-            (None, Some(id)) => Some(DockTab::Subagent(id.to_string())),
-            (None, None) => None,
-        }
-    }
-
-    pub(super) fn open_task_tab(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.subagents.focus_tool(id);
-        self.right_dock.open(DockTab::Task(id.to_string()));
-        self.dock_add_menu_open = false;
-        self.sync_dock(cx);
-        cx.notify();
+        self.subagents
+            .pane_key()
+            .map(|id| DockTab::Subagent(id.to_string()))
     }
 
     /// Close one tab: shut the panel behind it and let the dock pick the next.
@@ -258,7 +244,7 @@ impl OrbitApp {
         match tab {
             DockTab::Changes => self.sidepane.update(cx, |pane, cx| pane.close(cx)),
             DockTab::Files => self.project_panel.update(cx, |panel, cx| panel.close(cx)),
-            DockTab::Subagent(id) | DockTab::Task(id) => {
+            DockTab::Subagent(id) => {
                 if self.subagents.pane_key() == Some(id.as_str()) {
                     self.subagents.close_explicit();
                 }
@@ -367,10 +353,6 @@ impl OrbitApp {
             DockTab::Changes => tr!("git_panel.tab_changes"),
             DockTab::Files => tr!("explorer.files"),
             DockTab::Subagent(id) => self.subagents.display_label(id),
-            DockTab::Task(id) => self
-                .transcript
-                .foreground_label(id)
-                .unwrap_or_else(|| "Task".to_string()),
         }
     }
 
@@ -378,7 +360,7 @@ impl OrbitApp {
         match tab {
             DockTab::Changes => "icons/file-diff.svg",
             DockTab::Files => "icons/folder.svg",
-            DockTab::Subagent(_) | DockTab::Task(_) => "icons/spark.svg",
+            DockTab::Subagent(_) => "icons/spark.svg",
         }
     }
 
@@ -656,7 +638,7 @@ impl OrbitApp {
         let body = match self.right_dock.active() {
             Some(DockTab::Changes) => self.sidepane.clone().into_any_element(),
             Some(DockTab::Files) => self.project_panel.clone().into_any_element(),
-            Some(DockTab::Subagent(_) | DockTab::Task(_)) => self.subagent_pane(cx),
+            Some(DockTab::Subagent(_)) => self.subagent_pane(cx),
             None => div().into_any_element(),
         };
         div()
