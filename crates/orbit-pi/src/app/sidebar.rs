@@ -180,10 +180,10 @@ pub(crate) fn build_sidebar_rows(
     side_rows
 }
 
-/// Pinned sessions lead. Everything else keeps the store's newest-activity
-/// order (stable sort). Opening a session, or a run that has not written a
-/// message yet, must not move the row — only a new message changes
-/// [`SessionInfo::modified`].
+/// Pinned sessions lead. Everything else keeps the store's newest-user-message
+/// order (stable sort). Opening a session, or a run that is only writing
+/// assistant and tool output, must not move the row — only a new user message
+/// changes [`SessionInfo::modified`].
 fn session_lead_rank(path: &Path, pinned: &HashSet<PathBuf>) -> u8 {
     if pinned.contains(path) {
         0
@@ -226,8 +226,8 @@ fn sidebar_groups(
     // for everything else (the sort is stable). Doing this here rather than
     // in `load_sessions` keeps an Orbit-owned preference out of the pi-store
     // scan — and means a pin can never be hidden by the per-group truncation
-    // below. The open session and a live run stay where their last message
-    // put them.
+    // below. The open session and a live run stay where their last user
+    // message put them.
     for (_, _, ixs) in groups.iter_mut() {
         ixs.sort_by_key(|&ix| session_lead_rank(&sessions[ix].path, pinned));
     }
@@ -325,8 +325,9 @@ fn emit_workspace_group(
 
 /// Build the flat sidebar list: every listed project's sessions in one
 /// ungrouped list, with no workspace headers, show-more, or collapse rows.
-/// Pins lead; the rest keep the store's newest-first order (the sort is
-/// stable). Opening a session or a run with no new message does not reorder.
+/// Pins lead; the rest keep the store's newest-user-message order (the sort is
+/// stable). Opening a session, or a run that is only writing assistant and
+/// tool output, does not reorder.
 /// `active_path` and `running_paths` are accepted so callers stay aligned
 /// with [`build_sidebar_rows`]; they do not affect order.
 /// Used when the user turns workspace grouping off; the same

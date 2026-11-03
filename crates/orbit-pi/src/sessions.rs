@@ -39,11 +39,14 @@ pub struct SessionInfo {
     /// First user message. The sidebar draws it under the title only when
     /// Show → Summary is on.
     pub first_message: String,
-    /// Wall-clock time of the session's last *activity* — the newest
-    /// `message` entry, not the file's mtime. Opening a session appends
+    /// Wall-clock time of the session's last *user* message, not the file's
+    /// mtime and not assistant or tool output. Opening a session appends
     /// bookkeeping entries (the quota bridge's `custom` snapshots), which
     /// would otherwise make an untouched session read "now" and jump to the
-    /// top of the sidebar. Only a new user/agent message moves this.
+    /// top of the sidebar. A run's streamed output must not move it either:
+    /// two sessions writing at once would otherwise trade the top slot on
+    /// every append. Only a new user message moves this, matching Cursor's
+    /// agent list (`lastUpdatedAt` advances when the person sends).
     pub modified: SystemTime,
 }
 
@@ -56,13 +59,14 @@ fn dirs_home() -> PathBuf {
     crate::platform::home_dir()
 }
 
-/// Load every session in pi's store, newest-*activity* first.
+/// Load every session in pi's store, newest-*user message* first.
 ///
-/// Ordering is keyed on the session's last message time (see
-/// [`SessionInfo::modified`]), so the session (and workspace) with the latest
-/// activity always sits at the top of the sidebar and older ones follow —
-/// matching the age label each row displays. Merely opening a session does
-/// not reorder the list.
+/// Ordering is keyed on the session's last user-message time (see
+/// [`SessionInfo::modified`]), so the session (and workspace) the person
+/// spoke to most recently sits at the top of the sidebar and older ones
+/// follow — matching the age label each row displays. Merely opening a
+/// session, or assistant and tool output landing while a run is in flight,
+/// does not reorder the list.
 pub fn load_sessions() -> Vec<SessionInfo> {
     load_sessions_in(&sessions_dir())
 }
@@ -595,13 +599,14 @@ fn session_name_in_line(line: &[u8]) -> Option<Option<String>> {
     )
 }
 
-/// Wall-clock time of the newest `message` entry in a session file.
+/// Wall-clock time of the newest user `message` in a session file.
 ///
 /// Read from the tail so large transcripts cost a bounded amount of I/O, and
 /// so it works against a file pi is actively appending to. Non-message
-/// entries (`custom` quota snapshots, `model_change`, …) are skipped, which is
-/// what keeps "last activity" independent of the file's mtime. `None` when no
-/// stamped message is found — the caller falls back to the file mtime.
+/// entries (`custom` quota snapshots, `model_change`, …) are skipped, and so
+/// are assistant and tool messages: those keep arriving for the whole run and
+/// must not change sidebar order. `None` when no stamped user message is
+/// found — the caller falls back to the file mtime.
 fn last_message_time(path: &Path) -> Option<SystemTime> {
     const CHUNK: u64 = 64 * 1024;
     let mut file = fs::File::open(path).ok()?;
@@ -641,10 +646,22 @@ fn last_message_time(path: &Path) -> Option<SystemTime> {
     None
 }
 
-/// The wall-clock time on one JSONL line, when that line is a `message`.
+/// The wall-clock time on one JSONL line, when that line is a user `message`.
 fn message_time_in_line(line: &[u8]) -> Option<SystemTime> {
     let value: Value = serde_json::from_slice(line).ok()?;
     if value.get("type").and_then(Value::as_str) != Some("message") {
+        return None;
+    }
+    let role = value
+        .get("message")
+        .and_then(|message| message.get("role"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    // Assistant and tool lines keep arriving for the whole run. Counting them
+    // makes two live sessions trade the top slot on every append. Cursor's
+    // agent list keys recency on the turn the person sent (`lastUpdatedAt`
+    // moves at submit, not on streamed output).
+    if role != "user" {
         return None;
     }
     let millis = timestamp_millis(value.get("timestamp")).or_else(|| {
@@ -1001,10 +1018,11 @@ mod tests {
 
         fs::write(&path, body(1_700_000_000_000, 1_700_000_001_000)).unwrap();
         let first = read_session(&path).expect("listable");
-        assert_eq!(first.modified, millis(1_700_000_001_000));
+        // The assistant line is newer, but only the user message moves order.
+        assert_eq!(first.modified, millis(1_700_000_000_000));
 
-        // Grow the file with a newer message; the cache key (length) changed,
-        // so the next read must reflect the newer activity time.
+        // Grow the file with a newer user message; the cache key (length)
+        // changed, so the next read must reflect that send.
         let appended = format!(
             "{}{{\"type\":\"message\",\"timestamp\":1700000002000,\"message\":{{\"role\":\"user\",\"content\":\"more\"}}}}\n",
             body(1_700_000_000_000, 1_700_000_001_000)
@@ -1185,6 +1203,52 @@ mod tests {
             .chars()
             .enumerate()
             .all(|(ix, c)| matches!(ix, 8 | 13 | 18 | 23) || c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn output_does_not_reorder_ahead_of_a_later_user_message() {
+        // Session A was spoken to first, then its assistant line lands last.
+        // Session B was spoken to later, with an earlier tool result. B stays
+        // first: streamed output must not trade the two rows.
+        let dir = std::env::temp_dir().join("orbit-output-order-test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let earlier_send = dir.join("a.jsonl");
+        let later_send = dir.join("b.jsonl");
+        fs::write(
+            &earlier_send,
+            "{\"type\":\"session\",\"id\":\"aaa\",\"cwd\":\"/tmp/ws\"}\n\
+             {\"type\":\"message\",\"timestamp\":1700000001000,\"message\":{\"role\":\"user\",\"content\":\"first\"}}\n\
+             {\"type\":\"message\",\"timestamp\":1700000004000,\"message\":{\"role\":\"assistant\",\"content\":\"late output\"}}\n",
+        )
+        .unwrap();
+        fs::write(
+            &later_send,
+            "{\"type\":\"session\",\"id\":\"bbb\",\"cwd\":\"/tmp/ws\"}\n\
+             {\"type\":\"message\",\"timestamp\":1700000002000,\"message\":{\"role\":\"user\",\"content\":\"second\"}}\n\
+             {\"type\":\"message\",\"timestamp\":1700000003000,\"message\":{\"role\":\"toolResult\",\"content\":\"mid output\"}}\n",
+        )
+        .unwrap();
+
+        let mut rows = Vec::new();
+        for path in [&earlier_send, &later_send] {
+            rows.push(read_session(path).expect("listable"));
+        }
+        rows.sort_by(|a, b| {
+            b.modified
+                .cmp(&a.modified)
+                .then_with(|| b.path.cmp(&a.path))
+        });
+        assert_eq!(rows[0].id, "bbb");
+        assert_eq!(
+            rows[0].modified,
+            UNIX_EPOCH + Duration::from_millis(1_700_000_002_000)
+        );
+        assert_eq!(
+            rows[1].modified,
+            UNIX_EPOCH + Duration::from_millis(1_700_000_001_000)
+        );
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
