@@ -2572,12 +2572,6 @@ fn render_activity_group(
 ) -> impl IntoElement {
     let steps = &all_steps[range.clone()];
     let title = activity_title(steps, live);
-    // Leading glyph cluster: one icon per distinct work kind (fixed
-    // canonical order) so a folded group reads as "what ran".
-    let icons = activity_group_icons(steps);
-    let any_failed = steps
-        .iter()
-        .any(|step| step.tools.iter().any(|tool| tool.failed));
     let tool_base = all_steps[..range.start]
         .iter()
         .map(|step| step.tools.len())
@@ -2590,16 +2584,6 @@ fn render_activity_group(
         .sum::<usize>()
         .saturating_sub(1);
     let key = (ix, range.start);
-    // State color for the glyph cluster: danger when anything failed, accent
-    // while the group streams. Settled clusters tint per work kind instead
-    // (see `work_tint`).
-    let cluster_state = if any_failed {
-        Some(theme.error)
-    } else if live {
-        Some(theme.accent_text)
-    } else {
-        None
-    };
     let mut group = div()
         .debug_selector(move || format!("activity-group-{ix}-{}", key.1))
         .w_full()
@@ -2621,6 +2605,10 @@ fn render_activity_group(
             )
             .min_w_0()
             .max_w_full()
+            // Same content inset as the thought card (`Base12`), so the
+            // summary label and "Thought" share one left edge. `button_frame`
+            // pads a Medium control with `Base08`; this replaces that.
+            .px(DynamicSpacing::Base12.px(&theme))
             // Raised fill + hairline = DESIGN.md's chip treatment: the
             // open state steps the border up for emphasis.
             .raised(theme.surface_elevated, &theme)
@@ -2636,22 +2624,6 @@ fn render_activity_group(
                     .raised(theme.surface_hover, &theme)
                     .text_color(theme.text_primary)
             })
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(DynamicSpacing::Base04.px(&theme))
-                    .children(icons.iter().copied().map(|icon| {
-                        // Settled work is monochrome ink; only run/fail state
-                        // takes a color (see `cluster_state`).
-                        glyph(
-                            icon,
-                            IconSize::XSmall.px(&theme),
-                            cluster_state.unwrap_or(theme.text_secondary),
-                        )
-                    })),
-            )
             .child(
                 div()
                     .min_w_0()
@@ -2930,34 +2902,6 @@ fn render_thinking_body(
         ThinkingScroll::Idle | ThinkingScroll::Detached => {}
     }
     let id = (key.0 as u64) << 16 | key.1 as u64;
-    // The reasoning glyph: brand accent while the card streams (with a slow
-    // opacity pulse, reduce-motion aware), muted once it settles.
-    let thought_icon: AnyElement = if live && !theme.ui.reduce_motion {
-        div()
-            .flex_none()
-            .child(glyph(
-                "icons/tools/thinking.svg",
-                IconSize::Small.px(&theme),
-                theme.accent_text,
-            ))
-            .with_animation(
-                ElementId::NamedInteger("thought-icon".into(), id),
-                Animation::new(Duration::from_millis(1600)).repeat(),
-                |el, delta| el.opacity(0.4 + 0.6 * (delta * std::f32::consts::TAU).sin().abs()),
-            )
-            .into_any_element()
-    } else {
-        glyph(
-            "icons/tools/thinking.svg",
-            IconSize::Small.px(&theme),
-            if live {
-                theme.accent_text
-            } else {
-                theme.text_muted
-            },
-        )
-        .into_any_element()
-    };
     let mut card = div()
         .debug_selector(move || format!("thought-card-{}-{}", key.0, key.1))
         .rounded(panel::RADIUS.px(&theme))
@@ -2968,12 +2912,15 @@ fn render_thinking_body(
         .py(DynamicSpacing::Base08.px(&theme))
         .flex()
         .flex_col()
+        .items_start()
         .gap(px(5.))
         .child(
             div()
                 .id(ElementId::NamedInteger("thought-toggle".into(), id))
                 .group(BUTTON_GROUP)
-                .w_full()
+                // Hug the label and chevron. A full-width header would park
+                // the chevron on the card's trailing edge once the body opens.
+                .max_w_full()
                 .min_w_0()
                 .flex()
                 .items_center()
@@ -2982,10 +2929,9 @@ fn render_thinking_body(
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(theme.ui_px(17.))
                 .hover(|style| style.text_color(theme.text_primary))
-                .child(thought_icon)
                 .child(
                     div()
-                        .flex_1()
+                        .flex_initial()
                         .min_w_0()
                         .flex()
                         .items_center()
@@ -3033,7 +2979,10 @@ fn render_thinking_body(
                 }),
         );
     if !collapsed {
-        card = card.child(
+        // The open body wraps and scrolls at the reading-column width. The
+        // header above stays content-sized, so its chevron still follows the
+        // label instead of the card's trailing edge.
+        card = card.w_full().child(
             div()
                 // A stable id lets GPUI remember the scroll offset across
                 // re-renders (element-state keyed scrolling).
@@ -7430,41 +7379,6 @@ pub(crate) fn activity_icon(name: &str) -> &'static str {
     }
 }
 
-/// One glyph per distinct work kind in a group, deduped and ordered
-/// canonically (run → read → edit → web → other). Thoughts are their own
-/// cards, so the cluster does not carry a reasoning bulb.
-fn activity_group_icons(steps: &[Step]) -> Vec<&'static str> {
-    let mut icons: Vec<&'static str> = Vec::new();
-    for step in steps {
-        for tool in &step.tools {
-            let icon = activity_icon(&tool.name);
-            if !icons.contains(&icon) {
-                icons.push(icon);
-            }
-        }
-    }
-    icons.sort_unstable_by_key(|icon| activity_icon_rank(icon));
-    // Six glyphs is all a compact summary chip can afford before the cluster
-    // starts competing with the title.
-    icons.truncate(6);
-    icons
-}
-
-/// Canonical cluster order: run, then explore, then mutate, then web, then
-/// everything else (task/skill/ask/mcp/wrench).
-fn activity_icon_rank(icon: &'static str) -> usize {
-    match icon {
-        "icons/tools/bash.svg" => 0,
-        "icons/tools/read.svg"
-        | "icons/tools/search.svg"
-        | "icons/tools/find.svg"
-        | "icons/tools/list.svg" => 1,
-        "icons/tools/edit.svg" | "icons/tools/write.svg" => 2,
-        "icons/tools/web.svg" | "icons/tools/fetch.svg" => 3,
-        _ => 4,
-    }
-}
-
 /// A tool glyph in its category badge: a 22px rounded square washed at a low
 /// alpha of the tone, the glyph at full strength. The wash lifts the icon out
 /// of the prose column so a tool row reads as a control at a glance, in every
@@ -7838,48 +7752,6 @@ mod tests {
             "Ran 1 command · Ran 1 file read · Ran 1 file edit"
         );
         assert_eq!(activity_title(&[], false), "Worked");
-    }
-
-    #[test]
-    fn activity_group_icons_dedupe_order_and_cap() {
-        let step = |thinking: &str, tools: &[&str]| Step {
-            thinking: thinking.into(),
-            tools: tools
-                .iter()
-                .map(|name| ToolCall {
-                    name: name.to_string(),
-                    summary: String::new(),
-                    path: None,
-                    added: 0,
-                    removed: 0,
-                    id: None,
-                    args: None,
-                    output: None,
-                    failed: false,
-                    facts: Default::default(),
-                })
-                .collect(),
-            ..Step::default()
-        };
-        // Canonical order regardless of arrival order, deduped. Thoughts are
-        // not part of the cluster.
-        let icons = activity_group_icons(&[
-            step("", &["read", "bash", "edit", "read", "bash"]),
-            step("hmm", &["bash"]),
-        ]);
-        assert_eq!(
-            icons,
-            vec![
-                "icons/tools/bash.svg",
-                "icons/tools/read.svg",
-                "icons/tools/edit.svg",
-            ]
-        );
-        assert!(activity_group_icons(&[step("hmm", &[])]).is_empty());
-        assert_eq!(
-            activity_group_icons(&[step("", &["bash", "shell"])]),
-            vec!["icons/tools/bash.svg"]
-        );
     }
 
     #[test]
