@@ -3,6 +3,7 @@
 //! rules that are easy to break — the payload check (which decides whether the
 //! control is live) and the running state (which decides queue vs steer).
 
+use super::view::{send_control, SendControl};
 use super::*;
 use crate::app::composer_ops::CompletionIntent;
 use crate::composer_send::SendMode;
@@ -181,6 +182,48 @@ fn the_send_state_follows_the_delivery_policy(cx: &mut gpui::TestAppContext) {
             assert_eq!(label, "follow_up");
             let (_, label) = SendMode::Steer.command(true, "hello".into(), None);
             assert_eq!(label, "steer");
+        });
+    });
+}
+
+/// One slot, four states. A stop already in flight and a queued follow-up do
+/// not add a second button: the slot still follows running and payload only.
+#[gpui::test]
+fn the_composer_paints_one_send_or_stop_slot(cx: &mut gpui::TestAppContext) {
+    assert_eq!(
+        send_control(false, false),
+        SendControl::SendIdle { enabled: false }
+    );
+    assert_eq!(
+        send_control(false, true),
+        SendControl::SendIdle { enabled: true }
+    );
+    assert_eq!(send_control(true, false), SendControl::Stop);
+    assert_eq!(send_control(true, true), SendControl::Queue);
+
+    let app = app(cx);
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.transcript.expect_reply();
+            app.abort_sent_at = Some(std::time::Instant::now());
+            app.queue.follow_up.push("next".into());
+            assert!(app.is_running());
+            assert!(app.is_stopping());
+            assert!(!app.queue.is_empty());
+            assert!(!app.send_has_payload(cx));
+            assert_eq!(
+                send_control(app.is_running(), app.send_has_payload(cx)),
+                SendControl::Stop,
+                "a queued follow-up and an in-flight stop leave an empty composer on Stop"
+            );
+
+            app.input
+                .update(cx, |input, cx| input.set_text("hold on", cx));
+            assert_eq!(
+                send_control(app.is_running(), app.send_has_payload(cx)),
+                SendControl::Queue,
+                "a draft replaces Stop even while a stop is in flight"
+            );
         });
     });
 }

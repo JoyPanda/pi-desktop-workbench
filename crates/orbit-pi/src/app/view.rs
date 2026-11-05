@@ -1462,6 +1462,33 @@ impl Render for OrbitApp {
     }
 }
 
+/// Which single control the composer paints. A stop already in flight and a
+/// non-empty queue do not participate: a draft replaces Stop with the
+/// queue/steer send, and an empty composer stays on Stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SendControl {
+    /// Idle send. `enabled` is false when there is nothing to deliver.
+    SendIdle { enabled: bool },
+    /// Mid-run send: queue a follow-up or steer, per the configured mode.
+    Queue,
+    /// Mid-run with an empty composer.
+    Stop,
+}
+
+/// One slot for the composer. Idle is send (disabled when empty). A run with
+/// nothing typed is stop; a run with a payload is the queue/steer send.
+pub(super) fn send_control(running: bool, has_payload: bool) -> SendControl {
+    if !running {
+        SendControl::SendIdle {
+            enabled: has_payload,
+        }
+    } else if has_payload {
+        SendControl::Queue
+    } else {
+        SendControl::Stop
+    }
+}
+
 impl OrbitApp {
     /// The extension widgets placed above the composer, if any.
     pub(super) fn extension_widgets_above(&self, cx: &Context<Self>) -> Option<AnyElement> {
@@ -3966,14 +3993,10 @@ impl OrbitApp {
             || self.settings_select.is_some()
     }
 
-    /// The composer's send area: one primary control whose glyph, weight, and
-    /// tooltip state what ↵ will do right now, plus a quiet stop while a run is
-    /// in flight.
-    ///
-    /// Sending mid-run queues or steers per the configured send mode, so the
-    /// primary slot wears that mode's glyph instead of always showing a paper
-    /// plane. Stop is always the *secondary* slot: stopping is a normal action,
-    /// not a warning, so it rests neutral and only turns red under the pointer.
+    /// The composer's one primary button. Its glyph and tooltip state what ↵
+    /// will do right now: send when idle, stop while a run is in flight and
+    /// the composer is empty, and queue or steer once there is something to
+    /// send.
     pub(super) fn send_controls(&self, cx: &Context<Self>) -> AnyElement {
         let theme = *theme::get(cx);
         let running = self.is_running();
@@ -3988,17 +4011,12 @@ impl OrbitApp {
         if let Some(badge) = self.queue_badge(theme) {
             row = row.child(badge);
         }
-        if !running {
-            return row
-                .child(self.send_button(has_payload, false, theme, cx))
-                .into_any_element();
-        }
-        // Mid-run with nothing typed, stop is the only action and takes the
-        // primary seat rather than sitting beside a dead send.
-        if has_payload {
-            row = row.child(self.send_button(true, true, theme, cx));
-        }
-        row.child(self.stop_button(theme, cx)).into_any_element()
+        let button = match send_control(running, has_payload) {
+            SendControl::SendIdle { enabled } => self.send_button(enabled, false, theme, cx),
+            SendControl::Queue => self.send_button(true, true, theme, cx),
+            SendControl::Stop => self.stop_button(theme, cx),
+        };
+        row.child(button).into_any_element()
     }
 
     /// Whether the composer holds anything a send would deliver: typed text,
