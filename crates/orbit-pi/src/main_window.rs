@@ -14,7 +14,7 @@ use std::{cell::RefCell, time::Duration};
 
 use gpui::{
     prelude::*, px, size, App, Application, AsyncApp, Bounds, Entity, Focusable, Global, Timer,
-    WindowBounds, WindowOptions,
+    WindowBackgroundAppearance, WindowBounds, WindowOptions,
 };
 
 use crate::{app::OrbitApp, platform, theme};
@@ -99,6 +99,9 @@ pub fn open(cx: &mut App) {
             titlebar: Some(platform::titlebar_options()),
             app_id: Some("dev.orbit.pi".into()),
             focus: true,
+            // ClearType blends against the framebuffer. A non-opaque window
+            // background turns it off inside GPUI.
+            window_background: WindowBackgroundAppearance::Opaque,
             ..Default::default()
         },
         |window, cx| {

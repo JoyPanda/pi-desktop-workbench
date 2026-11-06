@@ -4,6 +4,10 @@ members = [
     "crates/orbit-pi",
     "crates/orbit-rpc",
 ]
+exclude = ["third_party/gpui"]
+
+[patch.crates-io]
+gpui = { path = "third_party/gpui" }
 
 [workspace.package]
 edition = "2021"
