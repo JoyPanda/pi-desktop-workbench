@@ -3511,6 +3511,8 @@ impl GitPanel {
             .child(
                 press(
                     button_frame(div().id("git-back"), &theme, ButtonSize::Medium)
+                        .h(px(crate::app::helpers::HEADER_CTRL_H))
+                        .text_size(TextSize::Small.px(&theme))
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.surface_hover)),
                 )
@@ -3526,11 +3528,12 @@ impl GitPanel {
                 }))
                 .child(icon(
                     "icons/arrow-left.svg",
-                    ButtonSize::Medium.icon_size().px(&theme),
+                    IconSize::XSmall.px(&theme),
                     theme.text_secondary,
                 ))
                 .child(
                     div()
+                        .text_size(TextSize::Small.px(&theme))
                         .text_color(theme.text_secondary)
                         .child(tr!("git_panel.back")),
                 ),
@@ -3542,12 +3545,12 @@ impl GitPanel {
                     .gap(DynamicSpacing::Base06.px(&theme))
                     .child(icon(
                         "icons/git-commit.svg",
-                        IconSize::Medium.px(&theme),
+                        IconSize::Small.px(&theme),
                         theme.text_secondary,
                     ))
                     .child(
                         div()
-                            .text_size(TextSize::Large.px(&theme))
+                            .text_size(TextSize::Default.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_primary)
                             .child(tr!("git_panel.title")),

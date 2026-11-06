@@ -148,7 +148,7 @@ impl OrbitApp {
             .active(|s| s.bg(theme.surface_active).text_color(theme.text_primary))
             .child(
                 img(ImageSource::Image(preferred_icon))
-                    .size(APP_ICON.px(&theme))
+                    .size(IconSize::Medium.px(&theme))
                     .flex_none(),
             )
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_open_in_primary));

@@ -13,10 +13,10 @@ use crate::usage::tooltip::Tooltip;
 use crate::widgets as ext_widgets;
 use crate::workspace_mark::{self, WorkspaceMark};
 
-/// Height of a page's top bar (DESIGN.md: 44px header rows). The new-task
-/// backdrop is offset by it, so the picture starts below the title exactly
-/// where it always has — this is the one value the two must agree on.
-pub(super) const TOP_BAR_H: f32 = 44.;
+/// Height of a page's top bar. The new-task backdrop is offset by it, so the
+/// picture starts below the title exactly where it always has — this is the
+/// one value the two must agree on.
+pub(super) const TOP_BAR_H: f32 = 38.;
 
 /// Leading inset that clears the OS window buttons in the titlebar row: the
 /// macOS traffic lights when the titlebar is transparent, or a plain edge
@@ -37,12 +37,12 @@ const TITLEBAR_CONTROLS_GAP: f32 = 8.;
 pub(super) const TITLEBAR_CONTROLS_LEAD: f32 = 12.;
 
 /// Width of the Back/Forward pair, including the gap between the two buttons.
-pub(super) const TITLEBAR_HISTORY_W: f32 = HEADER_CTRL_H * 2. + TITLEBAR_CONTROLS_GAP;
+pub(super) const TITLEBAR_HISTORY_W: f32 = TITLEBAR_NAV_H * 2. + TITLEBAR_CONTROLS_GAP;
 
 /// Combined width of the collapsed titlebar cluster (toggle + history): three
-/// [`HEADER_CTRL_H`] boxes, two [`TITLEBAR_CONTROLS_GAP`] gaps, and the
+/// [`TITLEBAR_NAV_H`] boxes, two [`TITLEBAR_CONTROLS_GAP`] gaps, and the
 /// trailing 6px gap the session title clears.
-pub(super) const TITLEBAR_CONTROLS_W: f32 = HEADER_CTRL_H * 3. + TITLEBAR_CONTROLS_GAP * 2. + 6.;
+pub(super) const TITLEBAR_CONTROLS_W: f32 = TITLEBAR_NAV_H * 3. + TITLEBAR_CONTROLS_GAP * 2. + 6.;
 
 /// Space between the controls and the session title while the sidebar is
 /// collapsed. The cluster's own trailing 6px pad is inside
@@ -83,11 +83,11 @@ pub(super) fn titlebar_toggle_left(sidebar_visible: bool, icon_aligned: f32) -> 
 
 /// Button left that puts the Hide Sidebar glyph on the same vertical line as
 /// the New Task glyph. That glyph is centered in the sidebar icon column;
-/// the toggle glyph is centered in a [`HEADER_CTRL_H`] box.
+/// the toggle glyph is centered in a [`TITLEBAR_NAV_H`] box.
 pub(super) fn titlebar_toggle_aligned_left(theme: &Theme) -> f32 {
     let new_task_glyph = sidebar_glyph_left(theme);
     let toggle_glyph = f32::from(ButtonSize::Medium.icon_size().px(theme));
-    let inset = (HEADER_CTRL_H - toggle_glyph) / 2.;
+    let inset = (TITLEBAR_NAV_H - toggle_glyph) / 2.;
     new_task_glyph - inset
 }
 
@@ -98,7 +98,7 @@ pub(super) fn titlebar_history_left(sidebar_visible: bool, sidebar_width: f32) -
     if sidebar_visible {
         sidebar_width - TITLEBAR_HISTORY_W - SIDEBAR_EDGE_PAD
     } else {
-        titlebar_cluster_left() + HEADER_CTRL_H + TITLEBAR_CONTROLS_GAP
+        titlebar_cluster_left() + TITLEBAR_NAV_H + TITLEBAR_CONTROLS_GAP
     }
 }
 
@@ -228,9 +228,8 @@ const TERMINAL_MAIN_RESERVE: f32 = 320.;
 
 impl Render for OrbitApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Cleared here and set again only where the new-task backdrop is drawn,
-        // so a frame that covers it (Settings, a feature page) stops the
-        // heartbeat repainting for a field nobody can see.
+        // The new-task page no longer paints the living field, so this stays
+        // false for the whole frame and the heartbeat does not repaint for it.
         self.backdrop_live = false;
         if self.session_rename_ready {
             self.session_rename_ready = false;
@@ -928,8 +927,6 @@ impl Render for OrbitApp {
                 // feature page (Files / Git / Usage) opens as a card below it;
                 // the chat fills the column itself.
                 let empty = self.transcript.is_empty();
-                // `new_task_backdrop` sets `backdrop_live` when it actually
-                // paints the field; nothing above needs to guess.
                 // top bar — the window's left controls float over it in the
                 // titlebar overlay, so its leading clears them when the sidebar
                 // is collapsed. The drag spacer between the title and the right
@@ -939,6 +936,10 @@ impl Render for OrbitApp {
                         .h(px(TOP_BAR_H))
                         .flex_none()
                         .w_full()
+                        // Hairline under the body title bar, the same ink as
+                        // the sidebar's right edge, across the whole column.
+                        .border_b_1()
+                        .border_color(theme.border)
                         .flex()
                         .items_center()
                         // The bar spans the main area to the window's right
@@ -973,7 +974,7 @@ impl Render for OrbitApp {
                                         .min_w_0()
                                         .overflow_hidden()
                                         .truncate()
-                                        .text_size(TextSize::Default.px(&theme))
+                                        .text_size(TextSize::Small.px(&theme))
                                         .text_color(theme.text_secondary)
                                         .child(session_display_title(
                                             self.session_name.as_deref(),
@@ -1209,7 +1210,7 @@ impl Render for OrbitApp {
                     .children(if feature_open || pane_full {
                         None
                     } else {
-                        self.new_task_backdrop(theme, self.backdrop_phase, empty)
+                        self.new_task_backdrop(theme, empty)
                     })
                     .children(if feature_open || pane_full {
                         None
@@ -2361,33 +2362,28 @@ impl OrbitApp {
         )
     }
 
-    /// The new-task backdrop layer: the configured dithered image, or the
-    /// default dot grid, absolutely filling the whole chat column below the
-    /// top bar — behind the empty state, the floating composer, and the
-    /// status bar alike, so the picture is continuous behind all three.
+    /// The new-task backdrop layer: a configured dithered image, absolutely
+    /// filling the whole chat column below the top bar — behind the empty
+    /// state, the floating composer, and the status bar alike, so the picture
+    /// is continuous behind all three.
+    ///
+    /// With no image configured this returns nothing, and the window's flat
+    /// background is the page. The procedural dot field is not painted here,
+    /// and the field clock stays off: a configured photo is a still.
     ///
     /// It lives here rather than inside the empty state because the empty
     /// state is only the `flex_1` slot above the composer: a backdrop scoped
     /// to it ended at the composer's top edge and left the bottom of the
     /// window on a flat slab, at every fade setting including "None". The
-    /// active chat paints the quiet [`Self::chat_backdrop`] wash instead —
-    /// the living field is the new-task page's own.
-    pub(super) fn new_task_backdrop(
-        &mut self,
-        theme: Theme,
-        phase: f32,
-        empty: bool,
-    ) -> Option<AnyElement> {
+    /// active chat paints the quiet [`Self::chat_backdrop`] wash instead.
+    pub(super) fn new_task_backdrop(&mut self, theme: Theme, empty: bool) -> Option<AnyElement> {
+        // `render` cleared this already. Keep it false: nothing on this page
+        // animates, so the heartbeat must not repaint for a field.
+        self.backdrop_live = false;
         if !empty {
             return None;
         }
-        let backdrop = Self::dither_backdrop(theme);
-        let dithered = backdrop.is_some();
-        // Only the procedural field animates: a configured photo is a still,
-        // so the heartbeat must not repaint this page for it. `render` clears
-        // the flag before this runs, so a frame that skips the backdrop leaves
-        // it false.
-        self.backdrop_live = !dithered;
+        let backdrop = Self::dither_backdrop(theme)?;
         Some(
             div()
                 .id("new-task-backdrop")
@@ -2397,10 +2393,7 @@ impl OrbitApp {
                 .left_0()
                 .right_0()
                 .bottom_0()
-                .when(!dithered, |layer| {
-                    layer.child(crate::backdrop::layer(theme, phase))
-                })
-                .children(backdrop)
+                .child(backdrop)
                 .into_any_element(),
         )
     }
@@ -2415,7 +2408,8 @@ impl OrbitApp {
     /// exactly as quiet as before.
     pub(super) fn chat_backdrop(&self, theme: Theme, empty: bool) -> Option<AnyElement> {
         if empty {
-            // The new-task page shows its own living backdrop.
+            // The new-task page keeps the window background, or a configured
+            // still image. It does not take this wash.
             return None;
         }
         Some(
@@ -2521,9 +2515,9 @@ impl OrbitApp {
         crate::backdrop::layer(theme, 0.)
     }
 
-    /// New-task empty state — minimal onboarding over the backdrop the caller
-    /// paints (the configured dithered image, or the dot grid): one headline,
-    /// a ghost workspace row, and the composer below for input.
+    /// New-task empty state: the workspace field, centered. A configured
+    /// background image is painted by the caller (`new_task_backdrop`); with
+    /// none, the window's flat background shows. The composer sits below.
     ///
     /// `main_width` comes from the caller (window minus sidebar/pane) because
     /// the field below gets a definite width: `w_full().max_w(_)` chains
@@ -2563,10 +2557,11 @@ impl OrbitApp {
             .into_any_element(),
         };
 
-        // The backdrop belongs to the caller (`new_task_backdrop`, painted by
-        // the chat column in `render`): one layer spans this state, the
-        // floating composer, and the status bar. The active chat gets the
-        // quiet `chat_backdrop` wash instead.
+        // A configured background image belongs to the caller
+        // (`new_task_backdrop`, painted by the chat column in `render`): one
+        // layer spans this state, the floating composer, and the status bar.
+        // With no image, the window background shows through. The active chat
+        // gets the quiet `chat_backdrop` wash instead.
         div()
             .flex_1()
             .min_h_0()
@@ -2590,50 +2585,6 @@ impl OrbitApp {
                             .flex()
                             .flex_col()
                             .items_center()
-                            .gap(DynamicSpacing::Base20.px(&theme))
-                            // Mark over the dot grid: a quiet raised disc,
-                            // not an accent wash. The accent is reserved for the
-                            // open picker and the caret, not decoration.
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .size(px(56.))
-                                    .rounded_full()
-                                    .bg(theme.surface_elevated)
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(icon(
-                                        "icons/start-up.svg",
-                                        IconSize::Custom(24. / 16.).px(&theme),
-                                        theme.text_secondary,
-                                    )),
-                            )
-                            // Title block — one idea, one line of guidance.
-                            // 20px is the scale's display step (DESIGN.md).
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .gap(DynamicSpacing::Base06.px(&theme))
-                                    .child(
-                                        div()
-                                            .text_size(theme.ui_px(20.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text_primary)
-                                            .child(tr!("view.start_a_task")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(TextSize::Default.px(&theme))
-                                            .text_color(theme.text_muted)
-                                            .text_align(TextAlign::Center)
-                                            .child(tr!("workspace.pick_workspace_hint")),
-                                    ),
-                            )
                             // Workspace — a labeled select field, not a ghost
                             // row. Click opens the workspace picker (recent
                             // folders, filter, browse) anchored below; the
@@ -3454,7 +3405,7 @@ impl OrbitApp {
                 div()
                     .id("history-back")
                     .block_mouse_except_scroll()
-                    .size(px(HEADER_CTRL_H))
+                    .size(px(TITLEBAR_NAV_H))
                     .rounded(header_ctrl_radius(&theme))
                     .flex()
                     .items_center()
@@ -3482,7 +3433,7 @@ impl OrbitApp {
                 div()
                     .id("history-forward")
                     .block_mouse_except_scroll()
-                    .size(px(HEADER_CTRL_H))
+                    .size(px(TITLEBAR_NAV_H))
                     .rounded(header_ctrl_radius(&theme))
                     .flex()
                     .items_center()
@@ -3590,7 +3541,7 @@ impl OrbitApp {
                     lifted,
                     icon(
                         "icons/more.svg",
-                        ButtonSize::Medium.icon_size().px(&theme),
+                        IconSize::XSmall.px(&theme),
                         if lifted {
                             theme.text_primary
                         } else {

@@ -153,6 +153,8 @@ impl UsagePage {
             .child(
                 press(
                     button_frame(div().id("usage-top-back"), &theme, ButtonSize::Medium)
+                        .h(px(crate::app::helpers::HEADER_CTRL_H))
+                        .text_size(TextSize::Small.px(&theme))
                         .group(BUTTON_GROUP)
                         .cursor_pointer()
                         .hover(|style| style.bg(theme.surface_hover)),
@@ -165,11 +167,12 @@ impl UsagePage {
                 })
                 .child(icon(
                     "icons/arrow-left.svg",
-                    ButtonSize::Medium.icon_size().px(&theme),
+                    IconSize::XSmall.px(&theme),
                     theme.text_secondary,
                 ))
                 .child(
                     div()
+                        .text_size(TextSize::Small.px(&theme))
                         .text_color(theme.text_secondary)
                         .child(tr!("view.back")),
                 ),
@@ -181,12 +184,12 @@ impl UsagePage {
                     .gap(DynamicSpacing::Base06.px(&theme))
                     .child(icon(
                         "icons/chart-analysis.svg",
-                        IconSize::Medium.px(&theme),
+                        IconSize::Small.px(&theme),
                         theme.text_secondary,
                     ))
                     .child(
                         div()
-                            .text_size(TextSize::Large.px(&theme))
+                            .text_size(TextSize::Default.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_primary)
                             .child(tr!("view.usage")),

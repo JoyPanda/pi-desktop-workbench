@@ -533,13 +533,16 @@ pub(crate) fn empty_state_glyph(theme: Theme, glyph: &'static str) -> AnyElement
 
 // ── top-bar chip primitives ──
 
-/// Shared height of every top-bar control — the quota chip, the "open in"
-/// split, the diff chip and the icon buttons — so a row of mixed
-/// affordances reads as one instrument panel instead of assorted sizes.
-/// It is Zed's `ButtonSize::Medium` at the default UI size, held fixed
-/// because the titlebar's traffic-light clearance is fixed px layout
-/// (`view::TITLEBAR_CONTROLS_W`).
-pub(crate) const HEADER_CTRL_H: f32 = 28.;
+/// Shared height of the top-bar chips — the quota chip, the "open in"
+/// split, the diff chip and the overflow button — so that row reads as one
+/// instrument panel. Held at 24px so a 38px title bar keeps about 7px of air
+/// above and below each chip.
+pub(crate) const HEADER_CTRL_H: f32 = 24.;
+
+/// Hit box of Hide Sidebar, Back, and Forward. These three stay at the old
+/// 28px square (a Medium button) inside the shorter title bar; the chips to
+/// their right use [`HEADER_CTRL_H`].
+pub(crate) const TITLEBAR_NAV_H: f32 = 28.;
 
 /// Corner radius of the rectangular header chips. Header chips are buttons, so
 /// they take [`button::RADIUS`] rather than a fixed 8px: that keeps them in
@@ -719,9 +722,9 @@ pub(crate) fn header_icon_button(
     }
 }
 
-/// A bare top-bar icon button: the same square hit box as
-/// [`header_icon_button`], but without the chip's hairline or glass fill so
-/// it sits flat on the titlebar. Hover is the only affordance.
+/// A bare titlebar icon button for Hide Sidebar: a [`TITLEBAR_NAV_H`] square
+/// without the chip's hairline or glass fill, so it sits flat on the bar.
+/// Hover is the only affordance.
 pub(crate) fn header_ghost_button(
     id: &'static str,
     theme: &Theme,
@@ -731,7 +734,7 @@ pub(crate) fn header_ghost_button(
         div()
             .id(id)
             .group(BUTTON_GROUP)
-            .size(px(HEADER_CTRL_H))
+            .size(px(TITLEBAR_NAV_H))
             .rounded(header_ctrl_radius(theme))
             .flex()
             .items_center()

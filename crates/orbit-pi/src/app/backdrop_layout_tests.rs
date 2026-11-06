@@ -208,73 +208,30 @@ fn backdrop_fade_none_paints_no_gradient(cx: &mut gpui::TestAppContext) {
     );
 }
 
-/// The new-task backdrop must span the whole chat column below the top bar.
-/// It used to live inside the empty-state slot — the `flex_1` region *above*
-/// the composer column — so the image stopped at the composer's top edge and
-/// left the bottom of the window on a flat slab at every fade setting,
-/// including "None". This pins the layer to the column instead, so the
-/// floating composer and the status bar below it paint over the picture.
+/// The new-task page paints a backdrop layer only when a still image is
+/// configured, and never starts the field clock. With no image, the window's
+/// flat background is the page. Fill and clip of a configured image stay
+/// covered by the `backdrop_image` tests.
 #[gpui::test]
-fn new_task_backdrop_spans_the_composer_region(cx: &mut gpui::TestAppContext) {
+fn new_task_backdrop_is_absent_without_an_image(cx: &mut gpui::TestAppContext) {
     let cx = cx.add_empty_window();
-    let app = cx.update(|_, cx| {
+    cx.update(|_, cx| {
         cx.set_global(Theme::for_id(ThemeKey::ORBIT));
-        cx.new(OrbitApp::new)
+        let app = cx.new(OrbitApp::new);
+        app.update(cx, |app, _| {
+            let theme = Theme::for_id(ThemeKey::ORBIT);
+            let backdrop = app.new_task_backdrop(theme, true);
+            assert!(!app.backdrop_live, "the field clock stays off");
+            if crate::dither::background().is_none() {
+                assert!(backdrop.is_none(), "no image means no backdrop layer");
+            } else {
+                assert!(
+                    backdrop.is_some(),
+                    "a configured image still paints a still backdrop"
+                );
+            }
+        });
     });
-    let _ = cx.draw(point(px(0.), px(0.)), size(px(1000.), px(700.)), |_, cx| {
-        let theme = Theme::for_id(ThemeKey::ORBIT);
-        let backdrop = app.update(cx, |app, _| app.new_task_backdrop(theme, 0., true));
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .relative()
-            .child(
-                div()
-                    .id("test-top-bar")
-                    .debug_selector(|| "test-top-bar".to_string())
-                    .flex_none()
-                    .h(px(super::view::TOP_BAR_H))
-                    .w_full(),
-            )
-            .children(backdrop)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .id("test-composer")
-                            .debug_selector(|| "test-composer".to_string())
-                            .flex_none()
-                            .h(px(125.))
-                            .w_full(),
-                    ),
-            )
-    });
-
-    let backdrop = cx
-        .debug_bounds("new-task-backdrop")
-        .expect("backdrop layer laid out");
-    let composer = cx.debug_bounds("test-composer").expect("composer");
-    assert_eq!(
-        backdrop.origin.y,
-        px(super::view::TOP_BAR_H),
-        "backdrop must start below the top bar"
-    );
-    assert_eq!(
-        backdrop.origin.y + backdrop.size.height,
-        px(700.),
-        "backdrop must run to the window's bottom edge"
-    );
-    assert!(
-        backdrop.origin.y + backdrop.size.height > composer.origin.y,
-        "backdrop must extend below the composer's top edge: {backdrop:?} vs {composer:?}"
-    );
 }
 
 /// The field's clock runs only while the new-task page is on screen, and never
@@ -348,11 +305,9 @@ fn new_task_backdrop_is_absent_on_a_session(cx: &mut gpui::TestAppContext) {
         cx.set_global(Theme::for_id(ThemeKey::ORBIT));
         let app = cx.new(OrbitApp::new);
         assert!(
-            app.update(cx, |app, _| app.new_task_backdrop(
-                Theme::for_id(ThemeKey::ORBIT),
-                0.,
-                false
-            ))
+            app.update(cx, |app, _| {
+                app.new_task_backdrop(Theme::for_id(ThemeKey::ORBIT), false)
+            })
             .is_none(),
             "a session page has no backdrop"
         );
