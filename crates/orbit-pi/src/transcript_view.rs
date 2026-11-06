@@ -1410,7 +1410,13 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 rail_hint_dismissed,
                 rail_hint_shown_at,
             ))
-        });
+        })
+        // After the selection canvas, so a press on the thumb does not start
+        // a selection. The text menu below still paints over it.
+        .child(message_scroller::render_scrollbar(
+            view.scroller.clone(),
+            theme,
+        ));
     let menu = menu_selection.borrow().menu.clone();
     if let Some(menu) = menu {
         panel = panel.child(text_selection_menu(&menu, menu_selection, theme));
@@ -3053,12 +3059,17 @@ fn render_thinking_body(
     card
 }
 
-/// Chain a wheel event from a "Thought" card to the transcript once the card
-/// has scrolled as far as it can. The card's own `overflow_y_scroll` listener
-/// is registered *after* this one and GPUI dispatches bubble listeners in
-/// reverse, so it runs first and adds the raw delta to the handle
-/// *unclamped* — the offset read here is therefore the pre-clamp value. The
-/// part a clamp would discard is exactly what the transcript should consume.
+/// Chain a wheel event from a "Thought" card to the transcript. The card's
+/// own `overflow_y_scroll` listener is registered *after* this one and GPUI
+/// dispatches bubble listeners in reverse, so it runs first and adds the raw
+/// delta to the handle *unclamped*. The offset read here is therefore the
+/// pre-clamp value; subtracting the delta recovers the offset from before
+/// this event.
+///
+/// A card that can still move in this direction keeps the whole event, even
+/// when the event would land it on the top or bottom. Only an event that
+/// arrives already at that edge (or a card too short to scroll) is handed to
+/// the transcript, and then the whole delta goes.
 fn chain_thinking_scroll(
     handle: &ScrollHandle,
     scroller: &MessageScrollerState,
@@ -3106,15 +3117,38 @@ fn chain_thinking_scroll(
     }
 }
 
-/// Split a wheel delta between a "Thought" card and the transcript: clamp the
-/// card to its scrollable range and return `(card_offset, residual)`, where
-/// `residual` is the part the card could not consume and the transcript
-/// should. `previous` is the card's offset before this event; `max` is its
-/// scrollable extent (positive pixels).
-fn split_thinking_scroll(previous: Pixels, max: Pixels, delta: Pixels) -> (Pixels, Pixels) {
-    let unclamped = previous + delta;
-    let clamped = unclamped.clamp(-max, px(0.));
-    (clamped, unclamped - clamped)
+/// Split a wheel delta between a nested scroller and its parent.
+///
+/// Returns `(child_offset, residual)`. `previous` is the child's offset
+/// before this event (0 at the top, `-max` at the bottom) and may sit a
+/// fraction outside that range because the built-in listener adds `delta`
+/// before clamping. When the child can still travel in `delta`'s direction,
+/// `residual` is 0 and the child consumes the event, stopping at the edge.
+/// When it is already there, or `max` is 0, `residual` is the whole `delta`.
+pub(crate) fn split_thinking_scroll(
+    previous: Pixels,
+    max: Pixels,
+    delta: Pixels,
+) -> (Pixels, Pixels) {
+    // GPUI rounds a scroll max to 0.01px. A reconstructed `previous` can be
+    // off by about that much, which must not look like room to travel.
+    const EDGE_EPS: f32 = 0.05;
+    let max = max.max(px(0.));
+    let previous = previous.clamp(-max, px(0.));
+    let clamped = (previous + delta).clamp(-max, px(0.));
+    if delta == px(0.) {
+        return (clamped, px(0.));
+    }
+    let room = if delta < px(0.) {
+        previous + max
+    } else {
+        -previous
+    };
+    if max <= px(EDGE_EPS) || f32::from(room) <= EDGE_EPS {
+        (clamped, delta)
+    } else {
+        (clamped, px(0.))
+    }
 }
 
 /// The follow state a live "Thought" card should carry after a wheel event:
@@ -7556,26 +7590,43 @@ mod tests {
     }
 
     #[test]
-    fn split_thinking_scroll_chains_only_past_the_edges() {
-        // Mid-card: the full delta stays on the card, nothing forwarded.
+    fn split_thinking_scroll_keeps_the_event_until_the_card_is_already_at_the_edge() {
+        // Mid-card: the full delta stays on the card.
         assert_eq!(
             split_thinking_scroll(px(-40.), px(100.), px(-10.)),
             (px(-50.), px(0.))
         );
-        // At the bottom: the overshoot is clamped off and forwarded whole.
+        // Five pixels short of the bottom: this event lands on the edge and
+        // does not hand the leftover to the transcript.
         assert_eq!(
             split_thinking_scroll(px(-95.), px(100.), px(-10.)),
-            (px(-100.), px(-5.))
+            (px(-100.), px(0.))
         );
-        // At the top scrolling up: the overshoot goes back to the transcript.
+        // Already at the bottom: the whole delta goes to the transcript.
+        assert_eq!(
+            split_thinking_scroll(px(-100.), px(100.), px(-10.)),
+            (px(-100.), px(-10.))
+        );
+        // Five pixels short of the top, scrolling up: stop on the edge.
         assert_eq!(
             split_thinking_scroll(px(-5.), px(100.), px(10.)),
-            (px(0.), px(5.))
+            (px(0.), px(0.))
         );
-        // A card that cannot scroll forwards everything (short content).
+        // Already at the top: the whole delta goes to the transcript.
+        assert_eq!(
+            split_thinking_scroll(px(0.), px(100.), px(10.)),
+            (px(0.), px(10.))
+        );
+        // A card that cannot scroll forwards everything.
         assert_eq!(
             split_thinking_scroll(px(0.), px(0.), px(-10.)),
             (px(0.), px(-10.))
+        );
+        // A fractional max that the card is already sitting on. Reconstructing
+        // the pre-event offset must not look like room to travel.
+        assert_eq!(
+            split_thinking_scroll(px(-137.42), px(137.42), px(-3.7)),
+            (px(-137.42), px(-3.7))
         );
     }
 

@@ -580,7 +580,7 @@ impl OrbitApp {
             .flex_col()
             .child(body)
             .child(overlay_thumb(handle, theme.text_muted.opacity(0.45)))
-            .child(self.subagent_thumb_hit(id, handle, cx))
+            .child(self.subagent_thumb_hit(id, handle))
             .into_any_element()
     }
 
@@ -597,13 +597,10 @@ impl OrbitApp {
     }
 
     /// A press on the thumb starts a drag. The strip sits in the body's right
-    /// padding so it does not cover the text, and wheels there still scroll.
-    fn subagent_thumb_hit(
-        &self,
-        id: &str,
-        handle: &ScrollHandle,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+    /// padding so it does not cover the text, and wheels fall through to the
+    /// body's listener. A listener here would run before the body's built-in
+    /// scroll and apply the same wheel a second time.
+    fn subagent_thumb_hit(&self, id: &str, handle: &ScrollHandle) -> AnyElement {
         let handle = handle.clone();
         let leaf_id = id.to_string();
         div()
@@ -613,7 +610,6 @@ impl OrbitApp {
             .bottom_0()
             .right_0()
             .w(px(8.))
-            .on_scroll_wheel(cx.listener(Self::on_subagent_wheel))
             .on_drag(
                 SubagentThumbDrag {
                     leaf_id,
@@ -730,8 +726,7 @@ impl OrbitApp {
         let offset = handle.offset();
         let max = handle.max_offset().height;
         let previous = offset.y - delta_y;
-        let unclamped = previous + delta_y;
-        let clamped = unclamped.clamp(-max, px(0.));
+        let (clamped, residual) = transcript_view::split_thinking_scroll(previous, max, delta_y);
         let following = max <= px(0.) || clamped <= -max;
         let was_following = self.subagents.anchor(&id).following;
         if following {
@@ -751,7 +746,6 @@ impl OrbitApp {
         if clamped != offset.y {
             handle.set_offset(point(offset.x, clamped));
         }
-        let residual = unclamped - clamped;
         if residual != px(0.) {
             self.transcript.scroll_transcript_by(-residual);
         }

@@ -12,13 +12,22 @@
 use std::{cell::Cell, ops::Range, rc::Rc};
 
 use gpui::{
-    div, linear_color_stop, linear_gradient, prelude::*, px, rems, svg, ElementId, ListAlignment,
-    ListOffset, ListScrollEvent, ListState, Pixels,
+    canvas, div, fill, linear_color_stop, linear_gradient, point, prelude::*, px, rems, size, svg,
+    App, Background, Bounds, DispatchPhase, ElementId, Hsla, ListAlignment, ListOffset,
+    ListScrollEvent, ListState, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Window,
 };
 
 use crate::app::{button_frame, icon_button_frame, TipExt, BUTTON_GROUP};
-use crate::theme::tokens::{ButtonSize, StyledExt};
+use crate::theme::tokens::{scrollbar, ButtonSize, StyledExt};
 use crate::theme::Theme;
+
+/// Painted thumb width. The hit strip is wider so a drag can start on its edge.
+const SCROLLBAR_THUMB_WIDTH: f32 = 4.;
+const SCROLLBAR_HIT_WIDTH: f32 = 10.;
+/// Positions within this many pixels of an edge count as already there.
+const SCROLLBAR_EDGE: f32 = 0.5;
+/// Extra pixels above and below the thumb that still start a drag.
+const SCROLLBAR_THUMB_SLOP: f32 = 4.;
 
 const LIST_OVERDRAW: f32 = 400.0;
 
@@ -33,6 +42,18 @@ pub struct MessageScrollerState {
     /// New content arrived while the reader was away from the live edge —
     /// the jump-to-latest control says so until they return.
     unread: Rc<Cell<bool>>,
+    /// Live thumb drag. Window-level move and release listeners read it, so a
+    /// drag that leaves the strip — or a frame where the strip is gone — still
+    /// ends and unfreezes the list's scrollbar height.
+    thumb_drag: Rc<Cell<Option<ScrollbarDrag>>>,
+}
+
+/// Pointer and scroll offset captured when a thumb drag starts.
+#[derive(Clone, Copy)]
+struct ScrollbarDrag {
+    start_y: f32,
+    /// Pixels down from the top, in `0..=max`.
+    start_scrolled: f32,
 }
 
 impl MessageScrollerState {
@@ -56,6 +77,7 @@ impl MessageScrollerState {
             following_tail,
             visible_start,
             unread: Rc::new(Cell::new(false)),
+            thumb_drag: Rc::new(Cell::new(None)),
         }
     }
 
@@ -116,6 +138,9 @@ impl MessageScrollerState {
 
     /// Reset to `item_count` rows and resume tail following.
     pub fn reset(&self, item_count: usize) {
+        // A drag freezes the height the scrollbar reports. Drop it before the
+        // list is rebuilt, or the next session keeps the previous one's max.
+        self.end_scrollbar_drag();
         self.unread.set(false);
         self.list.reset(item_count);
         self.scroll_to_end();
@@ -272,6 +297,100 @@ impl MessageScrollerState {
         }
     }
 
+    /// Move the list to `target` pixels down from the top. The live edge
+    /// resumes tail following; anywhere above it leaves following and refreshes
+    /// the rail's visible-row hint. Programmatic offsets do not fire the
+    /// list's scroll handler, so both are written here.
+    fn apply_scrollbar_offset(&self, target: Pixels) {
+        let max = self.list.max_offset_for_scrollbar().height;
+        let target = target.clamp(px(0.), max);
+        if max <= px(SCROLLBAR_EDGE) || target >= max - px(SCROLLBAR_EDGE) {
+            self.scroll_to_end();
+        } else {
+            self.following_tail.set(false);
+            self.list.set_offset_from_scrollbar(point(px(0.), -target));
+            self.note_visible_start(self.list.logical_scroll_top().item_ix);
+        }
+    }
+
+    /// Pixels currently scrolled down from the top, clamped into the range the
+    /// scrollbar reports. At the tail the logical offset is a past-the-end
+    /// sentinel; without the clamp the thumb would paint below the track.
+    fn scrolled_px(&self) -> (f32, f32) {
+        let max = f32::from(self.list.max_offset_for_scrollbar().height);
+        let scrolled = (-f32::from(self.list.scroll_px_offset_for_scrollbar().y)).clamp(0., max);
+        (scrolled, max)
+    }
+
+    fn pointer_on_thumb(&self, x: f32, y: f32) -> bool {
+        let viewport = self.list.viewport_bounds();
+        let right = f32::from(viewport.right());
+        if x < right - SCROLLBAR_HIT_WIDTH || x > right + 1. {
+            return false;
+        }
+        let (scrolled, max) = self.scrolled_px();
+        let Some((top, height)) = scrollbar_thumb(f32::from(viewport.size.height), max, scrolled)
+        else {
+            return false;
+        };
+        let local = y - f32::from(viewport.origin.y);
+        local >= top - SCROLLBAR_THUMB_SLOP && local <= top + height + SCROLLBAR_THUMB_SLOP
+    }
+
+    fn begin_scrollbar_drag(&self, x: f32, y: f32) -> bool {
+        if self.thumb_drag.get().is_some() || !self.pointer_on_thumb(x, y) {
+            return false;
+        }
+        // Freeze the measured height for the rest of the gesture. Newly
+        // measured rows would otherwise change the thumb's travel under the
+        // pointer.
+        self.list.scrollbar_drag_started();
+        let (scrolled, _) = self.scrolled_px();
+        self.thumb_drag.set(Some(ScrollbarDrag {
+            start_y: y,
+            start_scrolled: scrolled,
+        }));
+        true
+    }
+
+    fn update_scrollbar_drag(&self, y: f32) {
+        let Some(drag) = self.thumb_drag.get() else {
+            return;
+        };
+        let viewport = self.list.viewport_bounds();
+        let max = f32::from(self.list.max_offset_for_scrollbar().height);
+        let Some(next) = scrollbar_dragged(
+            drag.start_scrolled,
+            y - drag.start_y,
+            f32::from(viewport.size.height),
+            max,
+        ) else {
+            self.end_scrollbar_drag();
+            return;
+        };
+        self.apply_scrollbar_offset(px(next));
+    }
+
+    fn end_scrollbar_drag(&self) {
+        if self.thumb_drag.take().is_some() {
+            self.list.scrollbar_drag_ended();
+        }
+    }
+
+    fn scrollbar_thumb_bounds(&self) -> Option<Bounds<Pixels>> {
+        let viewport = self.list.viewport_bounds();
+        let (scrolled, max) = self.scrolled_px();
+        let (top, height) = scrollbar_thumb(f32::from(viewport.size.height), max, scrolled)?;
+        let width = px(SCROLLBAR_THUMB_WIDTH);
+        Some(Bounds::new(
+            point(
+                viewport.right() - width - px(2.),
+                viewport.origin.y + px(top),
+            ),
+            size(width, px(height)),
+        ))
+    }
+
     fn stick_if_following(&self) {
         if self.is_following_tail() {
             self.scroll_to_end();
@@ -381,6 +500,114 @@ fn render_jump_button(state: MessageScrollerState, theme: Theme) -> impl IntoEle
                     )
                 }),
         )
+}
+
+/// Overlay scrollbar for the transcript. The canvas is always present so a
+/// drag's move and release are still delivered after the hit strip goes away.
+/// The strip itself sits above the text-selection layer and blocks presses
+/// without swallowing the list's wheel events.
+pub fn render_scrollbar(state: MessageScrollerState, theme: Theme) -> impl IntoElement {
+    let scrollable = state.is_scrollable();
+    let color = theme.text_muted.opacity(0.45);
+    let hit = state.clone();
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |_, _, window, _| paint_scrollbar(&state, color, window),
+            )
+            .absolute()
+            .inset_0()
+            .size_full(),
+        )
+        .when(scrollable, |layer| {
+            layer.child(
+                div()
+                    .id("transcript-scrollbar")
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .w(px(SCROLLBAR_HIT_WIDTH))
+                    .block_mouse_except_scroll()
+                    .on_mouse_down(MouseButton::Left, move |event, window, _| {
+                        if hit.begin_scrollbar_drag(
+                            f32::from(event.position.x),
+                            f32::from(event.position.y),
+                        ) {
+                            window.refresh();
+                        }
+                    }),
+            )
+        })
+}
+
+fn paint_scrollbar(state: &MessageScrollerState, color: Hsla, window: &mut Window) {
+    register_scrollbar_drag(state.clone(), window);
+    let Some(thumb) = state.scrollbar_thumb_bounds() else {
+        return;
+    };
+    window.paint_quad(fill(thumb, Background::from(color)));
+}
+
+/// Move and release are window-level. The press that starts a drag is on the
+/// hit strip, which is the only place a press must not begin a text selection.
+fn register_scrollbar_drag(state: MessageScrollerState, window: &mut Window) {
+    window.on_mouse_event({
+        let state = state.clone();
+        move |event: &MouseMoveEvent, phase, window, _: &mut App| {
+            if phase != DispatchPhase::Capture || state.thumb_drag.get().is_none() {
+                return;
+            }
+            if event.pressed_button != Some(MouseButton::Left) {
+                state.end_scrollbar_drag();
+                window.refresh();
+                return;
+            }
+            state.update_scrollbar_drag(f32::from(event.position.y));
+            window.refresh();
+        }
+    });
+    window.on_mouse_event({
+        let state = state.clone();
+        move |event: &MouseUpEvent, phase, window, _: &mut App| {
+            if phase != DispatchPhase::Capture || event.button != MouseButton::Left {
+                return;
+            }
+            if state.thumb_drag.get().is_some() {
+                state.end_scrollbar_drag();
+                window.refresh();
+            }
+        }
+    });
+}
+
+/// Thumb `(top, height)` inside a viewport of `viewport` px. `scrolled` is
+/// pixels down from the top. `None` when the content fits.
+fn scrollbar_thumb(viewport: f32, max_scroll: f32, scrolled: f32) -> Option<(f32, f32)> {
+    if max_scroll <= SCROLLBAR_EDGE || viewport <= 1. {
+        return None;
+    }
+    let min_thumb = f32::from(scrollbar::MIN_THUMB_LENGTH).min(viewport);
+    let content = viewport + max_scroll;
+    let height = ((viewport * viewport) / content).clamp(min_thumb, viewport);
+    let travel = (viewport - height).max(0.);
+    let scrolled = scrolled.clamp(0., max_scroll);
+    let top = scrolled / max_scroll * travel;
+    Some((top, height))
+}
+
+/// Scroll offset after dragging the thumb by `dy` pixels. `None` when there
+/// is no thumb. A thumb that already fills the track does not move.
+fn scrollbar_dragged(start_scrolled: f32, dy: f32, viewport: f32, max_scroll: f32) -> Option<f32> {
+    let (_, height) = scrollbar_thumb(viewport, max_scroll, start_scrolled)?;
+    let travel = viewport - height;
+    if travel <= SCROLLBAR_EDGE {
+        return Some(start_scrolled.clamp(0., max_scroll));
+    }
+    Some((start_scrolled + dy / travel * max_scroll).clamp(0., max_scroll))
 }
 
 #[cfg(test)]
@@ -743,5 +970,32 @@ mod tests {
         state.reset(2);
         assert_eq!(state.item_count(), 2);
         assert!(state.is_following_tail());
+    }
+
+    #[test]
+    fn the_thumb_rests_at_the_top_and_ends_flush_with_the_bottom() {
+        assert!(super::scrollbar_thumb(200., 0., 0.).is_none());
+        let (top, height) = super::scrollbar_thumb(200., 100., 0.).unwrap();
+        assert_eq!(top, 0.);
+        assert!((height - (200. * 200. / 300.)).abs() < 0.01);
+        let (top, height) = super::scrollbar_thumb(200., 100., 100.).unwrap();
+        assert!((top + height - 200.).abs() < 0.01);
+        // A long list still keeps a thumb the reader can grab.
+        let (_, height) = super::scrollbar_thumb(200., 10_000., 0.).unwrap();
+        assert!(
+            (height - f32::from(crate::theme::tokens::scrollbar::MIN_THUMB_LENGTH)).abs() < 0.01
+        );
+    }
+
+    #[test]
+    fn dragging_the_thumb_the_length_of_its_travel_reaches_the_bottom() {
+        let viewport = 200.;
+        let max_scroll = 100.;
+        let (_, height) = super::scrollbar_thumb(viewport, max_scroll, 0.).unwrap();
+        let travel = viewport - height;
+        let end = super::scrollbar_dragged(0., travel, viewport, max_scroll).unwrap();
+        assert!((end - max_scroll).abs() < 0.01);
+        let back = super::scrollbar_dragged(end, -travel, viewport, max_scroll).unwrap();
+        assert!(back.abs() < 0.01);
     }
 }
