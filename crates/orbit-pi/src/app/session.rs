@@ -10,6 +10,29 @@ use crate::theme::tokens::{
 };
 use crate::usage::tooltip::Tooltip;
 
+/// How the task being left should be treated once its composer is saved.
+enum Outgoing {
+    /// An ordinary session (or an empty page that was never listed).
+    /// The file, when there is one, is still `current_session_path`.
+    Session,
+    /// Unsent draft with composer content. `path` is set once pi has named a file.
+    Kept { id: u64, path: Option<PathBuf> },
+    /// The draft has a user message now.
+    Promoted { id: u64, path: Option<PathBuf> },
+    /// Empty unsent draft. Drop the row.
+    Discarded { id: u64, path: Option<PathBuf> },
+}
+
+pub(super) fn is_draft_placeholder(path: &Path) -> bool {
+    path.to_string_lossy().starts_with("orbit-draft://")
+}
+
+pub(super) fn draft_id_from_placeholder(path: &Path) -> Option<u64> {
+    path.to_string_lossy()
+        .strip_prefix("orbit-draft://")
+        .and_then(|id| id.parse().ok())
+}
+
 /// A workspace-relative `/`-separated path for the Files toolbar. Falls back
 /// to the absolute path when the file lies outside the workspace.
 fn relative_display(root: &std::path::Path, path: &std::path::Path) -> String {
@@ -91,6 +114,16 @@ impl OrbitApp {
     /// sending the command into a stdin nobody reads (issue #30).
     pub(super) fn can_reuse_session(&self) -> bool {
         !self.is_running() && self.runtime_is_live()
+    }
+
+    /// The open row is still an unsent draft. Pin, archive, rename, and
+    /// clone do not apply to it.
+    pub(super) fn active_is_unsent_draft(&self) -> bool {
+        self.current_draft_id.is_some_and(|id| {
+            self.listed_drafts
+                .iter()
+                .any(|draft| draft.id == id && !(draft.promoted && draft.bound))
+        })
     }
 
     pub(super) fn submit(&mut self, text: String, cx: &mut Context<Self>) {
@@ -304,6 +337,9 @@ impl OrbitApp {
             self.turns.cancel_begin();
             self.push_turn_records(cx);
         }
+        if self.transcript.first_user_message().is_some() {
+            self.mark_current_draft_sent();
+        }
         self.input.update(cx, |input, cx| input.clear(cx));
         cx.notify();
     }
@@ -485,6 +521,8 @@ impl OrbitApp {
             queue: self.queue.clone(),
             parked_at: Instant::now(),
             turns: std::mem::take(&mut self.turns),
+            draft: self.parking_draft.take(),
+            discard: std::mem::take(&mut self.parking_discard),
         };
         match self.current_session_path.take() {
             Some(path) => self.park(path, parked),
@@ -881,27 +919,17 @@ impl OrbitApp {
         // fresh pi process. An idle session is cheap to reuse in place, but
         // only while its process is alive: a dead one (see issue #30) gets a
         // fresh process too rather than a command into the void.
-        if !self.can_reuse_session() {
-            let cwd = self
-                .current_workspace
-                .clone()
-                .or_else(|| std::env::current_dir().ok())
-                .unwrap_or_else(|| PathBuf::from("."));
-            self.begin_new_task(cwd, window, cx);
-            return;
-        }
-        self.cancel_fork_followup();
-        self.close_surfaces_for_new_task(cx);
-        self.transcript.begin_new_session();
-        self.send(CommandBody::NewSession, "new_session");
-        self.input.read(cx).focus(window);
-        cx.notify();
+        let cwd = self.task_cwd();
+        self.start_listed_draft(cwd, window, cx);
     }
 
     /// Duplicate the open session as-is (`clone`). pi creates the copy and
     /// switches the process onto it; the `clone` response handler reloads the
     /// transcript and re-keys the session.
     pub(super) fn clone_session(&mut self, cx: &mut Context<Self>) {
+        if self.active_is_unsent_draft() {
+            return;
+        }
         // The footer fork has already asked pi to switch. Sending clone on
         // top of that adopts whichever reply lands last.
         if self.fork_in_flight() {
@@ -982,7 +1010,7 @@ impl OrbitApp {
     }
 
     /// A footer fork is waiting on pi. A second click must not start another.
-    fn fork_in_flight(&self) -> bool {
+    pub(super) fn fork_in_flight(&self) -> bool {
         matches!(
             self.fork_pending,
             Some(ForkPending::AwaitingPoint { .. } | ForkPending::Switching { .. })
@@ -1182,19 +1210,7 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Same workspace with a live idle process: reuse it in place. A run
-        // in flight is parked instead, so `new_session` never aborts it; a
-        // dead process (or a different workspace) always needs its own.
-        if self.current_workspace.as_ref() == Some(&cwd) && self.can_reuse_session() {
-            self.cancel_fork_followup();
-            self.close_surfaces_for_new_task(cx);
-            self.transcript.begin_new_session();
-            self.send(CommandBody::NewSession, "new_session");
-            self.input.read(cx).focus(window);
-            cx.notify();
-            return;
-        }
-        self.begin_new_task(cwd, window, cx);
+        self.start_listed_draft(cwd, window, cx);
     }
 
     /// Start a fresh task rooted at `cwd` on its own pi process, parking a
@@ -1207,53 +1223,580 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.cancel_fork_followup();
-        // Custom terminal surfaces cannot run offscreen; native blocking
-        // requests are parked with their session and restored on return.
-        self.cancel_custom_surfaces(cx);
-        // A new task owns the window: drop whatever surface was covering the
-        // chat column before the fresh session paints.
-        self.close_surfaces_for_new_task(cx);
-        // A live session is parked so a run in flight keeps going in the
-        // background. A dead one holds nothing worth keeping: drop it (its
-        // exit banner goes with it) instead of parking a corpse.
-        self.save_composer_draft(cx);
-        if self.runtime_is_live() {
-            self.park_active_session();
-        } else {
-            self.cancel_open_dialog(cx);
-            self.drop_client();
-        }
+        self.prepare_new_task_shell(cx);
+        let outgoing = self.settle_outgoing(cx);
+        self.retire_outgoing(outgoing, cx);
+        self.reset_for_new_task(cx);
+        self.launch_fresh_draft(cwd, true, window, cx);
+    }
 
+    pub(super) fn task_cwd(&self) -> PathBuf {
+        self.current_workspace
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// New Task from a button, shortcut, or workspace "+". An empty draft in
+    /// the same workspace is focused instead of stacking a second blank row.
+    /// A listed draft that must stay (it has text, or a message) keeps its
+    /// process; an ordinary idle session is reused in place.
+    pub(super) fn start_listed_draft(
+        &mut self,
+        cwd: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.blank_draft_in(&cwd, cx) {
+            self.input.read(cx).focus(window);
+            cx.notify();
+            return;
+        }
+        if crate::app::drafts::reuse_live_process(
+            self.can_reuse_session(),
+            self.workspace_matches(&cwd),
+            self.active_is_unsent_draft(),
+        ) {
+            self.reuse_process_for_new_task(cwd, window, cx);
+            return;
+        }
+        self.begin_new_task(cwd, window, cx);
+    }
+
+    /// `true` when `cwd` is the folder the open view is already working in.
+    fn workspace_matches(&self, cwd: &Path) -> bool {
+        let current = self
+            .current_workspace
+            .clone()
+            .unwrap_or_else(|| self.task_cwd());
+        sessions::canonical_workspace_path(&current) == sessions::canonical_workspace_path(cwd)
+    }
+
+    /// `true` when the open view is already an empty draft for `cwd`.
+    fn blank_draft_in(&self, cwd: &Path, cx: &Context<Self>) -> bool {
+        let Some(id) = self.current_draft_id else {
+            return false;
+        };
+        let Some(draft) = self.listed_drafts.iter().find(|draft| draft.id == id) else {
+            return false;
+        };
+        crate::app::drafts::reuse_blank_draft(
+            sessions::canonical_workspace_path(&draft.cwd) == sessions::canonical_workspace_path(cwd),
+            true,
+            draft.promoted,
+            self.transcript.first_user_message().is_some(),
+            self.composer_is_blank(cx),
+        )
+    }
+
+    /// Send `new_session` on the process already running. The old path is
+    /// cleared in the same turn so a click that lands before pi answers
+    /// cannot park the new session under the old file.
+    fn reuse_process_for_new_task(
+        &mut self,
+        cwd: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.prepare_new_task_shell(cx);
+        let outgoing = self.settle_outgoing(cx);
+        match outgoing {
+            Outgoing::Session
+            | Outgoing::Promoted {
+                path: Some(_), ..
+            } => {
+                // A sent session already has its file. `new_session` on this
+                // idle process leaves that file on disk, the same way New
+                // behaves on an ordinary session.
+                self.current_session_path = None;
+                self.transcript.begin_new_session();
+                self.launch_fresh_draft(cwd, false, window, cx);
+            }
+            other => {
+                // The page already had text, so it became a kept draft and
+                // still owns this process. Park it, then start a new one.
+                self.retire_outgoing(other, cx);
+                self.reset_for_new_task(cx);
+                self.launch_fresh_draft(cwd, true, window, cx);
+            }
+        }
+    }
+
+    fn prepare_new_task_shell(&mut self, cx: &mut Context<Self>) {
+        self.cancel_fork_followup();
+        self.cancel_custom_surfaces(cx);
+        self.close_surfaces_for_new_task(cx);
+    }
+
+    /// Drop the view-level session state a brand-new task must not inherit.
+    /// The composer was already taken by [`Self::settle_outgoing`].
+    fn reset_for_new_task(&mut self, cx: &mut Context<Self>) {
         self.execution = SessionExecution::default();
         self.busy = false;
         self.transcript.clear();
         self.current_title = None;
         self.reset_session_name(cx);
         self.current_session_path = None;
+        self.current_draft_id = None;
         self.added = 0;
         self.removed = 0;
         self.context = None;
+        self.session_usage = None;
         self.reset_turns(cx);
         self.reset_queue();
-        // A brand-new task starts unscoped (Build) and waits for its own id:
-        // clearing the id keeps a mode chosen on the New Task page pending
-        // instead of writing it to the session we just parked.
         self.session_id = None;
         self.workflow_pending = None;
         self.workflow_mode = WorkflowMode::default();
+    }
+
+    /// Insert a blank sidebar draft and point pi at a new session. `spawn`
+    /// starts a process; the reuse path sends `new_session` on the one it
+    /// already has.
+    fn launch_fresh_draft(
+        &mut self,
+        cwd: PathBuf,
+        spawn: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = sessions::canonical_workspace_path(&cwd);
         self.add_workspace(cwd.clone(), cx);
         self.set_current_workspace(cwd.clone(), cx);
-        // The New Task page has no file — its draft lives in its own slot.
-        self.restore_composer_draft(None, cx);
+        self.reveal_workspace_group(&cwd);
+        let id = self.alloc_draft_id();
+        self.listed_drafts.push(ListedDraft {
+            id,
+            path: crate::app::drafts::draft_placeholder(id),
+            bound: false,
+            cwd: cwd.clone(),
+            created: SystemTime::now(),
+            composer: None,
+            promoted: false,
+            sent_title: None,
+        });
+        self.current_draft_id = Some(id);
+        self.current_session_path = None;
+        self.apply_composer(None, cx);
+        if spawn || self.client.is_none() {
+            match self.extensions.spawn(&cwd, true, &self.mcp.secret_env()) {
+                Ok(client) => {
+                    self.adopt_client(client);
+                    self.mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
+                    self.send(CommandBody::NewSession, "new_session");
+                    self.refresh_catalogs();
+                    self.probe_auth();
+                    self.set_status(tr!("session.new_session"));
+                }
+                Err(err) => {
+                    let message = tr!("runtime.pi_spawn_failed", error = err);
+                    self.client = None;
+                    self.runtime.error = Some(message.clone());
+                    self.set_status(message);
+                }
+            }
+        } else {
+            self.send(CommandBody::NewSession, "new_session");
+            self.set_status(tr!("session.new_session"));
+        }
+        self.input.read(cx).focus(window);
+        cx.notify();
+    }
 
-        match self.extensions.spawn(&cwd, true, &self.mcp.secret_env()) {
+    fn reveal_workspace_group(&mut self, cwd: &Path) {
+        let label = sessions::workspace_label(cwd);
+        self.collapsed_workspaces.remove(&label);
+        self.expanded_workspace_groups.insert(label);
+    }
+
+    /// Save the composer and decide what the open task becomes. Does not
+    /// touch the pi process — [`Self::retire_outgoing`] does that.
+    fn settle_outgoing(&mut self, cx: &mut Context<Self>) -> Outgoing {
+        let composer = self.take_composer(cx);
+        let has_user = self.transcript.first_user_message().is_some();
+        if let Some(id) = self.current_draft_id.take() {
+            let bound_path = self.listed_drafts.iter().find(|draft| draft.id == id).and_then(
+                |draft| {
+                    draft
+                        .bound
+                        .then(|| draft.path.clone())
+                        .filter(|path| !is_draft_placeholder(path))
+                },
+            );
+            let fate = crate::app::drafts::settle_listed_draft(has_user, composer.is_none());
+            match fate {
+                crate::app::drafts::DraftFate::Discard => {
+                    self.listed_drafts.retain(|draft| draft.id != id);
+                    self.scrub_draft_history(id);
+                    Outgoing::Discarded {
+                        id,
+                        path: bound_path,
+                    }
+                }
+                crate::app::drafts::DraftFate::Keep => {
+                    if let Some(draft) = self.listed_drafts.iter_mut().find(|draft| draft.id == id)
+                    {
+                        draft.composer = composer;
+                    }
+                    Outgoing::Kept {
+                        id,
+                        path: bound_path.clone(),
+                    }
+                }
+                crate::app::drafts::DraftFate::Promote => {
+                    let sent = self
+                        .transcript
+                        .first_user_message()
+                        .map(|text| sessions::cap_chars(&text, 80))
+                        .filter(|text| !text.trim().is_empty());
+                    if let Some(draft) = self.listed_drafts.iter_mut().find(|draft| draft.id == id)
+                    {
+                        draft.promoted = true;
+                        draft.sent_title = sent;
+                        draft.composer = None;
+                    }
+                    if let Some(path) = &bound_path {
+                        if let Some(composer) = composer {
+                            self.drafts.insert(path.clone(), composer);
+                        }
+                    } else if let Some(draft) =
+                        self.listed_drafts.iter_mut().find(|draft| draft.id == id)
+                    {
+                        draft.composer = composer;
+                    }
+                    Outgoing::Promoted {
+                        id,
+                        path: bound_path,
+                    }
+                }
+            }
+        } else {
+            let path = self.current_session_path.clone();
+            let on_disk = path
+                .as_ref()
+                .is_some_and(|path| self.sessions.iter().any(|session| &session.path == path));
+            if !has_user && composer.is_some() && !on_disk {
+                let id = self.alloc_draft_id();
+                let (draft_path, bound) = match &path {
+                    Some(path) => (path.clone(), true),
+                    None => (crate::app::drafts::draft_placeholder(id), false),
+                };
+                let cwd = self.task_cwd();
+                self.listed_drafts.push(ListedDraft {
+                    id,
+                    path: draft_path,
+                    bound,
+                    cwd,
+                    created: SystemTime::now(),
+                    composer,
+                    promoted: false,
+                    sent_title: None,
+                });
+                return Outgoing::Kept { id, path };
+            }
+            if let Some(path) = path {
+                match composer {
+                    Some(composer) => {
+                        self.drafts.insert(path.clone(), composer);
+                    }
+                    None => {
+                        self.drafts.remove(&path);
+                    }
+                }
+                Outgoing::Session
+            } else {
+                Outgoing::Session
+            }
+        }
+    }
+
+    /// Park, or drop, the process that [`Self::settle_outgoing`] just classified.
+    fn retire_outgoing(&mut self, outgoing: Outgoing, cx: &mut Context<Self>) {
+        let live = self.runtime_is_live();
+        match outgoing {
+            Outgoing::Discarded { id, path } => {
+                self.scrub_draft_history(id);
+                if let Some(path) = path {
+                    self.cancel_open_dialog(cx);
+                    self.drop_client();
+                    self.lives.remove(&path);
+                    self.delete_header_only_file(&path);
+                    self.current_session_path = None;
+                } else if live {
+                    self.parking_draft = Some(id);
+                    self.parking_discard = true;
+                    self.park_active_session();
+                } else {
+                    self.cancel_open_dialog(cx);
+                    self.drop_client();
+                }
+            }
+            Outgoing::Kept { id, path } | Outgoing::Promoted { id, path } if live => {
+                // `new_session`'s reply clears `current_session_path` before
+                // `get_state` adopts the file. The draft may already know the
+                // path; park under that, not under pending.
+                if self.current_session_path.is_none() {
+                    if let Some(path) = path {
+                        self.current_session_path = Some(path);
+                    }
+                }
+                self.parking_draft = Some(id);
+                self.parking_discard = false;
+                self.park_active_session();
+            }
+            Outgoing::Session if live => {
+                self.park_active_session();
+            }
+            _ => {
+                self.cancel_open_dialog(cx);
+                self.drop_client();
+            }
+        }
+    }
+
+    pub(super) fn draft_file_is_bound(&self) -> bool {
+        self.current_draft_id.is_some_and(|id| {
+            self.listed_drafts
+                .iter()
+                .any(|draft| draft.id == id && draft.bound && !is_draft_placeholder(&draft.path))
+        })
+    }
+
+    pub(super) fn bind_draft_path(&mut self, id: u64, file: &Path) {
+        if is_draft_placeholder(file) {
+            return;
+        }
+        if let Some(draft) = self.listed_drafts.iter_mut().find(|draft| draft.id == id) {
+            if !draft.bound {
+                draft.path = file.to_path_buf();
+                draft.bound = true;
+            }
+        }
+    }
+
+    /// A pending park learned its session file. Discarded drafts die here;
+    /// kept ones take the real path and join `lives`.
+    pub(super) fn admit_rekeyed_park(&mut self, path: PathBuf, parked: ParkedSession) {
+        if parked.discard {
+            if let Some(id) = parked.draft {
+                self.listed_drafts.retain(|draft| draft.id != id);
+                self.scrub_draft_history(id);
+            }
+            drop(parked);
+            self.delete_header_only_file(&path);
+            return;
+        }
+        if let Some(id) = parked.draft {
+            self.bind_draft_path(id, &path);
+        }
+        self.park(path, parked);
+        self.release_promoted_drafts_on_disk();
+    }
+
+    /// A promoted draft only holds the sidebar until the disk scan has the
+    /// same file. After that the disk row is the session; leaving the draft
+    /// in memory would paint it again once the file is deleted or archived.
+    pub(super) fn release_promoted_drafts_on_disk(&mut self) {
+        let mut index = 0;
+        while index < self.listed_drafts.len() {
+            let draft = &self.listed_drafts[index];
+            let on_disk = draft.promoted
+                && draft.bound
+                && self
+                    .sessions
+                    .iter()
+                    .any(|session| session.path == draft.path);
+            if !on_disk {
+                index += 1;
+                continue;
+            }
+            let draft = self.listed_drafts.remove(index);
+            if self.current_draft_id == Some(draft.id) {
+                if self.current_session_path.is_none() {
+                    self.current_session_path = Some(draft.path.clone());
+                }
+                self.current_draft_id = None;
+            }
+            if let Some(composer) = draft.composer {
+                self.drafts.entry(draft.path).or_insert(composer);
+            }
+        }
+    }
+
+    pub(super) fn delete_header_only_file(&self, path: &Path) {
+        if sessions::is_header_only_session(path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    fn scrub_draft_history(&mut self, id: u64) {
+        if self.session_history.is_empty() {
+            return;
+        }
+        let old = self.history_index;
+        let mut removed_through_old = 0usize;
+        let kept = std::mem::take(&mut self.session_history);
+        let mut next = Vec::with_capacity(kept.len());
+        for (index, session) in kept.into_iter().enumerate() {
+            if session.draft == Some(id) {
+                if index <= old {
+                    removed_through_old += 1;
+                }
+                continue;
+            }
+            next.push(session);
+        }
+        self.session_history = next;
+        if self.session_history.is_empty() {
+            self.history_index = 0;
+        } else {
+            self.history_index = old
+                .saturating_sub(removed_through_old)
+                .min(self.session_history.len() - 1);
+        }
+    }
+
+    /// Open a sidebar draft. A warm process resumes; a reaped one is spawned
+    /// again and bound to the same draft id, without `switch_session` on a
+    /// file that may not exist.
+    fn open_listed_draft(&mut self, id: u64, cx: &mut Context<Self>) {
+        if self.current_draft_id == Some(id) {
+            return;
+        }
+        let Some(draft) = self.listed_drafts.iter().find(|draft| draft.id == id) else {
+            return;
+        };
+        let bound = draft.bound && !is_draft_placeholder(&draft.path);
+        let path = draft.path.clone();
+        let cwd = draft.cwd.clone();
+        let promoted = draft.promoted;
+        if !bound {
+            if let Some(pos) = self
+                .pending_parks
+                .iter()
+                .position(|parked| parked.draft == Some(id) && !parked.discard)
+            {
+                let parked = self.pending_parks.remove(pos);
+                let outgoing = self.settle_outgoing(cx);
+                self.retire_outgoing(outgoing, cx);
+                self.resume_pending_draft(id, parked, cx);
+                return;
+            }
+            self.reopen_draft_cold(id, cwd, cx);
+            return;
+        }
+        if let Some(parked) = self.lives.remove(&path) {
+            // The process is already warm. Restoring it here skips
+            // `switch_to_session`, which would drop a stale MCP stamp and
+            // then `SwitchSession` a file that may still be header-only.
+            let outgoing = self.settle_outgoing(cx);
+            self.retire_outgoing(outgoing, cx);
+            self.resume_parked_draft(id, Some(path), parked, cx);
+            return;
+        }
+        if promoted {
+            let Some(mut info) = self.draft_session_info_for(id) else {
+                return;
+            };
+            info.draft = None;
+            self.switch_to_session(info, false, cx);
+            return;
+        }
+        self.reopen_draft_cold(id, cwd, cx);
+    }
+
+    fn resume_pending_draft(&mut self, id: u64, parked: ParkedSession, cx: &mut Context<Self>) {
+        self.resume_parked_draft(id, None, parked, cx);
+    }
+
+    /// Put a parked draft process back on screen. `session_path` is set once
+    /// pi has named the file; a pending park still has none.
+    fn resume_parked_draft(
+        &mut self,
+        id: u64,
+        session_path: Option<PathBuf>,
+        parked: ParkedSession,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self
+            .listed_drafts
+            .iter()
+            .find(|draft| draft.id == id)
+            .map(|draft| draft.cwd.clone())
+            .unwrap_or_else(|| self.task_cwd());
+        let title = self
+            .listed_drafts
+            .iter()
+            .find(|draft| draft.id == id)
+            .and_then(|draft| draft.sent_title.clone());
+        self.adopt_client(parked.client);
+        self.transcript = parked.transcript;
+        self.turns = parked.turns;
+        self.push_turn_records(cx);
+        self.busy = parked.busy;
+        self.execution = parked.execution;
+        self.prompt_in_flight = self.execution.prompt_id.clone();
+        self.retrying = self.execution.retrying;
+        self.is_compacting = self.execution.compacting;
+        self.retry_detail = parked.retry_detail;
+        self.dialog = parked.interaction.dialog;
+        self.approval = parked.interaction.approval;
+        self.ask = parked.interaction.ask;
+        self.ask_tool_id = parked.interaction.ask_tool_id;
+        self.ask_questions = parked.interaction.ask_questions;
+        self.ask_replay = parked.interaction.ask_replay;
+        self.dialog_focus_pending = self.dialog.is_some();
+        self.approval_focus_pending = self.approval.is_some();
+        self.approval_highlight = 0;
+        self.ask_focus_pending = self.ask.is_some();
+        self.added = parked.added;
+        self.removed = parked.removed;
+        self.extension_widgets = parked.widgets;
+        self.subagents = parked.subagents;
+        self.subagent_scrolls = parked.subagent_scrolls;
+        self.subagent_list_scroll = parked.subagent_list_scroll;
+        self.subagent_scroll_placed = self.subagents.scroll_epoch();
+        self.subagent_list_rows = self.subagents.rows().len();
+        self.clear_subagent_folds();
+        self.subagents.drop_inflight();
+        self.queue = parked.queue;
+        self.mcp_stamp = parked.mcp_stamp;
+        // The park does not carry the previous view's title or ids.
+        self.current_title = title;
+        self.reset_session_name(cx);
+        self.session_id = None;
+        self.context = None;
+        self.session_usage = None;
+        self.current_draft_id = Some(id);
+        self.current_session_path = session_path;
+        self.add_workspace(cwd.clone(), cx);
+        self.set_current_workspace(cwd, cx);
+        self.restore_draft_composer(id, cx);
+        cx.notify();
+    }
+
+    fn reopen_draft_cold(&mut self, id: u64, cwd: PathBuf, cx: &mut Context<Self>) {
+        let outgoing = self.settle_outgoing(cx);
+        self.retire_outgoing(outgoing, cx);
+        self.reset_for_new_task(cx);
+        self.unbind_draft(id);
+        self.current_draft_id = Some(id);
+        self.boot_draft_process(&cwd, cx);
+        self.restore_draft_composer(id, cx);
+        cx.notify();
+    }
+
+    /// Spawn a process for a draft that already owns the composer. Does not
+    /// settle the outgoing task — the caller did that.
+    fn boot_draft_process(&mut self, cwd: &Path, cx: &mut Context<Self>) {
+        self.add_workspace(cwd.to_path_buf(), cx);
+        self.set_current_workspace(cwd.to_path_buf(), cx);
+        self.reveal_workspace_group(cwd);
+        match self.extensions.spawn(cwd, true, &self.mcp.secret_env()) {
             Ok(client) => {
                 self.adopt_client(client);
-                self.mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
+                self.mcp_stamp = self.mcp.fingerprint_for(Some(cwd));
                 self.send(CommandBody::NewSession, "new_session");
                 self.refresh_catalogs();
-                // Capability probes queue after the new-session request.
                 self.probe_auth();
                 self.set_status(tr!("session.new_session"));
             }
@@ -1264,9 +1807,235 @@ impl OrbitApp {
                 self.set_status(message);
             }
         }
-        self.input.read(cx).focus(window);
+    }
+
+    fn unbind_draft(&mut self, id: u64) {
+        if let Some(draft) = self.listed_drafts.iter_mut().find(|draft| draft.id == id) {
+            if draft.bound && !is_draft_placeholder(&draft.path) {
+                let old = draft.path.clone();
+                if sessions::is_header_only_session(&old) {
+                    let _ = std::fs::remove_file(&old);
+                }
+            }
+            draft.bound = false;
+            draft.path = crate::app::drafts::draft_placeholder(id);
+        }
+    }
+
+    /// Restart pi without losing a listed draft's composer. Settings uses
+    /// this when it drops the process and would otherwise resume from disk.
+    pub(super) fn resume_after_process_drop(&mut self, cx: &mut Context<Self>) {
+        let outgoing = self.settle_outgoing(cx);
+        match outgoing {
+            Outgoing::Kept { id, .. } => {
+                let cwd = self.draft_cwd(id);
+                self.drop_client();
+                self.reset_for_new_task(cx);
+                self.unbind_draft(id);
+                self.current_draft_id = Some(id);
+                self.boot_draft_process(&cwd, cx);
+                self.restore_draft_composer(id, cx);
+                cx.notify();
+            }
+            Outgoing::Discarded { path, .. } => {
+                self.drop_client();
+                if let Some(path) = path {
+                    self.lives.remove(&path);
+                    self.delete_header_only_file(&path);
+                }
+                self.current_session_path = None;
+                self.runtime_start(cx);
+            }
+            Outgoing::Promoted { id, path: None } => {
+                let cwd = self.draft_cwd(id);
+                self.drop_client();
+                self.reset_for_new_task(cx);
+                self.unbind_draft(id);
+                self.current_draft_id = Some(id);
+                self.boot_draft_process(&cwd, cx);
+                self.restore_draft_composer(id, cx);
+                cx.notify();
+            }
+            Outgoing::Promoted {
+                id,
+                path: Some(path),
+            } => self.relaunch_settled_session(Some(id), Some(path), cx),
+            Outgoing::Session => {
+                let path = self.current_session_path.clone();
+                self.relaunch_settled_session(None, path, cx);
+            }
+        }
+    }
+
+    fn draft_cwd(&self, id: u64) -> PathBuf {
+        self.listed_drafts
+            .iter()
+            .find(|draft| draft.id == id)
+            .map(|draft| draft.cwd.clone())
+            .unwrap_or_else(|| self.task_cwd())
+    }
+
+    /// The composer was just saved for `path`. Put it back in the input, drop
+    /// the dead process, and open that session again so the second settle
+    /// keeps the text instead of seeing an empty box.
+    fn relaunch_settled_session(
+        &mut self,
+        draft_id: Option<u64>,
+        path: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = path else {
+            self.drop_client();
+            self.current_session_path = None;
+            self.runtime_start(cx);
+            return;
+        };
+        self.restore_composer_draft(Some(&path), cx);
+        self.drop_client();
+        let session = self
+            .sessions
+            .iter()
+            .find(|session| session.path == path)
+            .cloned()
+            .or_else(|| {
+                draft_id.and_then(|id| self.draft_session_info_for(id)).map(|mut info| {
+                    info.draft = None;
+                    info.path = path.clone();
+                    info
+                })
+            });
+        if let Some(session) = session {
+            self.switch_to_session(session, false, cx);
+        } else {
+            self.current_session_path = None;
+            self.runtime_start(cx);
+        }
+    }
+
+    /// The first user message makes the open draft a real session. Until
+    /// then, rename, pin, and clone stay off, and New will not reuse its
+    /// process.
+    fn mark_current_draft_sent(&mut self) {
+        let Some(id) = self.current_draft_id else {
+            return;
+        };
+        let title = self
+            .transcript
+            .first_user_message()
+            .map(|text| sessions::cap_chars(&text, 80))
+            .filter(|text| !text.trim().is_empty());
+        let Some(draft) = self.listed_drafts.iter_mut().find(|draft| draft.id == id) else {
+            return;
+        };
+        if draft.promoted {
+            return;
+        }
+        draft.promoted = true;
+        if draft.sent_title.is_none() {
+            draft.sent_title = title;
+        }
+    }
+
+    fn draft_session_info_for(&self, id: u64) -> Option<SessionInfo> {
+        self.listed_drafts
+            .iter()
+            .find(|draft| draft.id == id)
+            .map(|draft| self.session_info_from_draft(draft))
+    }
+
+    pub(super) fn session_info_from_draft(&self, draft: &ListedDraft) -> SessionInfo {
+        let current = self.current_draft_id == Some(draft.id);
+        let live = current
+            .then(|| self.transcript.first_user_message())
+            .flatten()
+            .filter(|text| !text.trim().is_empty());
+        let title_source = live.as_deref().or(draft.sent_title.as_deref());
+        let title = match title_source {
+            Some(text) => sessions::cap_chars(text, 80),
+            None => tr!("menu.new_task"),
+        };
+        let first_message = title_source
+            .map(|text| sessions::cap_chars(text, 110))
+            .unwrap_or_default();
+        SessionInfo {
+            path: draft.path.clone(),
+            id: format!("draft-{}", draft.id),
+            cwd: draft.cwd.clone(),
+            title,
+            first_message,
+            modified: draft.created,
+            draft: if draft.promoted && draft.bound {
+                None
+            } else {
+                Some(draft.id)
+            },
+        }
+    }
+
+    /// Remove a draft row, its process, and a header-only file. Missing
+    /// files are not an error — the row may never have been written.
+    pub(super) fn delete_listed_draft(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(pos) = self.listed_drafts.iter().position(|draft| draft.id == id) else {
+            return;
+        };
+        let draft = self.listed_drafts.remove(pos);
+        self.scrub_draft_history(id);
+        if draft.bound && !is_draft_placeholder(&draft.path) {
+            self.lives.remove(&draft.path);
+            self.drafts.remove(&draft.path);
+            self.awaiting_review.remove(&draft.path);
+            self.session_outcomes.remove(&draft.path);
+            self.delete_header_only_file(&draft.path);
+        }
+        let mut index = 0;
+        while index < self.pending_parks.len() {
+            if self.pending_parks[index].draft != Some(id) {
+                index += 1;
+                continue;
+            }
+            let mut parked = self.pending_parks.remove(index);
+            if let Some(path) = Self::take_pending_draft_file(&mut parked, &self.sessions) {
+                self.delete_header_only_file(&path);
+            }
+        }
+        if self.current_draft_id == Some(id) {
+            self.cancel_custom_surfaces(cx);
+            self.cancel_open_dialog(cx);
+            if !draft.bound {
+                if let Some(path) = self
+                    .client
+                    .as_mut()
+                    .and_then(|client| Self::session_file_in_buffer(client))
+                {
+                    self.delete_header_only_file(&path);
+                }
+            }
+            self.drop_client();
+            self.dialog = None;
+            self.dialog_focus_pending = false;
+            self.approval = None;
+            self.approval_focus_pending = false;
+            self.ask = None;
+            self.ask_tool_id = None;
+            self.ask_questions.clear();
+            self.ask_replay = None;
+            self.ask_focus_pending = false;
+            self.prompt_in_flight = None;
+            self.abort_sent_at = None;
+            self.retrying = false;
+            self.is_compacting = false;
+            self.retry_detail = None;
+            self.extension_widgets.clear();
+            self.subagents = crate::subagent_status::SubagentBoard::default();
+            self.subagent_scrolls.clear();
+            self.subagent_list_scroll = ScrollHandle::new();
+            self.clear_subagent_folds();
+            self.reset_for_new_task(cx);
+            self.apply_composer(None, cx);
+        }
         cx.notify();
     }
+
 
     /// Open the OS folder picker and start (or restart) the task in the
     /// selected directory. Used from the new-task page and the status bar.
@@ -1342,16 +2111,23 @@ impl OrbitApp {
         if self.usage_open {
             self.close_usage(cx);
         }
-        if self.current_session_path.as_ref() == Some(&session.path) {
+        // A restart drops the client and opens this same file again. A live
+        // process is already showing it; a dead one has to be spawned.
+        if self.current_session_path.as_ref() == Some(&session.path) && self.client.is_some() {
+            return;
+        }
+        if let Some(id) = session.draft {
+            self.open_listed_draft(id, cx);
             return;
         }
         self.cancel_fork_followup();
         // Native dialogs and approvals stay pending with their own session.
         self.cancel_custom_surfaces(cx);
         // ── park the outgoing session (running or idle) ──
-        // Its unsent composer text/attachments go with it, keyed to the file.
-        self.save_composer_draft(cx);
-        self.park_active_session();
+        // Its unsent composer text/attachments go with it, keyed to the file
+        // or to the listed draft. An empty new-task row is dropped here.
+        let outgoing = self.settle_outgoing(cx);
+        self.retire_outgoing(outgoing, cx);
         self.busy = false;
         self.added = 0;
         self.removed = 0;
@@ -1540,7 +2316,7 @@ impl OrbitApp {
         // The incoming session's own draft (if any) lands in the composer —
         // never the previous session's half-written text.
         self.restore_composer_draft(Some(&session.path.clone()), cx);
-        if push {
+        if push && session.draft.is_none() && !is_draft_placeholder(&session.path) {
             self.session_history.truncate(self.history_index + 1);
             let new_entry = self
                 .session_history
@@ -1586,6 +2362,10 @@ impl OrbitApp {
     }
 
     pub(super) fn on_open_session(&mut self, session: SessionInfo, cx: &mut Context<Self>) {
+        if let Some(id) = session.draft.or_else(|| draft_id_from_placeholder(&session.path)) {
+            self.open_listed_draft(id, cx);
+            return;
+        }
         self.switch_to_session(session, true, cx);
     }
 
@@ -1858,6 +2638,7 @@ impl OrbitApp {
         let mut target = self.sessions.iter().find(|s| s.id == id).cloned();
         if target.is_none() {
             self.sessions = sessions::load_sessions();
+            self.release_promoted_drafts_on_disk();
             target = self.sessions.iter().find(|s| s.id == id).cloned();
         }
         if let Some(session) = target {
@@ -1879,6 +2660,7 @@ impl OrbitApp {
         let mut target = self.sessions.iter().find(|s| s.path == path).cloned();
         if target.is_none() {
             self.sessions = sessions::load_sessions();
+            self.release_promoted_drafts_on_disk();
             target = self.sessions.iter().find(|s| s.path == path).cloned();
         }
         if let Some(session) = target {
@@ -1923,7 +2705,7 @@ impl OrbitApp {
     /// The command palette's Rename Session: open the details popover (the
     /// header's info control owns the rename field) and put the caret in it.
     pub(super) fn begin_session_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending_session_rename.is_some() {
+        if self.pending_session_rename.is_some() || self.active_is_unsent_draft() {
             return;
         }
         self.quota_popup_open = false;
@@ -3360,6 +4142,7 @@ impl OrbitApp {
         // Sessions first: the CLI or another Orbit window may have written
         // since the list was last read.
         self.sessions = sessions::load_sessions();
+        self.release_promoted_drafts_on_disk();
         self.sync_session_menu(cx);
         // Worktrees for the active repository, when their page is up.
         if self.worktrees_open {

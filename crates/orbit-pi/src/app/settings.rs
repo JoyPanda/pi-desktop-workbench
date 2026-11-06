@@ -1415,17 +1415,7 @@ impl OrbitApp {
     /// Restart the agent so a catalog refreshed on disk is loaded, resuming the
     /// active session when one exists. Mirrors the credential-reload restart.
     fn restart_pi_for_catalog(&mut self, cx: &mut Context<Self>) {
-        let resume = self
-            .current_session_path
-            .clone()
-            .and_then(|path| self.sessions.iter().find(|s| s.path == path).cloned());
-        self.drop_client();
-        self.current_session_path = None;
-        if let Some(session) = resume {
-            self.switch_to_session(session, false, cx);
-        } else {
-            self.runtime_start(cx);
-        }
+        self.resume_after_process_drop(cx);
     }
 
     /// The Models page: the catalog grouped by provider — a hairline header
@@ -7887,17 +7877,7 @@ impl OrbitApp {
             cx.notify();
             return;
         }
-        let resume = self
-            .current_session_path
-            .clone()
-            .and_then(|path| self.sessions.iter().find(|s| s.path == path).cloned());
-        self.drop_client();
-        self.current_session_path = None;
-        if let Some(session) = resume {
-            self.switch_to_session(session, false, cx);
-        } else {
-            self.runtime_start(cx);
-        }
+        self.resume_after_process_drop(cx);
         self.provider_auth_dirty = false;
         self.reload_custom_providers(cx);
         self.toast_success(tr!("settings.pi_restarted_credentials_loaded"));

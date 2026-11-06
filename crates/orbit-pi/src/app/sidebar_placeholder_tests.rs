@@ -9,6 +9,7 @@ fn store_session(name: &str, cwd: &str) -> SessionInfo {
         title: format!("{name} title"),
         first_message: "preview".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     }
 }
 
@@ -127,6 +128,48 @@ fn empty_store_with_started_session_is_not_empty() {
         true,
     );
     assert!(!rows.is_empty());
+}
+
+#[test]
+fn listed_drafts_sort_ahead_of_older_sessions_and_do_not_duplicate() {
+    let older = store_session("old", "/work/alpha");
+    let newer = SessionInfo {
+        modified: SystemTime::UNIX_EPOCH + Duration::from_secs(50),
+        ..store_session("new", "/work/alpha")
+    };
+    let draft = SessionInfo {
+        path: super::drafts::draft_placeholder(1),
+        id: "draft-1".into(),
+        cwd: PathBuf::from("/work/alpha"),
+        title: "New Task".into(),
+        first_message: String::new(),
+        modified: SystemTime::UNIX_EPOCH + Duration::from_secs(40),
+        draft: Some(1),
+    };
+    let rows = sessions_with_drafts(&[newer.clone(), older.clone()], &[draft.clone()]);
+    assert_eq!(rows[0].path, newer.path);
+    assert_eq!(rows[1].draft, Some(1));
+    assert_eq!(rows[2].path, older.path);
+
+    let top = SessionInfo {
+        modified: SystemTime::UNIX_EPOCH + Duration::from_secs(80),
+        ..draft.clone()
+    };
+    let rows = sessions_with_drafts(&[newer.clone()], &[top.clone()]);
+    assert_eq!(rows[0].draft, Some(1));
+    assert_eq!(rows[1].path, newer.path);
+
+    let rows = sessions_with_drafts(&[newer.clone(), top.clone()], &[top]);
+    assert_eq!(rows.len(), 2, "a path already on disk is not drawn twice");
+
+    let promoted = SessionInfo {
+        path: newer.path.clone(),
+        draft: Some(9),
+        ..newer.clone()
+    };
+    let rows = sessions_with_drafts(&[newer], &[promoted]);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].draft.is_none());
 }
 
 #[test]

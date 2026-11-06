@@ -224,6 +224,7 @@ fn shortcut_switch_to_a_warm_session_keeps_the_running_process(cx: &mut gpui::Te
         title: "Target".into(),
         first_message: "hi".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     };
 
     cx.update(|cx| {
@@ -259,6 +260,8 @@ fn shortcut_switch_to_a_warm_session_keeps_the_running_process(cx: &mut gpui::Te
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
+                    draft: None,
+                    discard: false,
                 },
             );
 
@@ -310,6 +313,7 @@ exec cat >/dev/null
         title: "Target".into(),
         first_message: "hi".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     };
 
     cx.update(|cx| {
@@ -348,6 +352,8 @@ exec cat >/dev/null
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
+                    draft: None,
+                    discard: false,
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -458,6 +464,7 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
         title: "Running".into(),
         first_message: "hi".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     };
     let target_session = SessionInfo {
         path: target_path.clone(),
@@ -466,6 +473,7 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
         title: "Target".into(),
         first_message: "hi".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     };
 
     cx.update(|cx| {
@@ -506,6 +514,8 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
+                    draft: None,
+                    discard: false,
                 },
             );
 
@@ -548,6 +558,7 @@ fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext)
         title: "Running".into(),
         first_message: "hi".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     };
     let target_session = SessionInfo {
         path: target_path.clone(),
@@ -556,6 +567,7 @@ fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext)
         title: "Target".into(),
         first_message: "hi".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     };
 
     cx.update(|cx| {
@@ -589,6 +601,8 @@ fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext)
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
+                    draft: None,
+                    discard: false,
                 },
             );
 
@@ -632,6 +646,7 @@ exec cat >/dev/null
         title: "Running".into(),
         first_message: "hi".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     };
     let target_session = SessionInfo {
         path: target_path.clone(),
@@ -640,6 +655,7 @@ exec cat >/dev/null
         title: "Target".into(),
         first_message: "hi".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     };
 
     cx.update(|cx| {
@@ -671,6 +687,8 @@ exec cat >/dev/null
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
+                    draft: None,
+                    discard: false,
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -737,6 +755,7 @@ while IFS= read -r line; do :; done
         title: "Pending approval".into(),
         first_message: "edit a file".into(),
         modified: SystemTime::now(),
+        draft: None,
     };
     cx.update(|cx| {
         app.update(cx, |app, _| {

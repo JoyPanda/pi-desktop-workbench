@@ -11,6 +11,7 @@ fn store_session(name: &str, cwd: &str) -> SessionInfo {
         title: format!("{name} title"),
         first_message: "preview".into(),
         modified: SystemTime::UNIX_EPOCH,
+        draft: None,
     }
 }
 

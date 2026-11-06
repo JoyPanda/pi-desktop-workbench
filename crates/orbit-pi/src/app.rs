@@ -8,6 +8,7 @@
 //! - [`runtime`] — pi process lifecycle, status/error, provider auth
 //! - [`events`] — the heartbeat: event drain, responses, session watcher
 //! - [`session`] — prompt/queue/turn lifecycle and navigation
+//! - [`drafts`] — keep, discard, or promote an unsent New Task row
 //! - [`pickers`] — model, command-palette, branch, and workspace pickers
 //! - [`pi_update_ui`] — the launch-time pi self-update: check, install, report
 //! - [`composer_ops`] — autocomplete, attachments, add-menu, model chips
@@ -226,6 +227,28 @@ struct ParkedSession {
     queue: PendingQueue,
     /// When this session was last parked; drives idle TTL reaping.
     parked_at: Instant,
+    /// Listed draft this process belongs to, once the user has left it.
+    draft: Option<u64>,
+    /// The draft was empty when the user left. On rekey, drop the process
+    /// and delete the header-only file instead of parking it for resume.
+    discard: bool,
+}
+
+/// A new task the sidebar is showing. `path` is a placeholder until pi
+/// reports a file; `bound` flips once that file is known.
+struct ListedDraft {
+    id: u64,
+    path: PathBuf,
+    bound: bool,
+    cwd: PathBuf,
+    created: SystemTime,
+    composer: Option<ComposerDraft>,
+    /// A user message has been sent. The row stays until the disk list
+    /// catches up, and leaving no longer deletes it.
+    promoted: bool,
+    /// First user message, kept so the row still has a title after the
+    /// transcript moves to a parked process.
+    sent_title: Option<String>,
 }
 
 /// Blocking input belongs to its session, not the window displaying it.
@@ -851,8 +874,15 @@ pub struct OrbitApp {
     /// parked, restored when it is re-opened — switching sessions never
     /// carries one task's half-written prompt into another.
     drafts: HashMap<PathBuf, ComposerDraft>,
-    /// The draft for the New Task page, which has no session file yet.
-    new_task_draft: Option<ComposerDraft>,
+    /// New tasks shown in the sidebar before (and, when the composer has
+    /// text, after) they have a user message. Keyed by [`ListedDraft::id`].
+    listed_drafts: Vec<ListedDraft>,
+    /// The listed draft the composer is on, if the open view is one.
+    current_draft_id: Option<u64>,
+    next_draft_id: u64,
+    /// Stamped onto the next [`ParkedSession`] by [`OrbitApp::park_active_session`].
+    parking_draft: Option<u64>,
+    parking_discard: bool,
     /// Files are being dragged over the composer (external OS drag).
     file_drag_hovered: bool,
     /// Installed folder-capable apps for the header's "open in" control.
@@ -2139,7 +2169,11 @@ impl OrbitApp {
             files: Vec::new(),
             pasted_texts: Vec::new(),
             drafts: HashMap::new(),
-            new_task_draft: None,
+            listed_drafts: Vec::new(),
+            current_draft_id: None,
+            next_draft_id: 0,
+            parking_draft: None,
+            parking_discard: false,
             file_drag_hovered: false,
             open_in_apps: Rc::new(Vec::new()),
             open_in_menu_open: false,
@@ -2432,7 +2466,8 @@ impl OrbitApp {
     /// just started. A draft (nothing sent yet) stays hidden; once the
     /// first prompt lands in the transcript the placeholder shows it
     /// instantly at the top, and it disappears once the real row loads
-    /// (same path ⇒ no duplicate).
+    /// (same path ⇒ no duplicate). An explicit new task is listed at once
+    /// from [`Self::listed_drafts`], even before that first prompt.
     ///
     /// Only sessions inside Orbit's own project list reach the sidebar (and
     /// the ⌘P palette); everything else pi has on disk is left where it is.
@@ -2461,7 +2496,7 @@ impl OrbitApp {
             }
         }
         let first_message = self.transcript.first_user_message();
-        sessions_with_placeholder(
+        let rows = sessions_with_placeholder(
             &listed,
             self.current_session_path.as_deref(),
             self.session_name
@@ -2470,7 +2505,27 @@ impl OrbitApp {
             first_message.as_deref(),
             self.current_workspace.as_deref(),
             !self.transcript.is_empty(),
-        )
+        );
+        let drafts: Vec<SessionInfo> = self
+            .listed_drafts
+            .iter()
+            .map(|draft| self.session_info_from_draft(draft))
+            .collect();
+        sessions_with_drafts(&rows, &drafts)
+    }
+
+    /// Path the sidebar should paint as selected. A draft whose file has not
+    /// been named yet still has a placeholder path.
+    pub(super) fn sidebar_active_path(&self) -> Option<PathBuf> {
+        if let Some(path) = &self.current_session_path {
+            return Some(path.clone());
+        }
+        self.current_draft_id.and_then(|id| {
+            self.listed_drafts
+                .iter()
+                .find(|draft| draft.id == id)
+                .map(|draft| draft.path.clone())
+        })
     }
 
     pub(super) fn workspace_label(&self) -> String {
@@ -3165,6 +3220,12 @@ fn workspace_created_at(path: &Path) -> SystemTime {
 }
 
 fn persist_workspace_store(store: &WorkspaceStore) {
+    // GPUI tests build a real OrbitApp and call the same add-workspace path
+    // the sidebar uses. Writing here would put temp folders into the user's
+    // project list.
+    if cfg!(test) {
+        return;
+    }
     let path = workspaces_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -3228,6 +3289,9 @@ fn load_last_workspace() -> Option<PathBuf> {
 }
 
 fn persist_last_workspace(path: &Path) {
+    if cfg!(test) {
+        return;
+    }
     let file = last_workspace_path();
     if let Some(parent) = file.parent() {
         let _ = fs::create_dir_all(parent);
@@ -3273,6 +3337,8 @@ struct SessionMenu {
     deletable: bool,
     /// The popup is showing the delete confirmation instead of the menu.
     confirm_delete: bool,
+    /// The row is an unsent draft: the menu offers delete and nothing else.
+    draft: bool,
     /// Right-click origin in window coordinates: the popup floats at the
     /// pointer, context-menu style. `None` anchors it below the row's `…`
     /// button (the pointer-triggered path).
@@ -3671,6 +3737,7 @@ mod ask;
 mod bug_report_ui;
 mod composer_ops;
 mod dialogs;
+mod drafts;
 mod events;
 pub(crate) mod helpers;
 mod mcp_ui;
@@ -3704,6 +3771,8 @@ mod backdrop_layout_tests;
 mod cancel_tests;
 #[cfg(test)]
 mod composer_draft_tests;
+#[cfg(test)]
+mod draft_sidebar_tests;
 #[cfg(test)]
 mod composer_layout_tests;
 #[cfg(test)]
@@ -3767,7 +3836,7 @@ pub(crate) use helpers::{
     provider_mark_color, refresh_glyph, running_spinner, spinner, EmptyFill, TipExt, BUTTON_GROUP,
     PRESS_DIM,
 };
-use sidebar::sessions_with_placeholder;
+use sidebar::{sessions_with_drafts, sessions_with_placeholder};
 
 #[cfg(test)]
 mod catalog_thinking_tests {

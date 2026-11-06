@@ -111,7 +111,10 @@ fn the_new_task_draft_has_its_own_slot(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("brand new task", cx));
             app.save_composer_draft(cx);
-            assert!(app.new_task_draft.is_some());
+            assert!(
+                app.current_draft_id.is_some(),
+                "typed text on the blank page becomes a listed draft"
+            );
 
             app.restore_composer_draft(Some(&path), cx);
             assert_eq!(app.input.read(cx).text(), "");

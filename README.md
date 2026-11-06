@@ -53,6 +53,7 @@ Usage — requests, tokens, cost, and cache, read from your own sessions:
 **Sessions**
 
 - Grouped by project, persistent, reopenable, and cross-workspace
+- **New Task** inserts a sidebar row immediately. An empty composer removes it when you leave; text, an image, a file, or a long paste keeps the row until quit. Sending the first message keeps it. Unsent rows are not restored after a restart
 - Session rows keep titles, prompt previews, age/status, branches (with `↑n`/`↓n` against upstream), and provider/model marks. Tinted project marks, semantic status badges, stronger title hierarchy, and distinct selection/focus outlines make the list easier to scan; flat mode adds the workspace above each title
 - **Show first message** in the sidebar view menu toggles prompt previews in grouped and flat lists; enabled by default and remembered across restarts, without hiding other session metadata
 - Orbit-owned project list — remove a workspace from the sidebar without deleting pi's sessions

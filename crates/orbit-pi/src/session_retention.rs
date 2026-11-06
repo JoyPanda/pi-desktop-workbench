@@ -251,6 +251,7 @@ mod tests {
             title: "live".into(),
             first_message: "hi".into(),
             modified: SystemTime::now() - Duration::from_secs(60 * 86_400),
+            draft: None,
         };
         let live: HashSet<PathBuf> = [candidate.path.clone()].into_iter().collect();
         for mode in [RetentionMode::Archive, RetentionMode::Delete] {

@@ -48,6 +48,9 @@ pub struct SessionInfo {
     /// every append. Only a new user message moves this, matching Cursor's
     /// agent list (`lastUpdatedAt` advances when the person sends).
     pub modified: SystemTime,
+    /// Sidebar identity for an unsent draft. `None` on a session that
+    /// already has a user message (or was loaded from disk).
+    pub draft: Option<u64>,
 }
 
 /// The default pi session store.
@@ -336,6 +339,8 @@ fn read_session(path: &Path) -> Option<SessionInfo> {
     // A header-only file is a draft: pi writes it at `new_session` time,
     // before anything is sent. Don't list it — the
     // session joins the sidebar once its first user message lands.
+    // Unsent drafts the user asked to keep are merged in by the sidebar,
+    // not by this scan, so abandoned header files stay hidden.
     if first_message.is_empty() {
         return None;
     }
@@ -354,10 +359,54 @@ fn read_session(path: &Path) -> Option<SessionInfo> {
         title,
         first_message,
         modified,
+        draft: None,
     };
     let providers = assistant_providers(path, len);
     info_cache_put(path, file_modified, len, info.clone(), providers);
     Some(info)
+}
+
+/// `true` when `path` is a pi session file that has a header and no user
+/// message yet. Used to delete an abandoned new-task file without touching
+/// a conversation that already has a prompt.
+pub(crate) fn is_header_only_session(path: &Path) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+    // Cap the read. A session line can carry a base64 image, and this runs
+    // on the UI thread when an abandoned draft is deleted.
+    let mut reader = BufReader::new(file.take(256 * 1024));
+    let mut header_line = String::new();
+    if reader.read_line(&mut header_line).unwrap_or(0) == 0 {
+        return false;
+    }
+    let Ok(header) = serde_json::from_str::<Value>(header_line.trim()) else {
+        return false;
+    };
+    if header.get("type").and_then(Value::as_str) != Some("session") {
+        return false;
+    }
+    for _ in 0..200 {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+                    continue;
+                };
+                let user = value.get("type").and_then(Value::as_str) == Some("message")
+                    && value
+                        .get("message")
+                        .and_then(|message| message.get("role"))
+                        .and_then(Value::as_str)
+                        == Some("user");
+                if user {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 /// A provider and model observed on an assistant message.
@@ -866,6 +915,34 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn a_header_only_file_stays_out_of_the_scan() {
+        let dir = std::env::temp_dir().join(format!(
+            "orbit-header-only-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("header.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"session\",\"id\":\"header-only\",\"cwd\":\"/tmp/ws\"}\n",
+        )
+        .unwrap();
+        assert!(read_session(&path).is_none());
+        assert!(is_header_only_session(&path));
+
+        fs::write(
+            &path,
+            "{\"type\":\"session\",\"id\":\"header-only\",\"cwd\":\"/tmp/ws\"}\n\
+             {\"type\":\"message\",\"message\":{\"role\":\"user\",\"content\":\"hii\"}}\n",
+        )
+        .unwrap();
+        assert!(read_session(&path).is_some());
+        assert!(!is_header_only_session(&path));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

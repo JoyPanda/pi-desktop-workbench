@@ -121,51 +121,9 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.is_running() {
-            // Blocking native requests stay pending with the parked session.
-            self.cancel_custom_surfaces(cx);
-            self.park_active_session();
-        } else {
-            self.drop_client();
-        }
-        self.execution = SessionExecution::default();
-        self.transcript.clear();
-        self.current_title = None;
-        self.reset_session_name(cx);
-        // The parked run's busy state lives with the parked session; this
-        // view starts idle.
-        self.busy = false;
-        // Picking a folder to work in adds it to Orbit's own sidebar list.
-        self.add_workspace(folder.clone(), cx);
-        self.set_current_workspace(folder.clone(), cx);
-        self.current_session_path = None;
-        self.added = 0;
-        self.removed = 0;
-        self.context = None;
-        self.session_usage = None;
-        self.reset_turns(cx);
-        self.reset_queue();
-        match self.extensions.spawn(&folder, true, &self.mcp.secret_env()) {
-            Ok(client) => {
-                self.adopt_client(client);
-                self.mcp_stamp = self.mcp.fingerprint_for(self.current_workspace.as_deref());
-                self.send(CommandBody::GetState, "get_state");
-                self.refresh_catalogs();
-                // Capability probes queue after the state request.
-                self.probe_auth();
-                self.set_status(tr!("pickers.new_task_started"));
-            }
-            Err(err) => {
-                let message = tr!("runtime.pi_spawn_failed", error = err);
-                self.client = None;
-                self.runtime.error = Some(message.clone());
-                self.set_status(message);
-            }
-        }
-        // Ready to type: the empty state is gone, so put the caret in the
-        // composer.
-        self.input.read(cx).focus(window);
-        cx.notify();
+        // Same draft rules as New Task: an empty row in this folder is
+        // focused, a dirty one is kept, and only then does a new row appear.
+        self.start_listed_draft(folder, window, cx);
     }
 
     /// Toggle one of the two composer dropdowns (model / thinking). Opening
@@ -313,11 +271,12 @@ impl OrbitApp {
         let running = self.is_running();
         let snapshot = PaletteSnapshot {
             sessions: self.sidebar_sessions(),
-            active_path: self.current_session_path.clone(),
+            active_path: self.sidebar_active_path(),
             active_pinned: self
                 .current_session_path
                 .as_ref()
                 .is_some_and(|path| crate::pins::contains(path)),
+            active_draft: self.active_is_unsent_draft(),
             busy: running,
             session_id: self.session_id.clone(),
             sidebar_visible: self.sidebar_visible,
@@ -434,7 +393,13 @@ impl OrbitApp {
             CommandId::PrevSession => self.cycle_session(-1, cx),
             CommandId::RenameSession => self.begin_session_rename(window, cx),
             CommandId::PinSession => {
+                if self.active_is_unsent_draft() {
+                    return;
+                }
                 if let Some(path) = self.current_session_path.clone() {
+                    if super::session::is_draft_placeholder(&path) {
+                        return;
+                    }
                     crate::pins::toggle(&path);
                     self.toast_success(if crate::pins::contains(&path) {
                         tr!("sidebar.pin_session")
@@ -446,6 +411,9 @@ impl OrbitApp {
             }
             CommandId::CloneSession => self.clone_session(cx),
             CommandId::CopySessionId => {
+                if self.active_is_unsent_draft() {
+                    return;
+                }
                 if let Some(id) = self.session_id.clone() {
                     cx.write_to_clipboard(ClipboardItem::new_string(id));
                     self.toast_success(tr!("pickers.session_id_copied"));

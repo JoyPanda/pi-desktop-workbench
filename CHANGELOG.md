@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New Task rows in the sidebar.** Clicking New inserts a blank row at once.
+  Leaving it with an empty composer removes the row. Text, an image, a file,
+  or a long paste keeps the row until the app quits. The first message sent
+  keeps it for good. Header-only session files stay out of the disk list.
+
 - **Extension notices in the transcript.** A pi `custom` message its extension
   marks `display: true` (for example the plan summary a plugin injects when a
   task starts) now renders as a notice card in the feed, and so does an

@@ -68,6 +68,7 @@ crates/orbit-pi/        GPUI app — window, shell, chat, settings
   src/app/runtime.rs    pi process lifecycle, status/error, provider auth
   src/app/events.rs     heartbeat event drain, RPC response routing, session/workspace watchers
   src/app/session.rs    prompt/queue/turn lifecycle, abort, session switching + navigation
+  src/app/drafts.rs     rules for an unsent New Task row: keep, discard, or promote
   src/app/pickers.rs    model, command-palette, branch, and new-task workspace pickers
   src/app/composer_ops.rs autocomplete, attachments, "+" add-menu, model/thinking chips
   src/app/sidebar.rs    sidebar rows + session/workspace row menus; project-list prefs

@@ -775,8 +775,17 @@ impl OrbitApp {
     /// An explicit switch never re-keys — its path is already claimed.
     pub(super) fn adopt_session_file(&mut self, file: PathBuf) {
         if self.current_session_path.is_none() {
+            // Bind only the draft the user is looking at. Startup, clone, and
+            // fork also adopt a file; they have no current draft (or a fork
+            // is in flight) and must not steal this path onto a blank row.
+            if let Some(id) = self.current_draft_id {
+                if !self.fork_in_flight() && !self.fork_hold_blocks() {
+                    self.bind_draft_path(id, &file);
+                }
+            }
             self.current_session_path = Some(file);
             self.stamp_held_fork_title();
+            self.release_promoted_drafts_on_disk();
         }
     }
 

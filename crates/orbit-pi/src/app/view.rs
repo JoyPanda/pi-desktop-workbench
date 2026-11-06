@@ -337,7 +337,7 @@ impl Render for OrbitApp {
             self.sidebar_list.splice(0..old, side_rows.len());
         }
         let sessions_data = Rc::new(sidebar_sessions);
-        let active_path = Rc::new(self.current_session_path.clone());
+        let active_path = Rc::new(self.sidebar_active_path());
         let session_menu = Rc::new(self.session_menu.clone());
         let workspace_menu = Rc::new(self.workspace_menu.clone());
         let sidebar_cursor = self.sidebar_cursor;

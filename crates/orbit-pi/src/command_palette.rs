@@ -135,6 +135,9 @@ pub struct PaletteSnapshot {
     pub active_path: Option<PathBuf>,
     /// The open session is pinned (drives the Pin/Unpin palette label).
     pub active_pinned: bool,
+    /// The open row is an unsent draft. Rename, pin, clone, and copy-id stay
+    /// hidden; delete stays available.
+    pub active_draft: bool,
     /// An agent run is in flight (gates the Abort command).
     pub busy: bool,
     /// pi's session id for the active session (gates Copy Session ID).
@@ -261,11 +264,11 @@ fn command_enabled(id: CommandId, snapshot: &PaletteSnapshot) -> bool {
         CommandId::ChooseModel => snapshot.can_choose_model,
         CommandId::ChooseThinking => snapshot.can_choose_thinking,
         CommandId::AbortRun => snapshot.busy,
-        CommandId::RenameSession
-        | CommandId::PinSession
-        | CommandId::CloneSession
-        | CommandId::DeleteSession => snapshot.active_path.is_some(),
-        CommandId::CopySessionId => snapshot.session_id.is_some(),
+        CommandId::RenameSession | CommandId::PinSession | CommandId::CloneSession => {
+            snapshot.active_path.is_some() && !snapshot.active_draft
+        }
+        CommandId::DeleteSession => snapshot.active_path.is_some(),
+        CommandId::CopySessionId => snapshot.session_id.is_some() && !snapshot.active_draft,
         // Cycling needs somewhere to go.
         CommandId::NextSession | CommandId::PrevSession => snapshot.sessions.len() > 1,
         // Terminal tabs: closing needs a tab to close, cycling needs two.
@@ -1175,6 +1178,7 @@ mod tests {
             sessions: Vec::new(),
             active_path: None,
             active_pinned: false,
+            active_draft: false,
             busy: false,
             session_id: None,
             sidebar_visible: true,
@@ -1229,6 +1233,35 @@ mod tests {
             listed, expected,
             "palette commands must mirror the registry"
         );
+    }
+
+    #[test]
+    fn an_unsent_draft_hides_copy_session_id() {
+        let mut snapshot = PaletteSnapshot {
+            sessions: Vec::new(),
+            active_path: Some(PathBuf::from("orbit-draft://1")),
+            active_pinned: false,
+            active_draft: true,
+            busy: false,
+            session_id: Some("sess".into()),
+            sidebar_visible: true,
+            side_panel_visible: false,
+            terminal_visible: false,
+            terminal_tabs: 0,
+            project_panel_visible: false,
+            can_choose_model: false,
+            can_choose_thinking: false,
+            mcp_servers: Vec::new(),
+        };
+        assert!(
+            !command_enabled(crate::commands::CommandId::CopySessionId, &snapshot),
+            "an unsent draft does not offer copy session id"
+        );
+        snapshot.active_draft = false;
+        assert!(command_enabled(
+            crate::commands::CommandId::CopySessionId,
+            &snapshot
+        ));
     }
 
     /// Configured MCP servers get per-server rows: enable/disable (labelled

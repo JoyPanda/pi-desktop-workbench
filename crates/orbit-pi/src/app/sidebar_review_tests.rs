@@ -13,6 +13,7 @@ fn store_session(name: &str, cwd: &str, modified_secs: u64) -> SessionInfo {
         title: format!("{name} title"),
         first_message: "preview".into(),
         modified: SystemTime::UNIX_EPOCH + Duration::from_secs(modified_secs),
+        draft: None,
     }
 }
 

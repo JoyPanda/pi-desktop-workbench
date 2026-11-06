@@ -22,6 +22,7 @@ impl OrbitApp {
             return;
         }
         self.sessions = sessions::load_sessions();
+        self.release_promoted_drafts_on_disk();
         self.prune_workflow_store();
         // Deleted files drop out of the usage index; archived ones stay. Mark
         // it stale so the page rebuilds on its next visit.

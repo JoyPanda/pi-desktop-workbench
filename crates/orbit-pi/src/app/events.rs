@@ -75,6 +75,7 @@ impl OrbitApp {
             // scan already reflected) must not rebuild the sidebar or repaint.
             if reloaded != self.sessions {
                 self.sessions = reloaded;
+                self.release_promoted_drafts_on_disk();
                 self.prune_workflow_store();
                 self.sync_session_menu(cx);
                 // The usage index is built from the same files; a write means
@@ -475,6 +476,7 @@ impl OrbitApp {
         }
         if refresh_sessions {
             self.sessions = sessions::load_sessions();
+            self.release_promoted_drafts_on_disk();
             self.prune_workflow_store();
             self.sync_session_menu(cx);
             cx.notify();
@@ -603,7 +605,12 @@ impl OrbitApp {
             changed |= drained.changed;
             any_busy |= drained.busy;
             if !self.pending_parks[ix].client.is_alive() {
-                self.pending_parks.remove(ix);
+                let parked = self.pending_parks.remove(ix);
+                if parked.discard {
+                    if let Some(path) = &drained.rekey {
+                        self.delete_header_only_file(path);
+                    }
+                }
                 changed = true;
             } else if let Some(path) = drained.rekey {
                 let parked = self.pending_parks.remove(ix);
@@ -614,7 +621,7 @@ impl OrbitApp {
             }
         }
         for (path, parked) in rekeyed {
-            self.park(path, parked);
+            self.admit_rekeyed_park(path, parked);
         }
         // A parked run that settled while the user was elsewhere still wants
         // saying. The settle also flips the sidebar's running loader, so the
@@ -629,6 +636,15 @@ impl OrbitApp {
             // active client produced no events this tick.
             cx.notify();
         }
+    }
+
+    /// Read a pending park once and return a session file it already named.
+    pub(super) fn take_pending_draft_file(
+        parked: &mut ParkedSession,
+        sessions: &[SessionInfo],
+    ) -> Option<PathBuf> {
+        let mut finished = Vec::new();
+        Self::drain_parked_session(parked, None, sessions, &mut finished).rekey
     }
 
     /// Drain one parked session's buffered events into its transcript and
@@ -807,6 +823,29 @@ impl OrbitApp {
             busy: parked.busy,
             rekey,
         }
+    }
+
+    /// The newest `sessionFile` already sitting in this process's buffer.
+    /// Used when a draft is deleted before the reply is applied, so a
+    /// header-only file can still be removed.
+    pub(super) fn session_file_in_buffer(client: &mut PiClient) -> Option<PathBuf> {
+        let mut found = None;
+        for event in client.drain_events() {
+            let Event::Response { success, data, .. } = &event else {
+                continue;
+            };
+            if !success {
+                continue;
+            }
+            if let Some(file) = data
+                .as_ref()
+                .and_then(|data| data.get("sessionFile"))
+                .and_then(Value::as_str)
+            {
+                found = Some(PathBuf::from(file));
+            }
+        }
+        found
     }
 
     /// Replace the transcript with a `get_messages`-shaped snapshot and
@@ -1259,7 +1298,12 @@ impl OrbitApp {
                 self.transcript.clear_for_new_session();
                 self.current_title = None;
                 self.reset_session_name(cx);
-                self.current_session_path = None;
+                // A listed draft may already be bound to this file. Clearing
+                // the path would make the next leave park the process as
+                // pending and lose the file it just adopted.
+                if !self.draft_file_is_bound() {
+                    self.current_session_path = None;
+                }
                 self.added = 0;
                 self.removed = 0;
                 self.context = None;

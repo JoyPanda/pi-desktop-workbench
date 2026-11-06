@@ -123,9 +123,57 @@ pub(crate) fn sessions_with_placeholder(
             title,
             first_message,
             modified: SystemTime::now(),
+            draft: None,
         },
     );
     rows
+}
+
+/// Merge listed drafts into a newest-first session list. A draft whose path
+/// is already present (the disk row, or the in-flight placeholder) is left
+/// out so the same task is not drawn twice.
+pub(crate) fn sessions_with_drafts(
+    sessions: &[SessionInfo],
+    drafts: &[SessionInfo],
+) -> Vec<SessionInfo> {
+    let mut extra: Vec<SessionInfo> = drafts
+        .iter()
+        .filter(|draft| sessions.iter().all(|session| session.path != draft.path))
+        .cloned()
+        .collect();
+    extra.sort_by(|left, right| right.modified.cmp(&left.modified));
+    let mut merged = Vec::with_capacity(sessions.len() + extra.len());
+    let mut sessions = sessions.iter().cloned();
+    let mut next_session = sessions.next();
+    let mut drafts = extra.into_iter();
+    let mut next_draft = drafts.next();
+    loop {
+        match (next_session.take(), next_draft.take()) {
+            (Some(session), Some(draft)) => {
+                if draft.modified >= session.modified {
+                    merged.push(draft);
+                    next_session = Some(session);
+                    next_draft = drafts.next();
+                } else {
+                    merged.push(session);
+                    next_draft = Some(draft);
+                    next_session = sessions.next();
+                }
+            }
+            (Some(session), None) => {
+                merged.push(session);
+                merged.extend(sessions);
+                break;
+            }
+            (None, Some(draft)) => {
+                merged.push(draft);
+                merged.extend(drafts);
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+    merged
 }
 
 /// Build the grouped sidebar session list from Orbit's own project list. A
@@ -1350,6 +1398,7 @@ pub(crate) fn render_side_row(
             let session = sessions_data[*ix].clone();
             let session_for_click = session.clone();
             let active = active_path == Some(session.path.as_path());
+            let is_draft = session.draft.is_some();
             // The row's place among the visible sessions is the number `⌘1…⌘9`
             // opens it by — the same order `navigable_sessions` cycles.
             let slot = rows[..row_ix]
@@ -1377,7 +1426,8 @@ pub(crate) fn render_side_row(
             let menu = session_menu.filter(|m| m.path == session.path);
             // Sessions with a live pi process (running or warm) must not be
             // deleted — the process would recreate the file mid-run.
-            let deletable = !active && !running && !live_paths.contains(&session.path);
+            let deletable =
+                is_draft || (!active && !running && !live_paths.contains(&session.path));
             // Keep titles still; the status icon communicates background activity.
             let title = session_title(*ix, session.title.clone().into(), theme, active, false);
             // Indented under its workspace group so the list reads as a
@@ -1430,6 +1480,7 @@ pub(crate) fn render_side_row(
                                     deletable,
                                     confirm_delete: false,
                                     at: Some(event.position),
+                                    draft: session.draft.is_some(),
                                 },
                                 window,
                                 cx,
@@ -1836,6 +1887,23 @@ pub(crate) fn session_menu_popup(
                             .child(tr!("sidebar.delete")),
                     ),
             )
+            .into_any_element()
+    } else if menu.draft {
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .py(picker::list_padding_y(&theme))
+            .gap(DynamicSpacing::Base01.px(&theme))
+            .child(menu_item(
+                "menu-delete",
+                "icons/trash.svg",
+                tr!("sidebar.delete_session_menu"),
+                theme,
+                this.clone(),
+                true,
+                |app, cx| app.on_menu_delete_request(cx),
+            ))
             .into_any_element()
     } else {
         div()
@@ -2956,6 +3024,7 @@ impl OrbitApp {
         match sessions::clone_session_file(&menu.path) {
             Ok(_) => {
                 self.sessions = sessions::load_sessions();
+                self.release_promoted_drafts_on_disk();
                 self.prune_workflow_store();
             }
             Err(err) => self.toast_error(tr!("sidebar.clone_failed", error = err)),
@@ -2968,7 +3037,9 @@ impl OrbitApp {
     /// session file is never touched.
     pub(super) fn on_menu_toggle_pin(&mut self, cx: &mut Context<Self>) {
         if let Some(menu) = self.session_menu.take() {
-            crate::pins::toggle(&menu.path);
+            if !menu.draft && !super::session::is_draft_placeholder(&menu.path) {
+                crate::pins::toggle(&menu.path);
+            }
         }
         cx.notify();
     }
@@ -2977,7 +3048,9 @@ impl OrbitApp {
     /// the archived filter so the row appears or leaves per the view choice.
     pub(super) fn on_menu_toggle_archive(&mut self, cx: &mut Context<Self>) {
         if let Some(menu) = self.session_menu.take() {
-            crate::archive::toggle(&menu.path);
+            if !menu.draft && !super::session::is_draft_placeholder(&menu.path) {
+                crate::archive::toggle(&menu.path);
+            }
         }
         self.clamp_sidebar_cursor(cx);
         cx.notify();
@@ -2994,6 +3067,18 @@ impl OrbitApp {
     /// Confirmed: remove the session file from disk and refresh the list.
     pub(super) fn on_menu_delete_confirm(&mut self, cx: &mut Context<Self>) {
         if let Some(menu) = self.session_menu.take() {
+            if menu.draft {
+                if let Some(id) = self
+                    .listed_drafts
+                    .iter()
+                    .find(|draft| draft.path == menu.path)
+                    .map(|draft| draft.id)
+                    .or_else(|| super::session::draft_id_from_placeholder(&menu.path))
+                {
+                    self.delete_listed_draft(id, cx);
+                }
+                return;
+            }
             // Defensive: a warm parked process would recreate the file.
             if self.lives.contains_key(&menu.path) {
                 self.toast_warning(tr!("sidebar.live_process_delete"));
@@ -3011,6 +3096,7 @@ impl OrbitApp {
                 self.session_outcomes.remove(&menu.path);
             }
             self.sessions = sessions::load_sessions();
+            self.release_promoted_drafts_on_disk();
             self.prune_workflow_store();
             cx.notify();
         }
@@ -3186,7 +3272,15 @@ impl OrbitApp {
     /// the store (deleted externally, session ended, …).
     pub(super) fn sync_session_menu(&mut self, cx: &mut Context<Self>) {
         if let Some(menu) = &self.session_menu {
-            if !menu.path.exists() {
+            let gone = if menu.draft {
+                !self
+                    .listed_drafts
+                    .iter()
+                    .any(|draft| draft.path == menu.path)
+            } else {
+                !menu.path.exists()
+            };
+            if gone {
                 self.session_menu = None;
                 cx.notify();
             }
@@ -3215,22 +3309,26 @@ impl OrbitApp {
         let reviewed: HashSet<PathBuf> = self.awaiting_review.keys().cloned().collect();
         match self.sidebar_group_by {
             SidebarGroupBy::OneList => {
-                build_flat_sidebar_rows(sessions, pinned, &self.current_session_path, &running)
+                let active = self.sidebar_active_path();
+                build_flat_sidebar_rows(sessions, pinned, &active, &running)
             }
-            SidebarGroupBy::Workspace => build_sidebar_rows(
-                sessions,
-                &self.workspaces,
-                self.workspace_sort,
-                &self.workspace_added_at,
-                &working,
-                &self.collapsed_workspaces,
-                &self.expanded_workspace_groups,
-                &self.expanded_session_groups,
-                pinned,
-                &self.current_session_path,
-                &running,
-                &reviewed,
-            ),
+            SidebarGroupBy::Workspace => {
+                let active = self.sidebar_active_path();
+                build_sidebar_rows(
+                    sessions,
+                    &self.workspaces,
+                    self.workspace_sort,
+                    &self.workspace_added_at,
+                    &working,
+                    &self.collapsed_workspaces,
+                    &self.expanded_workspace_groups,
+                    &self.expanded_session_groups,
+                    pinned,
+                    &active,
+                    &running,
+                    &reviewed,
+                )
+            }
         }
     }
 
@@ -3253,10 +3351,10 @@ impl OrbitApp {
     /// Row index of the open session in `rows`, when it is visible.
     fn active_session_row(&self, rows: &[SideRow]) -> Option<usize> {
         let sessions = self.sidebar_sessions();
-        let active = self.current_session_path.as_ref()?;
+        let active = self.sidebar_active_path()?;
         let session_ix = sessions
             .iter()
-            .position(|session| &session.path == active)?;
+            .position(|session| session.path == active)?;
         rows.iter()
             .position(|row| matches!(row, SideRow::Session(ix) if *ix == session_ix))
     }
@@ -3317,10 +3415,11 @@ impl OrbitApp {
         if sessions.len() < 2 {
             return;
         }
-        let current = self
-            .current_session_path
-            .as_ref()
-            .and_then(|path| sessions.iter().position(|session| &session.path == path));
+        let current = self.sidebar_active_path().and_then(|path| {
+            sessions
+                .iter()
+                .position(|session| session.path == path)
+        });
         let next = match current {
             Some(ix) => (ix as isize + direction).rem_euclid(sessions.len() as isize) as usize,
             None if direction > 0 => 0,
@@ -3487,7 +3586,7 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(path) = self.current_session_path.clone() else {
+        let Some(path) = self.sidebar_active_path() else {
             return;
         };
         let sessions = self.sidebar_sessions();
@@ -3509,9 +3608,10 @@ impl OrbitApp {
         self.session_menu = Some(SessionMenu {
             path: session.path.clone(),
             title: session.title,
-            deletable: !self.lives.contains_key(&session.path),
+            deletable: session.draft.is_some() || !self.lives.contains_key(&session.path),
             confirm_delete: true,
             at: None,
+            draft: session.draft.is_some(),
         });
         window.focus(&self.sidebar_focus);
         cx.notify();

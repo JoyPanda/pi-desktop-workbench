@@ -119,17 +119,45 @@ impl OrbitApp {
     // ── per-session drafts ────────────────────────────────────────────
 
     /// Stash the composer's unsent state under the *current* target (the
-    /// open session's file, or the New Task page's slot). An empty composer
+    /// open session's file, or the listed draft on screen). An empty composer
     /// drops the draft instead of parking a blank one. Call before leaving a
-    /// session for another.
+    /// session for another. Leaving a pathless page that already has text
+    /// registers a sidebar draft so the text is not stored where nothing
+    /// lists it.
     pub(super) fn save_composer_draft(&mut self, cx: &mut Context<Self>) {
+        let draft = self.take_composer(cx);
+        self.store_taken_composer(draft);
+    }
+
+    /// Pull the composer into a draft value and clear the input. `None` when
+    /// nothing was worth keeping. Callers that settle a leave must use this
+    /// result — the attachments are already taken off the app.
+    pub(super) fn take_composer(&mut self, cx: &mut Context<Self>) -> Option<ComposerDraft> {
         let draft = ComposerDraft {
             text: self.input.read(cx).text(),
             attachments: std::mem::take(&mut self.attachments),
             files: std::mem::take(&mut self.files),
             pasted_texts: std::mem::take(&mut self.pasted_texts),
         };
-        let draft = (!draft.is_empty()).then_some(draft);
+        self.input.update(cx, |input, cx| input.clear(cx));
+        (!draft.is_empty()).then_some(draft)
+    }
+
+    /// True when the composer has no text (after trim) and no attachment.
+    pub(super) fn composer_is_blank(&self, cx: &Context<Self>) -> bool {
+        self.input.read(cx).text().trim().is_empty()
+            && self.attachments.is_empty()
+            && self.files.is_empty()
+            && self.pasted_texts.is_empty()
+    }
+
+    fn store_taken_composer(&mut self, draft: Option<ComposerDraft>) {
+        if let Some(id) = self.current_draft_id {
+            if let Some(row) = self.listed_drafts.iter_mut().find(|row| row.id == id) {
+                row.composer = draft;
+            }
+            return;
+        }
         match self.current_session_path.clone() {
             Some(path) => match draft {
                 Some(draft) => {
@@ -139,18 +167,60 @@ impl OrbitApp {
                     self.drafts.remove(&path);
                 }
             },
-            None => self.new_task_draft = draft,
+            None => {
+                if let Some(draft) = draft {
+                    self.keep_unlisted_composer(draft);
+                }
+            }
         }
     }
 
-    /// Restore the draft parked for `path` (or the New Task slot), clearing
+    /// The open view is a blank page that was never inserted as a row, and
+    /// the user has typed. Give it a sidebar row so leaving does not hide
+    /// the text in a slot nothing renders.
+    fn keep_unlisted_composer(&mut self, draft: ComposerDraft) {
+        let id = self.alloc_draft_id();
+        let cwd = self.task_cwd();
+        let path = self
+            .current_session_path
+            .clone()
+            .unwrap_or_else(|| crate::app::drafts::draft_placeholder(id));
+        let bound = self.current_session_path.is_some();
+        self.listed_drafts.push(ListedDraft {
+            id,
+            path,
+            bound,
+            cwd,
+            created: SystemTime::now(),
+            composer: Some(draft),
+            promoted: false,
+            sent_title: None,
+        });
+        self.current_draft_id = Some(id);
+    }
+
+    pub(super) fn alloc_draft_id(&mut self) -> u64 {
+        self.next_draft_id = self.next_draft_id.saturating_add(1);
+        self.next_draft_id
+    }
+
+    /// Restore the draft parked for `path` (or the open listed draft), clearing
     /// the composer when there is none. Call after a session (or a fresh
     /// task) becomes active.
     pub(super) fn restore_composer_draft(&mut self, path: Option<&Path>, cx: &mut Context<Self>) {
         let draft = match path {
             Some(path) => self.drafts.remove(path),
-            None => self.new_task_draft.take(),
+            None => self.current_draft_id.and_then(|id| {
+                self.listed_drafts
+                    .iter_mut()
+                    .find(|row| row.id == id)
+                    .and_then(|row| row.composer.take())
+            }),
         };
+        self.apply_composer(draft, cx);
+    }
+
+    pub(super) fn apply_composer(&mut self, draft: Option<ComposerDraft>, cx: &mut Context<Self>) {
         match draft {
             Some(draft) => {
                 self.attachments = draft.attachments;
@@ -167,6 +237,15 @@ impl OrbitApp {
             }
         }
         cx.notify();
+    }
+
+    pub(super) fn restore_draft_composer(&mut self, id: u64, cx: &mut Context<Self>) {
+        let draft = self
+            .listed_drafts
+            .iter_mut()
+            .find(|row| row.id == id)
+            .and_then(|row| row.composer.take());
+        self.apply_composer(draft, cx);
     }
 
     /// (Re)build the workspace index that both the Explorer tree and `@` read,

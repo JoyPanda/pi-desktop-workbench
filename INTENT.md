@@ -329,6 +329,12 @@ legacy app today:
 
 ### Implementation status (living)
 
+New Task inserts a sidebar row immediately. An empty composer drops that row
+on leave; text, an image, a file, or a long paste keeps it for the rest of the
+process. The first sent message promotes the row so a later empty composer
+does not remove it. These rows are not restored after a restart, and a
+header-only session file is still omitted from the disk scan.
+
 Appearance's interface-font picker includes bundled Onest in Regular, Medium,
 SemiBold, and Bold weights; it works offline without an OS font installation.
 The default interface face and saved font preferences remain unchanged.
