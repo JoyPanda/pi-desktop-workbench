@@ -39,7 +39,7 @@ impl OrbitApp {
         }
     }
 
-    /// `@` file rows, ranked from the shared workspace index.
+    /// `@` file rows, ranked from the mention index built by the workspace walk.
     pub(super) fn at_entries(&mut self, query: &str, cx: &mut Context<Self>) -> Vec<AcEntry> {
         self.at_paths(query, cx)
             .into_iter()
@@ -263,9 +263,13 @@ impl OrbitApp {
             .clone()
             .or_else(|| std::env::current_dir().ok());
         let Some(root) = root else {
-            if self.mention_index.is_some() || self.mention_index_workspace.is_some() {
+            if self.mention_index.is_some()
+                || self.mention_index_workspace.is_some()
+                || self.workspace_index_truncated
+            {
                 self.mention_index = None;
                 self.mention_index_workspace = None;
+                self.workspace_index_truncated = false;
                 self.mention_index_stale = false;
                 self.mention_index_due = None;
                 self.mention_query_memo = None;
@@ -276,6 +280,7 @@ impl OrbitApp {
         if self.mention_index_workspace.as_ref() != Some(&root) {
             self.mention_index_workspace = Some(root.clone());
             self.mention_index = None;
+            self.workspace_index_truncated = false;
             self.mention_query_memo = None;
             self.mention_recents.clear();
             self.mention_index_stale = true;
@@ -329,13 +334,16 @@ impl OrbitApp {
                     return;
                 }
                 let (snapshot, index, badges) = built;
-                let snapshot = Arc::new(snapshot);
-                this.workspace_index = Some(snapshot.clone());
+                // The tree and the `@` index each keep the paths. The flat
+                // snapshot is only needed to build them and to remember
+                // whether the walk hit its cap.
+                this.workspace_index_truncated = snapshot.truncated;
                 this.mention_index = Some(Arc::new(index));
                 this.mention_query_memo = None;
                 this.project_panel.update(cx, |panel, cx| {
-                    panel.set_index(snapshot, badges, cx);
+                    panel.set_index(Arc::new(snapshot), badges, cx);
                 });
+                this.log_resident("index");
                 // A save during the walk re-armed the flag; land it now.
                 if this.mention_index_stale {
                     this.ensure_mention_index(true, cx);
@@ -638,11 +646,7 @@ impl OrbitApp {
         // A truncated index says so, in a row that is deliberately not a
         // picker entry: `state.count` never includes it, so ↑/↓/Enter cannot
         // land on it.
-        if self
-            .workspace_index
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.truncated)
-        {
+        if self.workspace_index_truncated {
             list = list.child(
                 div()
                     .id("ac-truncated")

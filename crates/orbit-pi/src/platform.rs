@@ -694,6 +694,145 @@ pub fn home_dir() -> PathBuf {
     home_dir_opt().unwrap_or_else(|| PathBuf::from("."))
 }
 
+/// One sample for the `[orbit:mem]` line. `kind` is the counter that was
+/// actually read, so a fallback is not printed as private commit.
+pub struct ProcessMemory {
+    /// `private` (Windows commit, Linux private pages), `rss` (Linux
+    /// `VmRSS` fallback), or `peak` (macOS `ru_maxrss`).
+    pub kind: &'static str,
+    pub bytes: u64,
+}
+
+/// Bytes this process is holding, for the `[orbit:mem]` line.
+///
+/// Windows reports `PrivateUsage` (private commit). Linux sums
+/// `Private_Clean` and `Private_Dirty` from `smaps_rollup`, and falls back
+/// to `VmRSS` (`kind = "rss"`) when that file is missing. macOS reports
+/// peak resident set from `getrusage` — the kernel does not expose a stable
+/// private-commit counter without a `task_info` layout that moves between
+/// releases, so that sample is `kind = "peak"`.
+pub fn process_memory() -> Option<ProcessMemory> {
+    #[cfg(windows)]
+    {
+        windows_private_bytes().map(|bytes| ProcessMemory {
+            kind: "private",
+            bytes,
+        })
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux_process_memory()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos_peak_rss().map(|bytes| ProcessMemory {
+            kind: "peak",
+            bytes,
+        })
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    {
+        None
+    }
+}
+
+/// `Private_Clean` + `Private_Dirty` from an `smaps_rollup` body, in bytes.
+/// `None` when neither line is present.
+#[cfg(any(test, target_os = "linux"))]
+fn private_rollup_bytes(text: &str) -> Option<u64> {
+    let mut total = 0u64;
+    let mut found = false;
+    for line in text.lines() {
+        let Some(rest) = line
+            .strip_prefix("Private_Clean:")
+            .or_else(|| line.strip_prefix("Private_Dirty:"))
+        else {
+            continue;
+        };
+        let Some(kb) = rest.split_whitespace().next() else {
+            continue;
+        };
+        let Ok(kb) = kb.parse::<u64>() else {
+            continue;
+        };
+        total = total.saturating_add(kb.saturating_mul(1024));
+        found = true;
+    }
+    found.then_some(total)
+}
+
+/// `VmRSS` from a `/proc/self/status` body, in bytes.
+#[cfg(any(test, target_os = "linux"))]
+fn vm_rss_bytes(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("VmRSS:") else {
+            continue;
+        };
+        let kb = rest.split_whitespace().next()?.parse::<u64>().ok()?;
+        return Some(kb.saturating_mul(1024));
+    }
+    None
+}
+
+#[cfg(windows)]
+fn windows_private_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut counters = PROCESS_MEMORY_COUNTERS_EX {
+        cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32,
+        ..PROCESS_MEMORY_COUNTERS_EX::default()
+    };
+    // SAFETY: `GetCurrentProcess` is a pseudo-handle that does not need
+    // closing. `cb` tells psapi the buffer is the extended struct, so
+    // `PrivateUsage` is written. The cast is sound because
+    // `PROCESS_MEMORY_COUNTERS_EX` starts with the same fields as
+    // `PROCESS_MEMORY_COUNTERS`.
+    let ok = unsafe {
+        GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            &mut counters as *mut PROCESS_MEMORY_COUNTERS_EX as *mut PROCESS_MEMORY_COUNTERS,
+            counters.cb,
+        )
+    };
+    (ok != 0).then_some(counters.PrivateUsage as u64)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_memory() -> Option<ProcessMemory> {
+    if let Some(bytes) = std::fs::read_to_string("/proc/self/smaps_rollup")
+        .ok()
+        .and_then(|text| private_rollup_bytes(&text))
+    {
+        return Some(ProcessMemory {
+            kind: "private",
+            bytes,
+        });
+    }
+    // `VmRSS` counts shared pages too. Keep the fallback, but do not call it
+    // private.
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|text| vm_rss_bytes(&text))
+        .map(|bytes| ProcessMemory { kind: "rss", bytes })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_peak_rss() -> Option<u64> {
+    // SAFETY: `rusage` is a plain C struct; zeroing it is a valid initial
+    // value. `getrusage` writes into `usage` for `RUSAGE_SELF` (this
+    // process) and does not take ownership of the buffer.
+    let mut usage = unsafe { std::mem::zeroed::<libc::rusage>() };
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) } != 0 {
+        return None;
+    }
+    // macOS documents `ru_maxrss` in bytes. Other Unixes use kibibytes; this
+    // function is cfg'd to macOS so the unit stays the one the log prints.
+    Some(usage.ru_maxrss as u64)
+}
+
 /// [`home_dir`] when the platform gives one. `None` keeps a caller that would
 /// *write* there from writing to a relative path instead.
 pub fn home_dir_opt() -> Option<PathBuf> {
@@ -2150,5 +2289,19 @@ mod tests {
         let host = host();
         assert!(!host.label.trim().is_empty());
         assert!(!host.arch.trim().is_empty());
+    }
+
+    #[test]
+    fn private_rollup_sums_clean_and_dirty_kibibytes() {
+        let text = "Rss: 100 kB\nPrivate_Clean: 4 kB\nPrivate_Dirty: 8 kB\n";
+        assert_eq!(super::private_rollup_bytes(text), Some(12 * 1024));
+        assert_eq!(super::private_rollup_bytes("Rss: 1 kB\n"), None);
+    }
+
+    #[test]
+    fn vm_rss_reads_the_status_kibibytes() {
+        let text = "Name: orbit-pi\nVmRSS:\t2048 kB\n";
+        assert_eq!(super::vm_rss_bytes(text), Some(2048 * 1024));
+        assert_eq!(super::vm_rss_bytes("Name: orbit-pi\n"), None);
     }
 }

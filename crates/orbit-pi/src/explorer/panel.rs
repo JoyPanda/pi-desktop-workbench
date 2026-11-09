@@ -2,9 +2,9 @@
 //!
 //! The panel owns the built [`TreeIndex`], the expand/collapse set, the filter
 //! input, and its virtualized list. It never reads the filesystem and never
-//! walks the workspace: the app owns the single [`walk::Snapshot`] (shared with
-//! the composer's `@` mentions) and hands it over through
-//! [`ProjectPanel::set_index`], so rendering only walks the in-memory tree.
+//! walks the workspace. The walk builds the tree here and the composer's
+//! `@` index beside it, then drops the flat [`walk::Snapshot`]. Rendering
+//! only walks the in-memory tree.
 //!
 //! Clicking a file calls the [`OpenHandler`] the app installed at
 //! construction — the panel does not know about the file viewer.
@@ -236,10 +236,10 @@ impl ProjectPanel {
         cx.notify();
     }
 
-    /// A fresh workspace snapshot landed; rebuild the tree from it.
+    /// A fresh workspace walk landed; rebuild the tree from it.
     ///
-    /// The snapshot is the app's (one `Arc`, shared with `@`), so the panel
-    /// never copies a 100k-entry list just to draw it.
+    /// The snapshot is only an input. The tree keeps the paths it draws, and
+    /// this `Arc` is dropped when the call returns.
     pub fn set_index(
         &mut self,
         snapshot: Arc<walk::Snapshot>,

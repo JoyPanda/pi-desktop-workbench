@@ -621,6 +621,21 @@ fn tool_body_text(output: Option<&Value>) -> String {
     }
 }
 
+/// Payload bytes of a JSON value: string contents and object keys. Used to
+/// report how much tool text the transcript is holding, not the allocator's
+/// overhead around each `Value`.
+fn value_bytes(value: &Value) -> u64 {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => 0,
+        Value::String(text) => text.len() as u64,
+        Value::Array(items) => items.iter().map(value_bytes).sum(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, child)| key.len() as u64 + value_bytes(child))
+            .sum(),
+    }
+}
+
 /// Only the `subagent` tool. The "Task" label also covers `task` and `agent`,
 /// which stay ordinary tool cards.
 fn is_subagent_tool(name: &str) -> bool {
@@ -1293,6 +1308,23 @@ impl Transcript {
         self.review_card_files.clear();
         self.awaiting_reply.set(false);
         self.set_tail_row(false);
+    }
+
+    /// Bytes of tool arguments and results kept on the transcript. Strings
+    /// count their contents; object keys count too. Numbers and bools are
+    /// negligible next to a bash log, so they add nothing. The resident
+    /// line prints this when a session snapshot lands.
+    pub(crate) fn retained_tool_bytes(&self) -> u64 {
+        self.messages
+            .borrow()
+            .iter()
+            .flat_map(|message| message.steps.iter())
+            .flat_map(|step| step.tools.iter())
+            .map(|tool| {
+                tool.args.as_ref().map(value_bytes).unwrap_or(0)
+                    + tool.output.as_ref().map(value_bytes).unwrap_or(0)
+            })
+            .sum()
     }
 
     /// Clear for a fresh session.
@@ -4985,6 +5017,9 @@ mod tests {
         let tool = messages[0].tools().next().unwrap();
         assert!(tool.facts.truncated);
         assert_eq!(tool.facts.output_lines, None);
+        drop(messages);
+        // "pattern" + "foo" in the arguments, "many lines" in the result.
+        assert_eq!(transcript.retained_tool_bytes(), 7 + 3 + 10);
     }
 
     /// Ground-truth capture from pi 0.85.1 (`pi --mode rpc`, docs:

@@ -427,7 +427,8 @@ impl MentionIndex {
         Self::build(&entries)
     }
 
-    #[cfg(test)]
+    /// How many paths the walk admitted. The resident-memory line reads this
+    /// after a rebuild; tests use it the same way.
     pub fn len(&self) -> usize {
         self.paths.len()
     }

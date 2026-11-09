@@ -553,6 +553,34 @@ impl OrbitApp {
         );
     }
 
+    /// Local resident-memory line (not telemetry: it never leaves the
+    /// process and never touches the network). Printed when the workspace
+    /// index lands and when a session snapshot replaces the transcript, so
+    /// a rebuild can be compared without a heap profiler. The counter name
+    /// is whatever [`crate::platform::process_memory`] actually read
+    /// (`private`, `rss`, or `peak`).
+    pub(super) fn log_resident(&self, when: &str) {
+        let memory = crate::platform::process_memory()
+            .map(|sample| {
+                format!(
+                    "{} {:.1}MB",
+                    sample.kind,
+                    sample.bytes as f64 / (1024.0 * 1024.0)
+                )
+            })
+            .unwrap_or_else(|| "memory n/a".into());
+        let entries = self
+            .mention_index
+            .as_ref()
+            .map(|index| index.len())
+            .unwrap_or(0);
+        let tools = self.transcript.retained_tool_bytes();
+        let parked = self.lives.len() + self.pending_parks.len();
+        eprintln!(
+            "[orbit:mem] {when} — {memory} | entries {entries} | tools {tools}B | parked {parked}"
+        );
+    }
+
     /// Drain background (parked) sessions. Their runs continue in their own
     /// pi processes; events keep their transcripts current, so reopening a
     /// parked session resumes the live stream exactly where it left off.
@@ -867,6 +895,7 @@ impl OrbitApp {
         // latest number step backwards, then refresh Last Turn.
         self.rebuild_turn_clock();
         self.push_turn_records(cx);
+        self.log_resident("session");
     }
 
     /// Apply a command response to the app. The arguments are the response's

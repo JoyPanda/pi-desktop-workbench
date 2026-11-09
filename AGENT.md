@@ -112,7 +112,7 @@ crates/orbit-pi/        GPUI app — window, shell, chat, settings
   src/sessions.rs       reads ~/.pi/agent/sessions (+ debounced session-store watcher)
   src/watch.rs          shared debounced fs watching (workspace tree for Review/Git)
   src/explorer/         workspace file tree + file editor
-    walk.rs             gitignore-aware background snapshot (`ignore` crate); the one workspace index, shared with `@` mentions
+    walk.rs             gitignore-aware walk (`ignore` crate). The snapshot feeds the tree and the `@` index, then is dropped; the app keeps only whether the walk hit its cap
     tree.rs             pure tree: expand/collapse, filter, git badges
     panel.rs            ProjectPanel entity: right dock, virtualized tree
     viewer.rs           FileViewer entity: editable code/text, markdown/image views, autosave
@@ -241,7 +241,7 @@ Look-up order:
 | `alacritty_terminal` 0.26 | terminal grid + VT/ANSI | https://docs.rs/alacritty_terminal/0.26 | `default-features = false`. It owns parsing and the grid; `terminal.rs` owns PTY threads and paint. No second terminal crate. |
 | `crossbeam-channel` 0.5 | PTY → UI event channel | https://docs.rs/crossbeam-channel/0.5 | Nothing on the writer thread may block on the UI. |
 | `flate2` 1 / `tar` 0.4 | unpack the signed Unix update | https://docs.rs/tar/0.4 | Unpack into a fresh directory; verify before swapping. |
-| `libc` 0.2 | `kill(pid, 0)` liveness probe | https://docs.rs/libc/0.2 | Unix only, smallest possible surface. |
+| `libc` 0.2 | `kill(pid, 0)` liveness probe; macOS `getrusage` for the `[orbit:mem]` peak RSS | https://docs.rs/libc/0.2 | Unix only. `getrusage` is cfg'd to macOS; `ru_maxrss` is peak RSS, not private commit. |
 
 ### Rust — platform
 
@@ -388,7 +388,7 @@ stack is gone; do not resurrect it.
 | Sessions | `sessions.rs`, `app/session.rs` | Reads pi sessions from `~/.pi/agent/sessions/`; supports new/open/switch/clone, workspace grouping, parked background processes, and session persistence. |
 | RPC | `crates/orbit-rpc/` | One `pi --mode rpc` child per live session, JSONL over stdio, permissive event parsing, typed commands for the currently used protocol surface. |
 | Transcript | `transcript.rs`, `transcript_view.rs`, `message_scroller.rs` | Virtualized streaming transcript with tail-following, jump-to-latest, tool activity, markdown/code rendering, find, and error states. |
-| Composer | `composer.rs`, `app/composer_ops.rs` | Multiline input, commands, file mentions (`mentions::MentionIndex` — in-process ranking of the shared workspace index, no `fd` subprocess), image attachments, queued follow-ups, steer, abort, and access/workflow controls. |
+| Composer | `composer.rs`, `app/composer_ops.rs` | Multiline input, commands, file mentions (`mentions::MentionIndex` — in-process ranking of the paths the workspace walk admitted, no `fd` subprocess), image attachments, queued follow-ups, steer, abort, and access/workflow controls. |
 | Explorer / Files | `src/explorer/` | Gitignore-aware workspace tree, keyboard navigation, file editor, Markdown/image views, autosave, file operations, and honest binary/oversized/non-UTF-8 states. |
 | Review / Git | `review.rs`, `sidepane.rs`, `git.rs`, `git_panel.rs`, `worktree.rs`, `worktree_setup.rs`, `app/worktrees.rs` | Diff review, changed-file navigation, Git status/history/graph, staging, commit, branch operations, GitHub issue/PR workflows where `gh` is available, and Git worktrees as first-class workspaces (optional setup script, sessions rooted in the worktree). |
 | Agent controls | `access.rs`, `workflow.rs` | Supervised/Auto-accept edits/Full access and Plan/Build/Ask workflow modes. These are extension-backed controls, not a sandbox. |

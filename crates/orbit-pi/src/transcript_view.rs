@@ -2880,7 +2880,6 @@ fn render_thinking_body(
         };
         tr!("transcript.for_duration", duration = elapsed)
     });
-    let detail = cap_chars(thinking, THINKING_TEXT_CAP);
     let collapsed = !thought_body_open(
         key,
         streaming,
@@ -2985,6 +2984,10 @@ fn render_thinking_body(
                 }),
         );
     if !collapsed {
+        // Cap only once the body is actually painted. A collapsed card is a
+        // title; copying up to [`THINKING_TEXT_CAP`] characters on every
+        // frame would keep a long settled turn allocating for nothing.
+        let detail = cap_chars(thinking, THINKING_TEXT_CAP);
         // The open body wraps and scrolls at the reading-column width. The
         // header above stays content-sized, so its chevron still follows the
         // label instead of the card's trailing edge.

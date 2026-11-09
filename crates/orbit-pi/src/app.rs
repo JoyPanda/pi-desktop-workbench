@@ -840,10 +840,11 @@ pub struct OrbitApp {
     last_ac_trigger: Option<(TriggerKind, String)>,
     /// Slash commands reported by pi (`get_commands` — extensions + skills).
     slash_commands: Vec<SlashCommand>,
-    /// The last workspace snapshot and the `@` index built from it, shared with
-    /// the Explorer panel. One walk, one truth: `@` and the tree cannot
-    /// disagree about what exists.
-    workspace_index: Option<Arc<crate::explorer::walk::Snapshot>>,
+    /// Whether the last workspace walk hit the entry cap. The snapshot is
+    /// dropped once the Explorer tree and the `@` index are built — both
+    /// already hold the paths ignore admitted — and this flag is the only
+    /// fact the `@` menu still reads from that walk.
+    workspace_index_truncated: bool,
     mention_index: Option<Arc<MentionIndex>>,
     mention_index_workspace: Option<PathBuf>,
     /// The workspace changed since the index was built.
@@ -2156,7 +2157,7 @@ impl OrbitApp {
             autocomplete_dismissed: false,
             last_ac_trigger: None,
             slash_commands: Vec::new(),
-            workspace_index: None,
+            workspace_index_truncated: false,
             mention_index: None,
             mention_index_workspace: None,
             mention_index_stale: false,
