@@ -311,12 +311,34 @@ struct SelectPoint {
     offset: usize,
 }
 
+/// How far a press-and-drag grows. Character is a plain click; word and line
+/// are the double- and triple-click grains, and stay in force until mouse-up
+/// so a twitch does not collapse the span back to a caret.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SelectGranularity {
+    Character,
+    Word,
+    Line,
+}
+
+/// The span a word or line press started on. Drags snap against this instead
+/// of the raw caret, matching Pi's `selectionInitialRange`.
+#[derive(Clone, Copy)]
+struct SelectionOrigin {
+    block: usize,
+    start: usize,
+    end: usize,
+}
+
 /// An active cross-block selection. Intermediate blocks are fully selected;
 /// only the anchor and focus blocks carry partial ranges.
 struct Selection {
     blocks: Vec<SelectedBlock>,
     anchor: SelectPoint,
     focus: SelectPoint,
+    granularity: SelectGranularity,
+    /// Set for word and line presses; character drags leave it empty.
+    initial: Option<SelectionOrigin>,
 }
 
 impl Selection {
@@ -353,8 +375,23 @@ pub(crate) struct TextSelection {
     /// The drag moved away from the anchor — mouse-up is not a link click.
     moved: bool,
     /// The press that started the drag, for link resolution on release.
+    /// Word and line presses leave this empty so mouse-up does not open a link.
     down: Option<(ElementId, usize)>,
+    /// Previous text press, for the 1-2-3 click cycle. GPUI's `click_count`
+    /// ignores word identity and never wraps back to a single click.
+    last_click: Option<LastClick>,
     menu: Option<TextMenu>,
+}
+
+/// One text press remembered long enough to recognize a double- or triple-click.
+struct LastClick {
+    at: Instant,
+    count: usize,
+    block: ElementId,
+    line_start: usize,
+    line_end: usize,
+    word_start: usize,
+    word_end: usize,
 }
 
 pub(crate) type TextSelectionState = Rc<RefCell<TextSelection>>;
@@ -370,6 +407,7 @@ impl TextSelection {
             dragging: false,
             moved: false,
             down: None,
+            last_click: None,
             menu: None,
         }
     }
@@ -397,7 +435,11 @@ impl TextSelection {
 
     /// Index and byte offset of the text under `position`: the containing
     /// block, or the nearest one when the pointer sits in a gutter.
-    fn hit(&self, position: gpui::Point<Pixels>) -> Option<(usize, usize)> {
+    ///
+    /// The bool is set when the pointer is past that row's last glyph.
+    /// `index_for_position` then returns the next row's first byte, which
+    /// word and line hits must step back from. Character drags keep it.
+    fn hit(&self, position: gpui::Point<Pixels>) -> Option<(usize, usize, bool)> {
         let index = self
             .blocks
             .iter()
@@ -408,10 +450,19 @@ impl TextSelection {
             position.x.clamp(block.bounds.left(), block.bounds.right()),
             position.y.clamp(block.bounds.top(), block.bounds.bottom()),
         );
-        let offset = match block.layout.index_for_position(local) {
-            Ok(offset) | Err(offset) => offset,
+        let (offset, past_end) = match block.layout.index_for_position(local) {
+            Ok(offset) => (offset, false),
+            Err(offset) => {
+                // Err is either shy of the row or past its glyphs. The caret
+                // for a past-the-end hit sits at or left of the pointer.
+                let past_end = match block.layout.position_for_index(offset) {
+                    Some(caret) => local.x >= caret.x,
+                    None => true,
+                };
+                (offset, past_end)
+            }
         };
-        Some((index, offset.min(block.text.len())))
+        Some((index, offset.min(block.text.len()), past_end))
     }
 
     fn nearest_block(&self, position: gpui::Point<Pixels>) -> Option<usize> {
@@ -427,32 +478,117 @@ impl TextSelection {
     }
 
     fn begin_selection(&mut self, position: gpui::Point<Pixels>) {
+        self.begin_selection_at(position, Instant::now());
+    }
+
+    /// Press at `position`. A hit inside a text block cycles click count the
+    /// way Pi's `getClickCount` does; a press in the gutter clears that count
+    /// and keeps the character drag (nearest block), without starting a word.
+    fn begin_selection_at(&mut self, position: gpui::Point<Pixels>, now: Instant) {
         self.menu = None;
         self.moved = false;
         self.down = None;
-        let Some((index, offset)) = self.hit(position) else {
+        let inside = self
+            .blocks
+            .iter()
+            .position(|block| block.bounds.contains(&position));
+        let Some((hit_index, offset, past_end)) = self.hit(position) else {
+            self.last_click = None;
             self.selection = None;
             self.dragging = false;
             return;
         };
+        // A gutter press still starts a character drag on the nearest block,
+        // but it is not a click on a word, so the 1-2-3 count resets.
+        let Some(index) = inside else {
+            self.last_click = None;
+            self.place_character(hit_index, offset);
+            return;
+        };
+        let text = self.blocks[index].text.clone();
+        let probe = unit_probe(&text, offset, past_end);
+        let word = word_range_at(&text, probe);
+        if word.is_empty() {
+            self.last_click = None;
+            self.place_character(index, offset);
+            return;
+        }
+        let line = visual_line_range(&text, &self.blocks[index].layout, probe);
+        let count = self.note_click(index, &word, &line, now);
+        match count {
+            2 => self.place_unit(index, word, SelectGranularity::Word),
+            3 => self.place_unit(index, line, SelectGranularity::Line),
+            _ => self.place_character(index, offset),
+        }
+    }
+
+    fn note_click(
+        &mut self,
+        index: usize,
+        word: &Range<usize>,
+        line: &Range<usize>,
+        now: Instant,
+    ) -> usize {
         let key = self.blocks[index].key.clone();
-        let blocks = self
-            .blocks
+        let count = next_click_count(self.last_click.as_ref(), now, &key, line, word);
+        self.last_click = Some(LastClick {
+            at: now,
+            count,
+            block: key,
+            line_start: line.start,
+            line_end: line.end,
+            word_start: word.start,
+            word_end: word.end,
+        });
+        count
+    }
+
+    fn snapshot_blocks(&self) -> Vec<SelectedBlock> {
+        self.blocks
             .iter()
             .map(|block| SelectedBlock {
                 key: block.key.clone(),
                 text: block.text.clone(),
             })
-            .collect();
+            .collect()
+    }
+
+    fn place_character(&mut self, index: usize, offset: usize) {
+        let key = self.blocks[index].key.clone();
         let point = SelectPoint {
             block: index,
             offset,
         };
         self.down = Some((key, offset));
         self.selection = Some(Selection {
-            blocks,
+            blocks: self.snapshot_blocks(),
             anchor: point,
             focus: point,
+            granularity: SelectGranularity::Character,
+            initial: None,
+        });
+        self.dragging = true;
+    }
+
+    /// Word or line press. `down` stays empty: the release must not open a link.
+    fn place_unit(&mut self, index: usize, range: Range<usize>, granularity: SelectGranularity) {
+        self.down = None;
+        self.selection = Some(Selection {
+            blocks: self.snapshot_blocks(),
+            anchor: SelectPoint {
+                block: index,
+                offset: range.start,
+            },
+            focus: SelectPoint {
+                block: index,
+                offset: range.end,
+            },
+            granularity,
+            initial: Some(SelectionOrigin {
+                block: index,
+                start: range.start,
+                end: range.end,
+            }),
         });
         self.dragging = true;
     }
@@ -461,24 +597,84 @@ impl TextSelection {
         if !self.dragging {
             return;
         }
-        let Some((index, offset)) = self.hit(position) else {
+        let Some((index, offset, past_end)) = self.hit(position) else {
             return;
         };
         let key = self.blocks[index].key.clone();
+        let granularity = self.selection.as_ref().map(|selection| selection.granularity);
+        let Some(granularity) = granularity else {
+            return;
+        };
+        let Some(target) = self
+            .selection
+            .as_ref()
+            .and_then(|selection| selection.blocks.iter().position(|block| block.key == key))
+        else {
+            return;
+        };
+        if granularity == SelectGranularity::Character {
+            let Some(selection) = self.selection.as_mut() else {
+                return;
+            };
+            let next = SelectPoint {
+                block: target,
+                offset,
+            };
+            if next != selection.anchor {
+                self.moved = true;
+            }
+            selection.focus = next;
+            return;
+        }
+        let text = self
+            .selection
+            .as_ref()
+            .map(|selection| selection.blocks[target].text.clone());
+        let Some(text) = text else {
+            return;
+        };
+        let probe = unit_probe(&text, offset, past_end);
+        let unit = if granularity == SelectGranularity::Word {
+            word_range_at(&text, probe)
+        } else {
+            let live = &self.blocks[index];
+            if live.text.as_ref() == text.as_ref() {
+                visual_line_range(&text, &live.layout, probe)
+            } else {
+                logical_line_range(&text, probe)
+            }
+        };
+        self.retarget_unit(target, unit);
+    }
+
+    /// Move the word or line selection so `unit` is the end under the pointer.
+    fn retarget_unit(&mut self, target_block: usize, unit: Range<usize>) {
+        if unit.is_empty() {
+            return;
+        }
         let Some(selection) = self.selection.as_mut() else {
             return;
         };
-        let Some(target) = selection.blocks.iter().position(|block| block.key == key) else {
+        if target_block >= selection.blocks.len() {
+            return;
+        }
+        let Some(origin) = selection.initial else {
+            let next = SelectPoint {
+                block: target_block,
+                offset: unit.start,
+            };
+            if next != selection.anchor {
+                self.moved = true;
+            }
+            selection.focus = next;
             return;
         };
-        let next = SelectPoint {
-            block: target,
-            offset,
-        };
-        if next != selection.anchor {
+        let (anchor, focus) = snap_to_unit(origin, target_block, unit);
+        if anchor != selection.anchor || focus != selection.focus {
             self.moved = true;
         }
-        selection.focus = next;
+        selection.anchor = anchor;
+        selection.focus = focus;
     }
 
     /// End a drag; a press that never moved resolves to the link under it.
@@ -501,6 +697,7 @@ impl TextSelection {
         self.dragging = false;
         self.down = None;
         self.moved = false;
+        self.last_click = None;
         had
     }
 
@@ -606,6 +803,217 @@ fn byte_boundary(text: &str, mut offset: usize) -> usize {
         offset -= 1;
     }
     offset
+}
+
+/// Pi fullscreen selection waits this long between presses (`DOUBLE_CLICK_INTERVAL_MS`).
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
+
+/// iTerm2's default "characters considered part of a word", which Pi copies
+/// for fullscreen mouse selection.
+fn is_word_joiner(c: char) -> bool {
+    matches!(c, '/' | '-' | '+' | '\\' | '~' | '_' | '.')
+}
+
+/// One UAX #29 word-break segment, plus whether Pi would treat it as part of
+/// a selectable run.
+struct WordSegment {
+    start: usize,
+    end: usize,
+    selectable: bool,
+    joiner: bool,
+}
+
+/// Word span under `offset`, matching Pi TUI `getWordSelection`: split on
+/// UAX #29, then merge a segment into its neighbors when both sides are
+/// selectable and at least one is a joiner. A click on whitespace or other
+/// punctuation stays on that segment.
+fn word_range_at(text: &str, offset: usize) -> Range<usize> {
+    if text.is_empty() {
+        return 0..0;
+    }
+    let segments = word_segments(text);
+    let probe = probe_offset(text, offset);
+    let Some(index) = segments
+        .iter()
+        .position(|segment| probe >= segment.start && probe < segment.end)
+    else {
+        return probe..probe;
+    };
+    let mut start = segments[index].start;
+    let mut end = segments[index].end;
+    let mut cursor = index;
+    while cursor > 0 && can_join_words(&segments[cursor - 1], &segments[cursor]) {
+        cursor -= 1;
+        start = segments[cursor].start;
+    }
+    cursor = index;
+    while cursor + 1 < segments.len() && can_join_words(&segments[cursor], &segments[cursor + 1]) {
+        cursor += 1;
+        end = segments[cursor].end;
+    }
+    start..end
+}
+
+fn word_segments(text: &str) -> Vec<WordSegment> {
+    text.split_word_bound_indices()
+        .map(|(start, piece)| {
+            let joiner = is_joiner_segment(piece);
+            WordSegment {
+                start,
+                end: start + piece.len(),
+                // Letters and digits, or a run of joiners. A segmenter that
+                // glues `--` into one piece still joins `a--b`.
+                selectable: joiner || piece.chars().any(|c| c.is_alphanumeric()),
+                joiner,
+            }
+        })
+        .collect()
+}
+
+/// True when every character is a word joiner. Pi asks this of a one-character
+/// segment; a run of the same joiners is the same answer when the segmenter
+/// does not split them.
+fn is_joiner_segment(piece: &str) -> bool {
+    let mut chars = piece.chars();
+    match chars.next() {
+        Some(first) if is_word_joiner(first) => chars.all(is_word_joiner),
+        _ => false,
+    }
+}
+
+fn can_join_words(left: &WordSegment, right: &WordSegment) -> bool {
+    left.selectable && right.selectable && (left.joiner || right.joiner)
+}
+
+/// Offset used for a word or line hit. A pointer past the row's glyphs is
+/// reported as the next row's first byte; step back one character so the
+/// unit stays on the row under the pointer. Character drags do not use this.
+fn unit_probe(text: &str, offset: usize, past_end: bool) -> usize {
+    let offset = offset.min(text.len());
+    if !past_end || offset == 0 {
+        return offset;
+    }
+    let offset = byte_boundary(text, offset);
+    text[..offset]
+        .char_indices()
+        .next_back()
+        .map(|(index, _)| index)
+        .unwrap_or(offset)
+}
+
+/// Caret at the end of the text belongs to the last character, so a click
+/// past the final glyph still selects that word.
+fn probe_offset(text: &str, offset: usize) -> usize {
+    let offset = byte_boundary(text, offset);
+    if offset < text.len() {
+        return offset;
+    }
+    text.char_indices().next_back().map(|(index, _)| index).unwrap_or(0)
+}
+
+/// The logical line around `offset`, excluding its trailing newline.
+fn logical_line_range(text: &str, offset: usize) -> Range<usize> {
+    let offset = byte_boundary(text, offset);
+    let start = text[..offset].rfind('\n').map(|index| index + 1).unwrap_or(0);
+    let end = text[offset..]
+        .find('\n')
+        .map(|index| offset + index)
+        .unwrap_or(text.len());
+    start..end
+}
+
+/// The wrapped row containing `offset`. Boundaries come from the laid-out
+/// line; a layout that is not ready falls back to the logical line.
+fn visual_line_range(text: &str, layout: &TextLayout, offset: usize) -> Range<usize> {
+    let logical = logical_line_range(text, offset);
+    if logical.is_empty() {
+        return logical;
+    }
+    let Some(wrapped) = layout.line_layout_for_index(offset.min(text.len())) else {
+        return logical;
+    };
+    let local = offset.min(text.len()).saturating_sub(logical.start);
+    let mut start = 0usize;
+    let mut end = wrapped.len().min(logical.len());
+    for boundary in wrapped.wrap_boundaries() {
+        let Some(run) = wrapped.unwrapped_layout.runs.get(boundary.run_ix) else {
+            continue;
+        };
+        let Some(glyph) = run.glyphs.get(boundary.glyph_ix) else {
+            continue;
+        };
+        if local < glyph.index {
+            end = glyph.index;
+            break;
+        }
+        start = glyph.index;
+    }
+    let abs_start = logical.start + start;
+    let abs_end = (logical.start + end).min(logical.end);
+    if abs_start < abs_end {
+        abs_start..abs_end
+    } else {
+        logical
+    }
+}
+
+/// Pi's `getClickCount`: same block, same visual line, same word, within
+/// [`DOUBLE_CLICK_INTERVAL`]. The count cycles 1 → 2 → 3 → 1.
+fn next_click_count(
+    previous: Option<&LastClick>,
+    now: Instant,
+    block: &ElementId,
+    line: &Range<usize>,
+    word: &Range<usize>,
+) -> usize {
+    match previous {
+        Some(previous)
+            if now.saturating_duration_since(previous.at) <= DOUBLE_CLICK_INTERVAL
+                && &previous.block == block
+                && previous.line_start == line.start
+                && previous.line_end == line.end
+                && previous.word_start == word.start
+                && previous.word_end == word.end =>
+        {
+            (previous.count % 3) + 1
+        }
+        _ => 1,
+    }
+}
+
+/// Anchor and focus after a word- or line-granularity drag. Staying inside
+/// the original span keeps it whole; moving past either end takes that end
+/// of the unit under the pointer.
+fn snap_to_unit(
+    origin: SelectionOrigin,
+    target_block: usize,
+    target: Range<usize>,
+) -> (SelectPoint, SelectPoint) {
+    let before = target_block < origin.block
+        || (target_block == origin.block && target.start < origin.start);
+    if before {
+        (
+            SelectPoint {
+                block: origin.block,
+                offset: origin.end,
+            },
+            SelectPoint {
+                block: target_block,
+                offset: target.start,
+            },
+        )
+    } else {
+        (
+            SelectPoint {
+                block: origin.block,
+                offset: origin.start,
+            },
+            SelectPoint {
+                block: target_block,
+                offset: target.end,
+            },
+        )
+    }
 }
 
 /// Split `runs` so the selected byte range carries the selection wash as a
@@ -9442,6 +9850,8 @@ mod tests {
                 block: focus.0,
                 offset: focus.1,
             },
+            granularity: SelectGranularity::Character,
+            initial: None,
         });
         state
     }
@@ -9503,6 +9913,195 @@ mod tests {
         // clamp instead of panicking.
         let state = selection_over(&["short"], (0, 2), (0, 50));
         assert_eq!(state.selected_text().as_deref(), Some("ort"));
+    }
+
+    #[test]
+    fn double_click_word_follows_pi_joiners() {
+        let text = "行数。unity-codegraph pi";
+        let start = text.find("unity-codegraph").unwrap();
+        let end = start + "unity-codegraph".len();
+        // Any offset inside the token, including the hyphen, selects all of it.
+        for offset in start..end {
+            assert_eq!(word_range_at(text, offset), start..end, "{offset}");
+        }
+        // The ideographic stop and the following space stay their own segments.
+        let stop = text.find('。').unwrap();
+        assert_eq!(word_range_at(text, stop), stop..stop + '。'.len_utf8());
+        let space = text.find(' ').unwrap();
+        assert_eq!(word_range_at(text, space), space..space + 1);
+
+        for token in ["foo/bar", "a.b.c", "file_name.rs", "a--b", "a+b", "-x", "x-"] {
+            assert_eq!(word_range_at(token, 0), 0..token.len(), "{token}");
+            let last = token.char_indices().next_back().unwrap().0;
+            assert_eq!(word_range_at(token, last), 0..token.len(), "{token}");
+        }
+
+        assert_eq!(word_range_at("read,", 0), 0..4);
+        assert_eq!(word_range_at("read,", 4), 4..5);
+
+        let url = "https://x.com/a-b?q=1";
+        let domain = url.find("/x").unwrap() + 1;
+        assert_eq!(&url[word_range_at(url, domain)], "//x.com/a-b");
+
+        // A caret past the last glyph still belongs to that word.
+        assert_eq!(word_range_at("unity-codegraph", 15), 0..15);
+        assert_eq!(word_range_at("", 0), 0..0);
+    }
+
+    #[test]
+    fn margin_past_a_row_stays_on_that_row() {
+        // Past the glyphs, layout reports the next row's first byte: the
+        // newline, or the first character of the wrapped row. Word and line
+        // hits step back onto the row under the pointer.
+        let text = "unity-codegraph\npi";
+        let newline = text.find('\n').unwrap();
+        let probe = unit_probe(text, newline, true);
+        assert_eq!(&text[word_range_at(text, probe)], "unity-codegraph");
+        assert_eq!(logical_line_range(text, probe), 0..newline);
+
+        let wrapped = "alpha beta";
+        let beta = wrapped.find('b').unwrap();
+        assert_eq!(unit_probe(wrapped, beta, false), beta);
+        let probe = unit_probe(wrapped, beta, true);
+        assert!(probe < beta);
+        assert_eq!(logical_line_range(wrapped, probe), 0..wrapped.len());
+
+        let han = "行数";
+        assert_eq!(
+            unit_probe(han, han.len(), true),
+            han.find('数').unwrap()
+        );
+        assert_eq!(unit_probe(han, 0, true), 0);
+    }
+
+    #[test]
+    fn double_click_word_is_one_han_character() {
+        // UAX #29, not ICU's dictionary: each Han character is its own word.
+        let text = "互转不改变行数";
+        assert_eq!(word_range_at(text, 0), 0..'互'.len_utf8());
+        let change = text.find('改').unwrap();
+        assert_eq!(
+            word_range_at(text, change),
+            change..change + '改'.len_utf8()
+        );
+    }
+
+    #[test]
+    fn click_count_cycles_word_then_line_then_character() {
+        let block = ElementId::Name("block".into());
+        let line = 0..20;
+        let word = 0..15;
+        let start = Instant::now();
+        let mut previous = None;
+        let mut counts = Vec::new();
+        for step in 0..4 {
+            let now = start + Duration::from_millis(100 * step);
+            let count = next_click_count(previous.as_ref(), now, &block, &line, &word);
+            counts.push(count);
+            previous = Some(LastClick {
+                at: now,
+                count,
+                block: block.clone(),
+                line_start: line.start,
+                line_end: line.end,
+                word_start: word.start,
+                word_end: word.end,
+            });
+        }
+        assert_eq!(counts, vec![1, 2, 3, 1]);
+
+        let previous = previous.unwrap();
+        let soon = previous.at + Duration::from_millis(10);
+        assert_eq!(
+            next_click_count(Some(&previous), soon, &block, &line, &(16..18)),
+            1,
+            "a different word starts over"
+        );
+        assert_eq!(
+            next_click_count(Some(&previous), soon, &block, &(20..40), &word),
+            1,
+            "a different visual line starts over"
+        );
+        assert_eq!(
+            next_click_count(
+                Some(&previous),
+                soon,
+                &ElementId::Name("other".into()),
+                &line,
+                &word
+            ),
+            1,
+            "a different block starts over"
+        );
+        let later = previous.at + DOUBLE_CLICK_INTERVAL + Duration::from_millis(1);
+        assert_eq!(
+            next_click_count(Some(&previous), later, &block, &line, &word),
+            1,
+            "past 500ms starts over"
+        );
+    }
+
+    #[test]
+    fn word_drag_keeps_the_original_word_and_extends_by_words() {
+        let text = "unity-codegraph pi read";
+        let first = word_range_at(text, 0);
+        let pi = word_range_at(text, text.find("pi").unwrap());
+        let mut state = selection_over(&[text], (0, first.start), (0, first.end));
+        {
+            let selection = state.selection.as_mut().unwrap();
+            selection.granularity = SelectGranularity::Word;
+            selection.initial = Some(SelectionOrigin {
+                block: 0,
+                start: first.start,
+                end: first.end,
+            });
+        }
+        // A twitch inside the word does not shrink it to the caret.
+        state.retarget_unit(0, word_range_at(text, 4));
+        assert_eq!(state.selected_text().as_deref(), Some("unity-codegraph"));
+        state.retarget_unit(0, pi.clone());
+        assert_eq!(
+            state.selected_text().as_deref(),
+            Some("unity-codegraph pi")
+        );
+
+        // Dragging back from `pi` takes the start of the earlier word.
+        let mut state = selection_over(&[text], (0, pi.start), (0, pi.end));
+        {
+            let selection = state.selection.as_mut().unwrap();
+            selection.granularity = SelectGranularity::Word;
+            selection.initial = Some(SelectionOrigin {
+                block: 0,
+                start: pi.start,
+                end: pi.end,
+            });
+        }
+        state.retarget_unit(0, first);
+        assert_eq!(
+            state.selected_text().as_deref(),
+            Some("unity-codegraph pi")
+        );
+
+        // Across blocks the middle block is copied whole.
+        let mut state = selection_over(
+            &["alpha-beta", "mid", "gamma"],
+            (0, 0),
+            (0, "alpha-beta".len()),
+        );
+        {
+            let selection = state.selection.as_mut().unwrap();
+            selection.granularity = SelectGranularity::Word;
+            selection.initial = Some(SelectionOrigin {
+                block: 0,
+                start: 0,
+                end: "alpha-beta".len(),
+            });
+        }
+        state.retarget_unit(2, 0.."gamma".len());
+        assert_eq!(
+            state.selected_text().as_deref(),
+            Some("alpha-beta\nmid\ngamma")
+        );
     }
 
     #[test]
