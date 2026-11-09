@@ -522,6 +522,9 @@ impl OrbitApp {
                 .into_any_element();
         }
         let truncated = self.subagents.truncated(id);
+        // See `wheel_before_probe`: the offset before this event, not a
+        // guess rebuilt from `window.line_height()`.
+        let wheel_before = Rc::new(Cell::new(px(0.)));
         let mut body = div()
             .id(ElementId::Name(format!("subagent-body-{id}").into()))
             .flex_1()
@@ -530,11 +533,17 @@ impl OrbitApp {
             .overflow_y_scroll()
             .track_scroll(handle)
             .occlude()
-            .on_scroll_wheel(cx.listener(Self::on_subagent_wheel))
+            .on_scroll_wheel({
+                let wheel_before = wheel_before.clone();
+                cx.listener(move |this, _: &ScrollWheelEvent, _, cx| {
+                    this.on_subagent_wheel(&wheel_before, cx);
+                })
+            })
             .flex()
             .flex_col()
             .gap(DynamicSpacing::Base08.px(&theme))
-            .p(DynamicSpacing::Base12.px(&theme));
+            .p(DynamicSpacing::Base12.px(&theme))
+            .child(transcript_view::wheel_before_probe(handle, &wheel_before));
         if truncated {
             body = body.child(
                 div()
@@ -705,28 +714,31 @@ impl OrbitApp {
         cx.notify();
     }
 
-    fn on_subagent_wheel(
-        &mut self,
-        event: &ScrollWheelEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_subagent_wheel(&mut self, before: &Cell<Pixels>, cx: &mut Context<Self>) {
         let Some(id) = self.subagents.pane_key().map(str::to_string) else {
             return;
         };
         let Some(handle) = self.subagent_scrolls.get(&id).cloned() else {
             return;
         };
-        let line = window.line_height();
-        let raw = event.delta.pixel_delta(line);
-        let delta_y = if raw.y != px(0.) { raw.y } else { raw.x };
-        if delta_y == px(0.) {
-            return;
-        }
         let offset = handle.offset();
         let max = handle.max_offset().height;
-        let previous = offset.y - delta_y;
-        let (clamped, residual) = transcript_view::split_thinking_scroll(previous, max, delta_y);
+        let previous = before.get();
+        let Some((clamped, residual)) =
+            transcript_view::split_wheel_since_snapshot(previous, offset.y, max)
+        else {
+            return;
+        };
+        let delta_y = offset.y - previous;
+        let residual = {
+            let gesture = self.subagent_wheel_gestures.entry(id.clone()).or_default();
+            transcript_view::residual_after_gesture(
+                residual,
+                delta_y,
+                gesture,
+                transcript_view::wheel_clock_ms(),
+            )
+        };
         let following = max <= px(0.) || clamped <= -max;
         let was_following = self.subagents.anchor(&id).following;
         if following {

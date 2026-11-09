@@ -502,6 +502,7 @@ impl OrbitApp {
         let widgets = std::mem::take(&mut self.extension_widgets);
         let subagents = std::mem::take(&mut self.subagents);
         let subagent_scrolls = std::mem::take(&mut self.subagent_scrolls);
+        self.subagent_wheel_gestures.clear();
         let subagent_list_scroll =
             std::mem::replace(&mut self.subagent_list_scroll, ScrollHandle::new());
         let parked = ParkedSession {
@@ -1753,6 +1754,7 @@ impl OrbitApp {
         self.extension_widgets = parked.widgets;
         self.subagents = parked.subagents;
         self.subagent_scrolls = parked.subagent_scrolls;
+        self.subagent_wheel_gestures.clear();
         self.subagent_list_scroll = parked.subagent_list_scroll;
         self.subagent_scroll_placed = self.subagents.scroll_epoch();
         self.subagent_list_rows = self.subagents.rows().len();
@@ -2028,6 +2030,7 @@ impl OrbitApp {
             self.extension_widgets.clear();
             self.subagents = crate::subagent_status::SubagentBoard::default();
             self.subagent_scrolls.clear();
+            self.subagent_wheel_gestures.clear();
             self.subagent_list_scroll = ScrollHandle::new();
             self.clear_subagent_folds();
             self.reset_for_new_task(cx);
@@ -2218,6 +2221,7 @@ impl OrbitApp {
             self.extension_widgets = parked.widgets;
             self.subagents = parked.subagents;
             self.subagent_scrolls = parked.subagent_scrolls;
+            self.subagent_wheel_gestures.clear();
             self.subagent_list_scroll = parked.subagent_list_scroll;
             self.subagent_scroll_placed = self.subagents.scroll_epoch();
             self.subagent_list_rows = self.subagents.rows().len();
@@ -2242,6 +2246,7 @@ impl OrbitApp {
             self.extension_widgets.clear();
             self.subagents = crate::subagent_status::SubagentBoard::default();
             self.subagent_scrolls.clear();
+            self.subagent_wheel_gestures.clear();
             self.subagent_list_scroll = ScrollHandle::new();
             self.subagent_scroll_placed = 0;
             self.subagent_list_rows = 0;

@@ -157,11 +157,29 @@ type ExpandedSections = Rc<RefCell<HashSet<(usize, usize, u8)>>>;
 /// Code blocks expanded past their collapsed preview, keyed
 /// `(message_ix, prose_salt, block_ix)`.
 pub(crate) type ExpandedBlocks = Rc<RefCell<HashSet<(usize, u64, usize)>>>;
+/// One "Thought" card's scroll position, plus the wheel gesture in progress.
+/// Both have to survive re-renders. A gesture only lasts a few hundred
+/// milliseconds, and this map already outlives those frames.
+#[derive(Clone)]
+pub(crate) struct ThoughtScroll {
+    handle: ScrollHandle,
+    gesture: Rc<RefCell<WheelGesture>>,
+}
+
+impl Default for ThoughtScroll {
+    fn default() -> Self {
+        Self {
+            handle: ScrollHandle::default(),
+            gesture: Rc::new(RefCell::new(WheelGesture::default())),
+        }
+    }
+}
+
 /// Persistent scroll handles for expandable "Thought" cards, keyed
 /// `(message_ix, step_ix)`. The handle lets the card read its own
-/// offset/limit so a wheel that no longer scrolls the card can be chained
-/// to the transcript (rather than swallowed by `occlude`).
-pub(crate) type ThinkingScrolls = Rc<RefCell<HashMap<(usize, usize), ScrollHandle>>>;
+/// offset and limit. The gesture remembers whether this scroll started
+/// with room to move, so hitting the edge does not hand it to the transcript.
+pub(crate) type ThinkingScrolls = Rc<RefCell<HashMap<(usize, usize), ThoughtScroll>>>;
 /// Explicit open/closed choice for a "Thought" card, keyed
 /// `(message_ix, step_ix)`. `true` is open, `false` is closed. Missing means
 /// the default: open only while that step is still reasoning and Settings →
@@ -2886,11 +2904,13 @@ fn render_thinking_body(
         expand_while_streaming,
         &collapsed_thoughts.borrow(),
     );
-    let handle = thinking_scrolls
+    let thought = thinking_scrolls
         .borrow_mut()
         .entry(key)
         .or_default()
         .clone();
+    let handle = thought.handle;
+    let gesture = thought.gesture;
     // While reasoning streams and the card is open, keep the newest line in
     // view. Detach is written only by the wheel handler. Coming back within
     // about a pixel of the bottom clears it and follows again. A collapsed
@@ -2991,6 +3011,9 @@ fn render_thinking_body(
         // The open body wraps and scrolls at the reading-column width. The
         // header above stays content-sized, so its chevron still follows the
         // label instead of the card's trailing edge.
+        // Captured before the card's built-in scroller adds this event's
+        // delta. The bubble handler reads it back; see `wheel_before_probe`.
+        let wheel_before = Rc::new(Cell::new(px(0.)));
         card = card.w_full().child(
             div()
                 // A stable id lets GPUI remember the scroll offset across
@@ -3010,22 +3033,26 @@ fn render_thinking_body(
                 // which flips the list's `should_handle_scroll` to false and
                 // leaves the wheel to this card.
                 .occlude()
-                // `occlude` also stops the page from ever scrolling while
-                // the card is at its end, so hand the leftover wheel back to
-                // the transcript (a card too short to scroll forwards the
-                // whole delta, so the page still moves normally).
+                // `occlude` keeps the page from scrolling while the pointer
+                // is over the card. A scroll that starts already at the top
+                // or bottom hands its leftover to the transcript. A scroll
+                // that starts with room keeps that leftover after the card
+                // hits the edge. A card too short to scroll forwards the
+                // whole delta, so the page still moves.
                 .on_scroll_wheel({
                     let handle = handle.clone();
+                    let gesture = gesture.clone();
                     let scroller = scroller.clone();
                     let thinking_detached = thinking_detached.clone();
-                    move |event, window, cx| {
+                    let wheel_before = wheel_before.clone();
+                    move |_event, _window, cx| {
                         chain_thinking_scroll(
                             &handle,
+                            &wheel_before,
+                            &gesture,
                             &scroller,
                             &thinking_detached,
                             key,
-                            event,
-                            window.line_height(),
                             cx,
                         );
                     }
@@ -3035,6 +3062,7 @@ fn render_thinking_body(
                 .line_height(theme.aside_line_px())
                 .text_color(theme.text_secondary)
                 .whitespace_normal()
+                .child(wheel_before_probe(&handle, &wheel_before))
                 .child({
                     let body_key = ElementId::NamedInteger(
                         "thinking-body".into(),
@@ -3062,39 +3090,44 @@ fn render_thinking_body(
     card
 }
 
-/// Chain a wheel event from a "Thought" card to the transcript. The card's
-/// own `overflow_y_scroll` listener is registered *after* this one and GPUI
-/// dispatches bubble listeners in reverse, so it runs first and adds the raw
-/// delta to the handle *unclamped*. The offset read here is therefore the
-/// pre-clamp value; subtracting the delta recovers the offset from before
-/// this event.
+/// Chain a wheel event from a "Thought" card to the transcript.
 ///
-/// A card that can still move in this direction keeps the whole event, even
-/// when the event would land it on the top or bottom. Only an event that
-/// arrives already at that edge (or a card too short to scroll) is handed to
-/// the transcript, and then the whole delta goes.
+/// `before` is the card's offset at the start of this event, stored by
+/// [`wheel_before_probe`] in the capture phase. The card's built-in scroller
+/// then adds its own delta during bubble — using the line height captured
+/// while the card was painted, not `window.line_height()` at event time — so
+/// the distance it actually moved is `offset - before`. Guessing that
+/// distance from the event's line count makes a card that is already at the
+/// top or bottom look like it still has room, and the transcript never sees
+/// the event.
+///
+/// One scroll is a gesture. If the card had room when the gesture started,
+/// later events stay on the card after it hits the top or bottom, and their
+/// leftover is not passed on. A gesture that starts already at that edge,
+/// or a card too short to scroll, passes the leftover to the transcript.
 fn chain_thinking_scroll(
     handle: &ScrollHandle,
+    before: &Cell<Pixels>,
+    gesture: &RefCell<WheelGesture>,
     scroller: &MessageScrollerState,
     thinking_detached: &ThinkingDetached,
     key: (usize, usize),
-    event: &ScrollWheelEvent,
-    line_height: Pixels,
     cx: &mut App,
 ) {
-    let raw = event.delta.pixel_delta(line_height);
-    // The card only scrolls on Y; mirror the built-in listener's fallback (a
-    // purely horizontal delta over a vertical scroller is applied to Y).
-    let delta_y = if raw.y != px(0.) { raw.y } else { raw.x };
-    if delta_y == px(0.) {
-        return;
-    }
     let offset = handle.offset();
     let max = handle.max_offset().height;
-    // The built-in listener already added `delta_y` without clamping, so the
-    // pre-event offset is this event's offset minus the delta it applied.
-    let previous = offset.y - delta_y;
-    let (clamped, residual) = split_thinking_scroll(previous, max, delta_y);
+    let previous = before.get();
+    let Some((clamped, split_residual)) = split_wheel_since_snapshot(previous, offset.y, max)
+    else {
+        return;
+    };
+    let delta_y = offset.y - previous;
+    let residual = residual_after_gesture(
+        split_residual,
+        delta_y,
+        &mut gesture.borrow_mut(),
+        wheel_clock_ms(),
+    );
     // Track whether the reader is following the stream or has scrolled away
     // from the newest line: reaching the bottom re-arms following, an upward
     // wheel detaches, and a downward wheel short of the bottom leaves the
@@ -3120,6 +3153,49 @@ fn chain_thinking_scroll(
     }
 }
 
+/// A zero-size paint hook. On capture, before the built-in scroller adds this
+/// event's delta, it stores `handle`'s offset into `before`.
+pub(crate) fn wheel_before_probe(
+    handle: &ScrollHandle,
+    before: &Rc<Cell<Pixels>>,
+) -> impl IntoElement {
+    let handle = handle.clone();
+    let before = before.clone();
+    canvas(
+        |_, _, _| (),
+        move |_, _, window, _| {
+            let handle = handle.clone();
+            let before = before.clone();
+            window.on_mouse_event(move |_: &ScrollWheelEvent, phase, _, _| {
+                if phase == DispatchPhase::Capture {
+                    before.set(handle.offset().y);
+                }
+            });
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .w(px(0.))
+    .h(px(0.))
+}
+
+/// Split one wheel from the offset before the built-in scroller moved
+/// (`before`) and the offset after it (`after`). `None` when nothing moved.
+/// Otherwise the same pair as [`split_thinking_scroll`]: the offset the child
+/// should keep, and the delta to hand to the parent.
+pub(crate) fn split_wheel_since_snapshot(
+    before: Pixels,
+    after: Pixels,
+    max: Pixels,
+) -> Option<(Pixels, Pixels)> {
+    let delta = after - before;
+    if delta == px(0.) {
+        return None;
+    }
+    Some(split_thinking_scroll(before, max, delta))
+}
+
 /// Split a wheel delta between a nested scroller and its parent.
 ///
 /// Returns `(child_offset, residual)`. `previous` is the child's offset
@@ -3127,7 +3203,9 @@ fn chain_thinking_scroll(
 /// fraction outside that range because the built-in listener adds `delta`
 /// before clamping. When the child can still travel in `delta`'s direction,
 /// `residual` is 0 and the child consumes the event, stopping at the edge.
-/// When it is already there, or `max` is 0, `residual` is the whole `delta`.
+/// When it is already there, or `max` is 0, `residual` is the whole `delta`
+/// (the leftover). [`residual_after_gesture`] may still keep that leftover
+/// when this event continues a scroll that started with room.
 pub(crate) fn split_thinking_scroll(
     previous: Pixels,
     max: Pixels,
@@ -3151,6 +3229,108 @@ pub(crate) fn split_thinking_scroll(
         (clamped, delta)
     } else {
         (clamped, px(0.))
+    }
+}
+
+/// One nested wheel gesture.
+///
+/// A scroll that starts while the child can still move keeps every later
+/// event, including ones that arrive after the child has hit the edge, until
+/// the reader pauses. A scroll that starts already at the edge does not, so
+/// the parent receives the leftover. The timings match VS Code's notebook
+/// webview (`flagRecentlyScrolled`, issue 174913, PR 208341).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct WheelGesture {
+    /// Clock of the last event that actually moved the child.
+    last_moved_ms: Option<u64>,
+    /// Delta of the previous event that arrived already at the edge.
+    previous_delta: Option<f32>,
+    /// Events at or before this clock still belong to the gesture.
+    hold_until_ms: Option<u64>,
+}
+
+/// How long a fresh gesture keeps later events.
+const WHEEL_GESTURE_HOLD_MS: u64 = 300;
+/// How long a tail event extends the hold once the child has been sitting
+/// on the edge. Trackpad inertia arrives in a tight burst; a mouse notch
+/// after this gap is a new scroll.
+const WHEEL_GESTURE_TAIL_MS: u64 = 50;
+/// After this long without the child moving, a larger delta is a new scroll.
+const WHEEL_GESTURE_NEW_AFTER_MS: u64 = 400;
+/// Same-direction growth past the previous tail event that starts a new scroll.
+const WHEEL_GESTURE_DELTA_BUMP: f32 = 8.;
+
+/// Milliseconds since the process started handling wheels. Tests pass their
+/// own clock into [`residual_after_gesture`] and do not call this.
+pub(crate) fn wheel_clock_ms() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// `true` when this event still belongs to the child.
+///
+/// `can_move` is true when the child was not already at the edge in `delta`'s
+/// direction. That event starts (or continues) a gesture. An event that
+/// arrives already at the edge belongs to the child only while that gesture
+/// is still held.
+fn wheel_gesture_keeps(
+    gesture: &mut WheelGesture,
+    can_move: bool,
+    delta: f32,
+    now_ms: u64,
+) -> bool {
+    if gesture.hold_until_ms.is_some_and(|until| now_ms > until) {
+        *gesture = WheelGesture::default();
+    }
+    if can_move {
+        gesture.last_moved_ms = Some(now_ms);
+        gesture.previous_delta = None;
+        gesture.hold_until_ms = Some(now_ms.saturating_add(WHEEL_GESTURE_HOLD_MS));
+        return true;
+    }
+    if gesture.hold_until_ms.is_none() {
+        return false;
+    }
+    let long_after_move = gesture
+        .last_moved_ms
+        .is_some_and(|moved| now_ms.saturating_sub(moved) > WHEEL_GESTURE_NEW_AFTER_MS);
+    let surged = long_after_move
+        && gesture.previous_delta.is_some_and(|previous| {
+            previous != 0.
+                && ((delta < 0. && delta < previous - WHEEL_GESTURE_DELTA_BUMP)
+                    || (delta > 0. && delta > previous + WHEEL_GESTURE_DELTA_BUMP))
+        });
+    if surged {
+        *gesture = WheelGesture::default();
+        return false;
+    }
+    let extend = if long_after_move {
+        WHEEL_GESTURE_TAIL_MS
+    } else {
+        WHEEL_GESTURE_HOLD_MS
+    };
+    gesture.previous_delta = Some(delta);
+    gesture.hold_until_ms = Some(now_ms.saturating_add(extend));
+    true
+}
+
+/// The leftover the parent should scroll.
+///
+/// `split_residual` is what [`split_thinking_scroll`] would hand over for
+/// this event alone. It is `0` when the child had room, and the whole `delta`
+/// when the child was already at the edge. A gesture that started with room
+/// turns that leftover into `0` even after the child has reached the edge.
+pub(crate) fn residual_after_gesture(
+    split_residual: Pixels,
+    delta: Pixels,
+    gesture: &mut WheelGesture,
+    now_ms: u64,
+) -> Pixels {
+    let can_move = split_residual == px(0.);
+    if wheel_gesture_keeps(gesture, can_move, f32::from(delta), now_ms) {
+        px(0.)
+    } else {
+        split_residual
     }
 }
 
@@ -7630,6 +7810,152 @@ mod tests {
         assert_eq!(
             split_thinking_scroll(px(-137.42), px(137.42), px(-3.7)),
             (px(-137.42), px(-3.7))
+        );
+    }
+
+    #[test]
+    fn a_snapshot_at_either_edge_hands_the_whole_event_to_the_parent() {
+        // The built-in scroller has already added one notch. 18px is the
+        // card's line height; three lines is a Windows wheel notch.
+        let notch = px(54.);
+        assert_eq!(
+            split_wheel_since_snapshot(px(0.), notch, px(200.)),
+            Some((px(0.), notch))
+        );
+        assert_eq!(
+            split_wheel_since_snapshot(px(-200.), px(-200.) - notch, px(200.)),
+            Some((px(-200.), -notch))
+        );
+        // Five pixels short of the top, or of the bottom: this notch stops
+        // on the edge and the parent is left alone.
+        assert_eq!(
+            split_wheel_since_snapshot(px(-5.), px(-5.) + notch, px(200.)),
+            Some((px(0.), px(0.)))
+        );
+        assert_eq!(
+            split_wheel_since_snapshot(px(-195.), px(-195.) - notch, px(200.)),
+            Some((px(-200.), px(0.)))
+        );
+        assert_eq!(
+            split_wheel_since_snapshot(px(-40.), px(-40.), px(200.)),
+            None
+        );
+    }
+
+    #[test]
+    fn guessing_the_line_height_hides_an_edge_the_snapshot_still_sees() {
+        // Painted line height is 18px, so the card actually moved 54px.
+        // `window.line_height()` at event time is about 26px, and subtracting
+        // 3 * 26 from the post-event offset invents room that is not there.
+        let applied = px(54.);
+        let guessed = px(78.);
+        let after = applied;
+        let wrong_previous = after - guessed;
+        assert_eq!(
+            split_thinking_scroll(wrong_previous, px(200.), guessed),
+            (px(0.), px(0.))
+        );
+        assert_eq!(
+            split_wheel_since_snapshot(px(0.), after, px(200.)),
+            Some((px(0.), applied))
+        );
+    }
+
+    #[test]
+    fn a_scroll_that_starts_inside_the_card_keeps_later_events() {
+        let notch = px(54.);
+        let mut gesture = WheelGesture::default();
+
+        // Five pixels short of the top. This notch stops on the edge and
+        // starts the gesture.
+        let (clamped, residual) = split_thinking_scroll(px(-5.), px(200.), notch);
+        assert_eq!((clamped, residual), (px(0.), px(0.)));
+        assert_eq!(
+            residual_after_gesture(residual, notch, &mut gesture, 0),
+            px(0.)
+        );
+
+        // The next notch arrives already at the top, still inside the same
+        // scroll. The leftover stays on the card.
+        let (_clamped, residual) = split_thinking_scroll(px(0.), px(200.), notch);
+        assert_eq!(residual, notch);
+        assert_eq!(
+            residual_after_gesture(residual, notch, &mut gesture, 100),
+            px(0.)
+        );
+
+        // That event extended the gesture. Once it has ended, a notch that
+        // starts at the top is leftover for the parent.
+        assert_eq!(
+            residual_after_gesture(notch, notch, &mut gesture, 401),
+            notch
+        );
+
+        // Landing on the edge and then pausing is the same rule: the next
+        // scroll starts at the top, so the parent receives it.
+        let mut paused = WheelGesture::default();
+        assert_eq!(
+            residual_after_gesture(px(0.), notch, &mut paused, 0),
+            px(0.)
+        );
+        assert_eq!(
+            residual_after_gesture(notch, notch, &mut paused, 301),
+            notch
+        );
+
+        // The same scroll, heading for the bottom.
+        let mut down = WheelGesture::default();
+        let (clamped, residual) = split_thinking_scroll(px(-195.), px(200.), -notch);
+        assert_eq!((clamped, residual), (px(-200.), px(0.)));
+        assert_eq!(
+            residual_after_gesture(residual, -notch, &mut down, 0),
+            px(0.)
+        );
+        let (_clamped, residual) = split_thinking_scroll(px(-200.), px(200.), -notch);
+        assert_eq!(residual, -notch);
+        assert_eq!(
+            residual_after_gesture(residual, -notch, &mut down, 100),
+            px(0.)
+        );
+
+        // A fresh scroll that is already at the bottom hands its leftover over.
+        let mut fresh = WheelGesture::default();
+        assert_eq!(
+            residual_after_gesture(-notch, -notch, &mut fresh, 0),
+            -notch
+        );
+
+        // A card that cannot scroll never starts a gesture, so every wheel
+        // still reaches the parent.
+        let mut short = WheelGesture::default();
+        assert_eq!(residual_after_gesture(notch, notch, &mut short, 0), notch);
+        assert_eq!(residual_after_gesture(notch, notch, &mut short, 50), notch);
+    }
+
+    #[test]
+    fn a_growing_delta_after_the_tail_starts_a_new_scroll() {
+        let mut gesture = WheelGesture::default();
+        // The card could still move, so this scroll belongs to it.
+        assert_eq!(
+            residual_after_gesture(px(0.), px(10.), &mut gesture, 0),
+            px(0.)
+        );
+        // Still the same scroll once the card is at the edge.
+        assert_eq!(
+            residual_after_gesture(px(10.), px(10.), &mut gesture, 250),
+            px(0.)
+        );
+        // The tail is still arriving and the delta did not grow, so the
+        // parent still does not see it.
+        assert_eq!(
+            residual_after_gesture(px(10.), px(10.), &mut gesture, 500),
+            px(0.)
+        );
+        // A larger delta this long after the card last moved is a new scroll
+        // that started on the edge. The parent receives it.
+        assert_eq!(
+            residual_after_gesture(px(20.), px(20.), &mut gesture, 520),
+            px(20.)
         );
     }
 
