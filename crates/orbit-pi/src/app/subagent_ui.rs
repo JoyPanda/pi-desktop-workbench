@@ -535,8 +535,8 @@ impl OrbitApp {
             .occlude()
             .on_scroll_wheel({
                 let wheel_before = wheel_before.clone();
-                cx.listener(move |this, _: &ScrollWheelEvent, _, cx| {
-                    this.on_subagent_wheel(&wheel_before, cx);
+                cx.listener(move |this, event: &ScrollWheelEvent, _, cx| {
+                    this.on_subagent_wheel(&wheel_before, event, cx);
                 })
             })
             .flex()
@@ -714,7 +714,12 @@ impl OrbitApp {
         cx.notify();
     }
 
-    fn on_subagent_wheel(&mut self, before: &Cell<Pixels>, cx: &mut Context<Self>) {
+    fn on_subagent_wheel(
+        &mut self,
+        before: &Cell<Pixels>,
+        event: &ScrollWheelEvent,
+        cx: &mut Context<Self>,
+    ) {
         let Some(id) = self.subagents.pane_key().map(str::to_string) else {
             return;
         };
@@ -735,6 +740,7 @@ impl OrbitApp {
             transcript_view::residual_after_gesture(
                 residual,
                 delta_y,
+                transcript_view::wheel_event_is_precise(event),
                 gesture,
                 transcript_view::wheel_clock_ms(),
             )

@@ -31,8 +31,9 @@ use gpui::{
     CursorStyle, DispatchPhase, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight,
     GlobalElementId, Hitbox, HitboxBehavior, Hsla, Image, ImageSource, InspectorElementId,
     InteractiveText, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ObjectFit, Pixels, ScrollHandle, ScrollWheelEvent, SharedString, StrikethroughStyle,
-    StyledText, TextAlign, TextLayout, TextRun, TransformationMatrix, UnderlineStyle, Window,
+    ObjectFit, Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString,
+    StrikethroughStyle, StyledText, TextAlign, TextLayout, TextRun, TransformationMatrix,
+    UnderlineStyle, Window,
 };
 
 use std::ops::Range;
@@ -3449,22 +3450,24 @@ fn render_thinking_body(
                 // leaves the wheel to this card.
                 .occlude()
                 // `occlude` keeps the page from scrolling while the pointer
-                // is over the card. A scroll that starts already at the top
-                // or bottom hands its leftover to the transcript. A scroll
-                // that starts with room keeps that leftover after the card
-                // hits the edge. A card too short to scroll forwards the
-                // whole delta, so the page still moves.
+                // is over the card. A notch that starts already at the top
+                // or bottom hands its leftover to the transcript. The notch
+                // that reaches the edge keeps its own leftover. A precise
+                // stream (a trackpad flick) also keeps the events that follow
+                // while they are still arriving. A card too short to scroll
+                // forwards the whole delta, so the page still moves.
                 .on_scroll_wheel({
                     let handle = handle.clone();
                     let gesture = gesture.clone();
                     let scroller = scroller.clone();
                     let thinking_detached = thinking_detached.clone();
                     let wheel_before = wheel_before.clone();
-                    move |_event, _window, cx| {
+                    move |event, _window, cx| {
                         chain_thinking_scroll(
                             &handle,
                             &wheel_before,
                             &gesture,
+                            event,
                             &scroller,
                             &thinking_detached,
                             key,
@@ -3516,14 +3519,17 @@ fn render_thinking_body(
 /// top or bottom look like it still has room, and the transcript never sees
 /// the event.
 ///
-/// One scroll is a gesture. If the card had room when the gesture started,
-/// later events stay on the card after it hits the top or bottom, and their
-/// leftover is not passed on. A gesture that starts already at that edge,
-/// or a card too short to scroll, passes the leftover to the transcript.
+/// One wheel notch is judged on its own: room at the start keeps the whole
+/// notch, including whatever would pass the edge. The next detent, once the
+/// card is already there, goes to the transcript. A precise device (macOS
+/// trackpad and Magic Mouse, Wayland continuous scroll) is a stream, so the
+/// events that keep arriving after the edge stay with the card until the
+/// stream thins out or a new flick is stronger.
 fn chain_thinking_scroll(
     handle: &ScrollHandle,
     before: &Cell<Pixels>,
     gesture: &RefCell<WheelGesture>,
+    event: &ScrollWheelEvent,
     scroller: &MessageScrollerState,
     thinking_detached: &ThinkingDetached,
     key: (usize, usize),
@@ -3540,6 +3546,7 @@ fn chain_thinking_scroll(
     let residual = residual_after_gesture(
         split_residual,
         delta_y,
+        wheel_event_is_precise(event),
         &mut gesture.borrow_mut(),
         wheel_clock_ms(),
     );
@@ -3649,30 +3656,35 @@ pub(crate) fn split_thinking_scroll(
 
 /// One nested wheel gesture.
 ///
-/// A scroll that starts while the child can still move keeps every later
-/// event, including ones that arrive after the child has hit the edge, until
-/// the reader pauses. A scroll that starts already at the edge does not, so
-/// the parent receives the leftover. The timings match VS Code's notebook
-/// webview (`flagRecentlyScrolled`, issue 174913, PR 208341).
+/// A detent is one event. A precise stream (trackpad momentum included) is
+/// many events of one flick. `precise` remembers which of those armed the
+/// gesture, so a mouse notch cannot inherit a trackpad hold.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct WheelGesture {
     /// Clock of the last event that actually moved the child.
     last_moved_ms: Option<u64>,
+    /// Clock of the last event that belonged to this gesture.
+    last_event_ms: Option<u64>,
     /// Delta of the previous event that arrived already at the edge.
     previous_delta: Option<f32>,
     /// Events at or before this clock still belong to the gesture.
     hold_until_ms: Option<u64>,
+    /// The gesture was armed by [`ScrollDelta::Pixels`].
+    precise: bool,
 }
 
-/// How long a fresh gesture keeps later events.
+/// How long a fresh precise flick keeps later events. macOS coalesces
+/// momentum events, so a gap here can be longer than one frame. This is the
+/// window VS Code leaves open until the flick is only a tail.
 const WHEEL_GESTURE_HOLD_MS: u64 = 300;
-/// How long a tail event extends the hold once the child has been sitting
-/// on the edge. Trackpad inertia arrives in a tight burst; a mouse notch
-/// after this gap is a new scroll.
+/// A mouse notch farther from the previous event than this is a new scroll.
+/// A precise tail refreshes it on every event, which is what keeps macOS
+/// momentum on the child while the events are still arriving.
 const WHEEL_GESTURE_TAIL_MS: u64 = 50;
-/// After this long without the child moving, a larger delta is a new scroll.
+/// After this long without the child moving, a stronger precise delta is a
+/// new flick.
 const WHEEL_GESTURE_NEW_AFTER_MS: u64 = 400;
-/// Same-direction growth past the previous tail event that starts a new scroll.
+/// Same-direction growth past the previous tail event that starts a new flick.
 const WHEEL_GESTURE_DELTA_BUMP: f32 = 8.;
 
 /// Milliseconds since the process started handling wheels. Tests pass their
@@ -3682,15 +3694,27 @@ pub(crate) fn wheel_clock_ms() -> u64 {
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
+/// `ScrollDelta::Pixels`: macOS trackpad and Magic Mouse (`hasPreciseScrollingDeltas`),
+/// and Wayland continuous scroll. A classic detent is [`ScrollDelta::Lines`].
+/// Windows reports precision touchpads as lines; those stay one gesture only
+/// while the notches themselves arrive inside [`WHEEL_GESTURE_TAIL_MS`].
+pub(crate) fn wheel_event_is_precise(event: &ScrollWheelEvent) -> bool {
+    matches!(event.delta, ScrollDelta::Pixels(_))
+}
+
 /// `true` when this event still belongs to the child.
 ///
-/// `can_move` is true when the child was not already at the edge in `delta`'s
-/// direction. That event starts (or continues) a gesture. An event that
-/// arrives already at the edge belongs to the child only while that gesture
-/// is still held.
+/// `can_move` means the child was not already at the edge, so this event's
+/// leftover stays here regardless of device. An event that arrives already
+/// at the edge belongs to the child only when it is still the same stream:
+/// a detent within [`WHEEL_GESTURE_TAIL_MS`] of the previous event, or a
+/// precise flick whose VS Code hold is still open (300ms, then 50ms once the
+/// child has been sitting on the edge). Finger-up on macOS is not the end of
+/// the flick; momentum events keep arriving as precise moves.
 fn wheel_gesture_keeps(
     gesture: &mut WheelGesture,
     can_move: bool,
+    precise: bool,
     delta: f32,
     now_ms: u64,
 ) -> bool {
@@ -3698,51 +3722,98 @@ fn wheel_gesture_keeps(
         *gesture = WheelGesture::default();
     }
     if can_move {
-        gesture.last_moved_ms = Some(now_ms);
-        gesture.previous_delta = None;
-        gesture.hold_until_ms = Some(now_ms.saturating_add(WHEEL_GESTURE_HOLD_MS));
+        arm_wheel_gesture(gesture, precise, now_ms);
         return true;
     }
-    if gesture.hold_until_ms.is_none() {
+    if !wheel_stream_continues(gesture, precise, now_ms) {
+        *gesture = WheelGesture::default();
         return false;
     }
     let long_after_move = gesture
         .last_moved_ms
         .is_some_and(|moved| now_ms.saturating_sub(moved) > WHEEL_GESTURE_NEW_AFTER_MS);
-    let surged = long_after_move
-        && gesture.previous_delta.is_some_and(|previous| {
-            previous != 0.
-                && ((delta < 0. && delta < previous - WHEEL_GESTURE_DELTA_BUMP)
-                    || (delta > 0. && delta > previous + WHEEL_GESTURE_DELTA_BUMP))
-        });
-    if surged {
+    // Only a precise flick uses the "stronger than the tail" escape. A line
+    // burst (a mouse notch stream, or a Windows precision touchpad) stays one
+    // scroll for as long as the notches keep arriving inside the tail gap.
+    if precise
+        && long_after_move
+        && gesture
+            .previous_delta
+            .is_some_and(|previous| same_direction_surge(previous, delta))
+    {
         *gesture = WheelGesture::default();
         return false;
     }
-    let extend = if long_after_move {
-        WHEEL_GESTURE_TAIL_MS
-    } else {
+    // A detent never earns the 300ms window. A precise flick does, until it
+    // has been on the edge long enough that only the rapid tail remains.
+    let extend = if precise && !long_after_move {
         WHEEL_GESTURE_HOLD_MS
+    } else {
+        WHEEL_GESTURE_TAIL_MS
     };
     gesture.previous_delta = Some(delta);
+    gesture.precise = precise;
+    gesture.last_event_ms = Some(now_ms);
     gesture.hold_until_ms = Some(now_ms.saturating_add(extend));
     true
+}
+
+fn arm_wheel_gesture(gesture: &mut WheelGesture, precise: bool, now_ms: u64) {
+    let hold = if precise {
+        WHEEL_GESTURE_HOLD_MS
+    } else {
+        WHEEL_GESTURE_TAIL_MS
+    };
+    gesture.last_moved_ms = Some(now_ms);
+    gesture.last_event_ms = Some(now_ms);
+    gesture.previous_delta = None;
+    gesture.precise = precise;
+    gesture.hold_until_ms = Some(now_ms.saturating_add(hold));
+}
+
+/// The hold is still open, and this event is close enough to be the same scroll.
+fn wheel_stream_continues(gesture: &WheelGesture, precise: bool, now_ms: u64) -> bool {
+    let Some(until) = gesture.hold_until_ms else {
+        return false;
+    };
+    if now_ms > until {
+        return false;
+    }
+    let Some(previous) = gesture.last_event_ms else {
+        return false;
+    };
+    if precise && gesture.precise {
+        return true;
+    }
+    now_ms.saturating_sub(previous) <= WHEEL_GESTURE_TAIL_MS
+}
+
+/// A new flick, not the decaying tail: same sign, and larger by more than
+/// [`WHEEL_GESTURE_DELTA_BUMP`]. A reversal is a different direction and is
+/// not this comparison.
+fn same_direction_surge(previous: f32, delta: f32) -> bool {
+    if previous == 0. || delta == 0. || previous.signum() != delta.signum() {
+        return false;
+    }
+    delta.abs() > previous.abs() + WHEEL_GESTURE_DELTA_BUMP
 }
 
 /// The leftover the parent should scroll.
 ///
 /// `split_residual` is what [`split_thinking_scroll`] would hand over for
 /// this event alone. It is `0` when the child had room, and the whole `delta`
-/// when the child was already at the edge. A gesture that started with room
-/// turns that leftover into `0` even after the child has reached the edge.
+/// when the child was already at the edge. [`wheel_gesture_keeps`] turns that
+/// leftover into `0` when the event is still the same precise stream or the
+/// same detent burst.
 pub(crate) fn residual_after_gesture(
     split_residual: Pixels,
     delta: Pixels,
+    precise: bool,
     gesture: &mut WheelGesture,
     now_ms: u64,
 ) -> Pixels {
     let can_move = split_residual == px(0.);
-    if wheel_gesture_keeps(gesture, can_move, f32::from(delta), now_ms) {
+    if wheel_gesture_keeps(gesture, can_move, precise, f32::from(delta), now_ms) {
         px(0.)
     } else {
         split_residual
@@ -8269,96 +8340,166 @@ mod tests {
         let notch = px(54.);
         let mut gesture = WheelGesture::default();
 
-        // Five pixels short of the top. This notch stops on the edge and
-        // starts the gesture.
+        // Five pixels short of the top. This detent stops on the edge.
+        // `false` is a line-mode wheel, the classic mouse notch.
         let (clamped, residual) = split_thinking_scroll(px(-5.), px(200.), notch);
         assert_eq!((clamped, residual), (px(0.), px(0.)));
         assert_eq!(
-            residual_after_gesture(residual, notch, &mut gesture, 0),
+            residual_after_gesture(residual, notch, false, &mut gesture, 0),
             px(0.)
         );
 
-        // The next notch arrives already at the top, still inside the same
-        // scroll. The leftover stays on the card.
+        // The next detent is already at the top, a tenth of a second later.
+        // That gap is a new scroll, so the parent receives it.
         let (_clamped, residual) = split_thinking_scroll(px(0.), px(200.), notch);
         assert_eq!(residual, notch);
         assert_eq!(
-            residual_after_gesture(residual, notch, &mut gesture, 100),
-            px(0.)
-        );
-
-        // That event extended the gesture. Once it has ended, a notch that
-        // starts at the top is leftover for the parent.
-        assert_eq!(
-            residual_after_gesture(notch, notch, &mut gesture, 401),
+            residual_after_gesture(residual, notch, false, &mut gesture, 100),
             notch
         );
 
-        // Landing on the edge and then pausing is the same rule: the next
-        // scroll starts at the top, so the parent receives it.
-        let mut paused = WheelGesture::default();
+        // Two notches closer than the tail gap are still one burst. A
+        // Windows precision touchpad is reported as line deltas at frame rate.
+        let mut burst = WheelGesture::default();
         assert_eq!(
-            residual_after_gesture(px(0.), notch, &mut paused, 0),
+            residual_after_gesture(px(0.), notch, false, &mut burst, 0),
             px(0.)
         );
         assert_eq!(
-            residual_after_gesture(notch, notch, &mut paused, 301),
-            notch
+            residual_after_gesture(notch, notch, false, &mut burst, 40),
+            px(0.)
         );
 
-        // The same scroll, heading for the bottom.
+        // The same rule, heading for the bottom.
         let mut down = WheelGesture::default();
         let (clamped, residual) = split_thinking_scroll(px(-195.), px(200.), -notch);
         assert_eq!((clamped, residual), (px(-200.), px(0.)));
         assert_eq!(
-            residual_after_gesture(residual, -notch, &mut down, 0),
+            residual_after_gesture(residual, -notch, false, &mut down, 0),
             px(0.)
         );
         let (_clamped, residual) = split_thinking_scroll(px(-200.), px(200.), -notch);
         assert_eq!(residual, -notch);
         assert_eq!(
-            residual_after_gesture(residual, -notch, &mut down, 100),
-            px(0.)
+            residual_after_gesture(residual, -notch, false, &mut down, 100),
+            -notch
         );
 
         // A fresh scroll that is already at the bottom hands its leftover over.
         let mut fresh = WheelGesture::default();
         assert_eq!(
-            residual_after_gesture(-notch, -notch, &mut fresh, 0),
+            residual_after_gesture(-notch, -notch, false, &mut fresh, 0),
             -notch
         );
 
-        // A card that cannot scroll never starts a gesture, so every wheel
-        // still reaches the parent.
+        // A card that cannot scroll never starts a gesture. A precise event
+        // a frame later must not latch either, or a trackpad would stick.
         let mut short = WheelGesture::default();
-        assert_eq!(residual_after_gesture(notch, notch, &mut short, 0), notch);
-        assert_eq!(residual_after_gesture(notch, notch, &mut short, 50), notch);
+        assert_eq!(
+            residual_after_gesture(notch, notch, false, &mut short, 0),
+            notch
+        );
+        assert_eq!(
+            residual_after_gesture(notch, notch, true, &mut short, 16),
+            notch
+        );
+    }
+
+    #[test]
+    fn a_precise_flick_keeps_momentum_until_the_tail_stops() {
+        let mut gesture = WheelGesture::default();
+        // The card could still move. Pixel deltas are a trackpad or Magic Mouse.
+        assert_eq!(
+            residual_after_gesture(px(0.), px(12.), true, &mut gesture, 0),
+            px(0.)
+        );
+        // 80ms is a new mouse notch, and still one coalesced macOS momentum event.
+        assert_eq!(
+            residual_after_gesture(px(8.), px(8.), true, &mut gesture, 80),
+            px(0.)
+        );
+        // Refresh the fresh hold so it is still open once the card has been
+        // sitting on the edge for more than 400ms.
+        assert_eq!(
+            residual_after_gesture(px(6.), px(6.), true, &mut gesture, 360),
+            px(0.)
+        );
+        // Same small delta: this is the tail, so the parent does not see it,
+        // and the hold shrinks to 50ms.
+        assert_eq!(
+            residual_after_gesture(px(4.), px(4.), true, &mut gesture, 420),
+            px(0.)
+        );
+        // The tail hold is 50ms. Once events stop arriving, the flick is over.
+        assert_eq!(
+            residual_after_gesture(px(4.), px(4.), true, &mut gesture, 480),
+            px(4.)
+        );
     }
 
     #[test]
     fn a_growing_delta_after_the_tail_starts_a_new_scroll() {
         let mut gesture = WheelGesture::default();
-        // The card could still move, so this scroll belongs to it.
+        // A precise flick. The card could still move, so this scroll belongs to it.
         assert_eq!(
-            residual_after_gesture(px(0.), px(10.), &mut gesture, 0),
+            residual_after_gesture(px(0.), px(10.), true, &mut gesture, 0),
             px(0.)
         );
-        // Still the same scroll once the card is at the edge.
+        // Still the same flick once the card is at the edge.
         assert_eq!(
-            residual_after_gesture(px(10.), px(10.), &mut gesture, 250),
+            residual_after_gesture(px(10.), px(10.), true, &mut gesture, 250),
             px(0.)
         );
         // The tail is still arriving and the delta did not grow, so the
         // parent still does not see it.
         assert_eq!(
-            residual_after_gesture(px(10.), px(10.), &mut gesture, 500),
+            residual_after_gesture(px(10.), px(10.), true, &mut gesture, 500),
             px(0.)
         );
-        // A larger delta this long after the card last moved is a new scroll
+        // A larger delta this long after the card last moved is a new flick
         // that started on the edge. The parent receives it.
         assert_eq!(
-            residual_after_gesture(px(20.), px(20.), &mut gesture, 520),
+            residual_after_gesture(px(20.), px(20.), true, &mut gesture, 520),
             px(20.)
+        );
+        // A reversal is not that comparison: the sign changed, so a still-open
+        // tail does not treat it as a stronger flick.
+        let mut reversed = WheelGesture::default();
+        assert_eq!(
+            residual_after_gesture(px(0.), px(10.), true, &mut reversed, 0),
+            px(0.)
+        );
+        assert_eq!(
+            residual_after_gesture(px(10.), px(10.), true, &mut reversed, 250),
+            px(0.)
+        );
+        assert_eq!(
+            residual_after_gesture(px(-30.), px(-30.), true, &mut reversed, 500),
+            px(0.)
+        );
+    }
+
+    #[test]
+    fn a_line_burst_stays_one_scroll_when_a_later_notch_is_larger() {
+        let mut gesture = WheelGesture::default();
+        assert_eq!(
+            residual_after_gesture(px(0.), px(10.), false, &mut gesture, 0),
+            px(0.)
+        );
+        // A frame-rate line stream, the way GPUI reports a Windows precision
+        // touchpad. Past 400ms the delta jumps; that must not split the scroll.
+        let mut now = 16;
+        while now <= 416 {
+            assert_eq!(
+                residual_after_gesture(px(10.), px(10.), false, &mut gesture, now),
+                px(0.),
+                "{now}"
+            );
+            now += 16;
+        }
+        assert_eq!(
+            residual_after_gesture(px(30.), px(30.), false, &mut gesture, now),
+            px(0.)
         );
     }
 
