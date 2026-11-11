@@ -3352,9 +3352,7 @@ impl OrbitApp {
     fn active_session_row(&self, rows: &[SideRow]) -> Option<usize> {
         let sessions = self.sidebar_sessions();
         let active = self.sidebar_active_path()?;
-        let session_ix = sessions
-            .iter()
-            .position(|session| session.path == active)?;
+        let session_ix = sessions.iter().position(|session| session.path == active)?;
         rows.iter()
             .position(|row| matches!(row, SideRow::Session(ix) if *ix == session_ix))
     }
@@ -3415,11 +3413,9 @@ impl OrbitApp {
         if sessions.len() < 2 {
             return;
         }
-        let current = self.sidebar_active_path().and_then(|path| {
-            sessions
-                .iter()
-                .position(|session| session.path == path)
-        });
+        let current = self
+            .sidebar_active_path()
+            .and_then(|path| sessions.iter().position(|session| session.path == path));
         let next = match current {
             Some(ix) => (ix as isize + direction).rem_euclid(sessions.len() as isize) as usize,
             None if direction > 0 => 0,

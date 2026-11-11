@@ -3778,11 +3778,11 @@ mod cancel_tests;
 #[cfg(test)]
 mod composer_draft_tests;
 #[cfg(test)]
-mod draft_sidebar_tests;
-#[cfg(test)]
 mod composer_layout_tests;
 #[cfg(test)]
 mod devicons_tests;
+#[cfg(test)]
+mod draft_sidebar_tests;
 #[cfg(test)]
 mod error_label_tests;
 #[cfg(test)]

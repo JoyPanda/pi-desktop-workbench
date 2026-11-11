@@ -161,9 +161,7 @@ fn an_unanswered_stop_takes_the_process_down(cx: &mut gpui::TestAppContext) {
 /// Pressing Stop again once the first request has been out long enough is the
 /// user saying "now": no second grace period, the process goes at once.
 #[gpui::test]
-fn a_second_stop_after_the_retry_window_does_not_wait_out_the_grace(
-    cx: &mut gpui::TestAppContext,
-) {
+fn a_second_stop_after_the_retry_window_does_not_wait_out_the_grace(cx: &mut gpui::TestAppContext) {
     let (app, _fake) = app_with_silent_pi(cx);
     cx.update(|cx| {
         app.update(cx, |app, cx| {
@@ -204,7 +202,10 @@ fn a_second_stop_inside_the_retry_window_keeps_waiting(cx: &mut gpui::TestAppCon
                 before,
                 "the second press is the same gesture and must not kill pi"
             );
-            assert!(app.is_stopping(), "the original request is still outstanding");
+            assert!(
+                app.is_stopping(),
+                "the original request is still outstanding"
+            );
         });
     });
 }

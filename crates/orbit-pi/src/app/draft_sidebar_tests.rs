@@ -26,8 +26,7 @@ impl KeepAlive {
             use std::os::unix::fs::PermissionsExt;
             let bin = dir.join("fake-pi");
             std::fs::write(&bin, "#!/bin/sh\nexec cat >/dev/null\n").expect("fake pi");
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod");
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         }
         #[cfg(windows)]
         {
@@ -67,12 +66,9 @@ fn adopt_alive(app: &mut OrbitApp, fake: &KeepAlive) {
         .current_workspace
         .clone()
         .unwrap_or_else(|| std::env::temp_dir());
-    let client = PiClient::spawn_with_bin(
-        fake.bin().to_str().expect("utf-8 path"),
-        &workspace,
-        None,
-    )
-    .expect("spawn keep-alive");
+    let client =
+        PiClient::spawn_with_bin(fake.bin().to_str().expect("utf-8 path"), &workspace, None)
+            .expect("spawn keep-alive");
     app.adopt_client(client);
 }
 
@@ -205,8 +201,7 @@ fn an_empty_draft_is_discarded_and_its_header_file_is_removed(cx: &mut gpui::Tes
             app.current_workspace = Some(cwd);
             app.current_session_path = Some(old.path.clone());
             adopt_alive(app, &fake);
-            app.input
-                .update(cx, |input, cx| input.set_text("stay", cx));
+            app.input.update(cx, |input, cx| input.set_text("stay", cx));
             app.on_new_session(&crate::NewSession, window, cx);
             app.switch_to_session(missing_session("elsewhere"), false, cx);
 
@@ -218,10 +213,8 @@ fn an_empty_draft_is_discarded_and_its_header_file_is_removed(cx: &mut gpui::Tes
             assert_eq!(app.pending_parks.len(), 1);
             assert!(app.pending_parks[0].discard);
 
-            let file = std::env::temp_dir().join(format!(
-                "orbit-draft-header-{}.jsonl",
-                std::process::id()
-            ));
+            let file = std::env::temp_dir()
+                .join(format!("orbit-draft-header-{}.jsonl", std::process::id()));
             std::fs::write(
                 &file,
                 "{\"type\":\"session\",\"id\":\"draft\",\"cwd\":\"/tmp\"}\n",
@@ -264,7 +257,10 @@ fn whitespace_is_empty_and_an_attachment_is_kept(cx: &mut gpui::TestAppContext) 
             });
             app.switch_to_session(missing_session("kept"), false, cx);
             assert_eq!(app.listed_drafts.len(), 1);
-            assert_eq!(app.listed_drafts[0].composer.as_ref().unwrap().files.len(), 1);
+            assert_eq!(
+                app.listed_drafts[0].composer.as_ref().unwrap().files.len(),
+                1
+            );
         });
     });
 }
@@ -290,7 +286,10 @@ fn history_back_does_not_open_a_discarded_draft(cx: &mut gpui::TestAppContext) {
             app.switch_to_session(missing_session("next"), false, cx);
 
             assert!(app.listed_drafts.is_empty());
-            assert!(app.session_history.iter().all(|session| session.draft.is_none()));
+            assert!(app
+                .session_history
+                .iter()
+                .all(|session| session.draft.is_none()));
             let stayed = app.current_session_path.clone();
             app.switch_to_session(draft, false, cx);
             assert_eq!(app.current_session_path, stayed);
@@ -357,7 +356,8 @@ fn a_sent_draft_drops_out_when_its_file_is_in_the_scan(cx: &mut gpui::TestAppCon
                 sent_title: Some("sent".into()),
             });
             let other = cwd.join("still-a-draft.jsonl");
-            app.sessions.push(info(other.to_str().expect("utf-8"), &cwd));
+            app.sessions
+                .push(info(other.to_str().expect("utf-8"), &cwd));
             app.listed_drafts.push(ListedDraft {
                 id: 10,
                 path: other,
@@ -419,8 +419,7 @@ fn an_unlisted_page_keeps_the_task_folder(cx: &mut gpui::TestAppContext) {
             app.current_workspace = None;
             app.current_session_path = None;
             app.current_draft_id = None;
-            app.input
-                .update(cx, |input, cx| input.set_text("kept", cx));
+            app.input.update(cx, |input, cx| input.set_text("kept", cx));
             app.save_composer_draft(cx);
             assert_eq!(app.listed_drafts.len(), 1);
             assert_eq!(

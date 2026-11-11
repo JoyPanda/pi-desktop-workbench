@@ -845,7 +845,8 @@ impl OrbitApp {
                 // the queued text first, because it was written first.
                 format!("{queued}\n\n{typed}")
             };
-            self.input.update(cx, |input, cx| input.set_text(restored, cx));
+            self.input
+                .update(cx, |input, cx| input.set_text(restored, cx));
         }
         self.restore_queue_on_clear = false;
         self.busy = false;
@@ -1282,7 +1283,8 @@ impl OrbitApp {
             return false;
         };
         crate::app::drafts::reuse_blank_draft(
-            sessions::canonical_workspace_path(&draft.cwd) == sessions::canonical_workspace_path(cwd),
+            sessions::canonical_workspace_path(&draft.cwd)
+                == sessions::canonical_workspace_path(cwd),
             true,
             draft.promoted,
             self.transcript.first_user_message().is_some(),
@@ -1302,10 +1304,7 @@ impl OrbitApp {
         self.prepare_new_task_shell(cx);
         let outgoing = self.settle_outgoing(cx);
         match outgoing {
-            Outgoing::Session
-            | Outgoing::Promoted {
-                path: Some(_), ..
-            } => {
+            Outgoing::Session | Outgoing::Promoted { path: Some(_), .. } => {
                 // A sent session already has its file. `new_session` on this
                 // idle process leaves that file on disk, the same way New
                 // behaves on an ordinary session.
@@ -1415,14 +1414,16 @@ impl OrbitApp {
         let composer = self.take_composer(cx);
         let has_user = self.transcript.first_user_message().is_some();
         if let Some(id) = self.current_draft_id.take() {
-            let bound_path = self.listed_drafts.iter().find(|draft| draft.id == id).and_then(
-                |draft| {
+            let bound_path = self
+                .listed_drafts
+                .iter()
+                .find(|draft| draft.id == id)
+                .and_then(|draft| {
                     draft
                         .bound
                         .then(|| draft.path.clone())
                         .filter(|path| !is_draft_placeholder(path))
-                },
-            );
+                });
             let fate = crate::app::drafts::settle_listed_draft(has_user, composer.is_none());
             match fate {
                 crate::app::drafts::DraftFate::Discard => {
@@ -1900,11 +1901,13 @@ impl OrbitApp {
             .find(|session| session.path == path)
             .cloned()
             .or_else(|| {
-                draft_id.and_then(|id| self.draft_session_info_for(id)).map(|mut info| {
-                    info.draft = None;
-                    info.path = path.clone();
-                    info
-                })
+                draft_id
+                    .and_then(|id| self.draft_session_info_for(id))
+                    .map(|mut info| {
+                        info.draft = None;
+                        info.path = path.clone();
+                        info
+                    })
             });
         if let Some(session) = session {
             self.switch_to_session(session, false, cx);
@@ -2038,7 +2041,6 @@ impl OrbitApp {
         }
         cx.notify();
     }
-
 
     /// Open the OS folder picker and start (or restart) the task in the
     /// selected directory. Used from the new-task page and the status bar.
@@ -2367,7 +2369,10 @@ impl OrbitApp {
     }
 
     pub(super) fn on_open_session(&mut self, session: SessionInfo, cx: &mut Context<Self>) {
-        if let Some(id) = session.draft.or_else(|| draft_id_from_placeholder(&session.path)) {
+        if let Some(id) = session
+            .draft
+            .or_else(|| draft_id_from_placeholder(&session.path))
+        {
             self.open_listed_draft(id, cx);
             return;
         }
