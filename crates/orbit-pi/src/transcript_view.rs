@@ -78,9 +78,8 @@ pub(crate) type ImageOpener = Rc<dyn Fn(Arc<Image>, &mut Window, &mut App)>;
 pub(crate) type ForkOpener = Rc<dyn Fn(usize, &mut Window, &mut App)>;
 
 /// The transcript content column's max width.
-/// Normal message content keeps this centered measure. Assistant tables
-/// break out to the transcript pane's width; their scroll viewport must not
-/// inherit this cap.
+/// Message content, including tables, keeps this centered measure. A wide
+/// table scrolls inside the column instead of growing into the pane margins.
 const CONTENT_MAX_WIDTH: f32 = 960.0;
 /// Attachment tiles and file chips stay compact. The typed prompt itself
 /// spans the reading column (see `render_user_bubble`).
@@ -601,7 +600,10 @@ impl TextSelection {
             return;
         };
         let key = self.blocks[index].key.clone();
-        let granularity = self.selection.as_ref().map(|selection| selection.granularity);
+        let granularity = self
+            .selection
+            .as_ref()
+            .map(|selection| selection.granularity);
         let Some(granularity) = granularity else {
             return;
         };
@@ -908,13 +910,19 @@ fn probe_offset(text: &str, offset: usize) -> usize {
     if offset < text.len() {
         return offset;
     }
-    text.char_indices().next_back().map(|(index, _)| index).unwrap_or(0)
+    text.char_indices()
+        .next_back()
+        .map(|(index, _)| index)
+        .unwrap_or(0)
 }
 
 /// The logical line around `offset`, excluding its trailing newline.
 fn logical_line_range(text: &str, offset: usize) -> Range<usize> {
     let offset = byte_boundary(text, offset);
-    let start = text[..offset].rfind('\n').map(|index| index + 1).unwrap_or(0);
+    let start = text[..offset]
+        .rfind('\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
     let end = text[offset..]
         .find('\n')
         .map(|index| offset + index)
@@ -1490,7 +1498,7 @@ struct RowPaint {
     fork_session: Option<ForkOpener>,
     search_hit: bool,
     search_active: bool,
-    /// Tables alone can extend beyond the centered message column.
+    /// Prose-column width tables must fit. Wide tables scroll inside it.
     table_breakout: TableBreakout,
 }
 
@@ -1568,7 +1576,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     let show_rail = user_turns.len() >= 2
         && view.main_width >= px(NAVIGATION_RAIL_MIN_MAIN_WIDTH)
         && scroller.is_scrollable();
-    let table_breakout = table_breakout_for(view.main_width, show_rail);
+    let table_breakout = table_breakout_for(view.main_width);
     // The one-time rail hint shows while the rail is up, until the reader
     // uses it (tick click or turn jump) or its TTL lapses. While it shows,
     // it takes the preview card's slot so the two never stack.
@@ -2392,7 +2400,6 @@ fn summary_card_body(markdown: &str, paint: &RowPaint) -> impl IntoElement {
                 let pad = f32::from(DynamicSpacing::Base12.px(&theme));
                 let inner = (paint.table_breakout.column_width - px(pad * 2. + 2.)).max(px(0.));
                 TableBreakout {
-                    max_width: inner,
                     column_width: inner,
                 }
             }),
@@ -6242,43 +6249,31 @@ fn parse_blocks_cached(text: &str) -> Rc<Vec<MdBlock>> {
     })
 }
 
-/// A table-only breakout from the unchanged, centered message column.
-/// Definite widths avoid remeasuring normal prose and activity cards against
-/// a wider ancestor. Relative positioning centers the wider table without
-/// negative layout margins affecting its siblings' intrinsic measurements.
+/// The reading column a table is fitted to.
+///
+/// A definite width keeps the scrollport from collapsing during GPUI's
+/// intrinsic pass. Tables stay inside this measure.
 #[derive(Clone, Copy)]
 struct TableBreakout {
-    /// Pane width a top-level table may occupy, including margins outside the
-    /// reading column. Columns are fitted to this, not to a character guess.
-    max_width: Pixels,
+    /// Width of the prose column, or a card's interior when the table is nested.
     column_width: Pixels,
 }
 
-/// The rail's gutter comes only out of spare space outside the reading
-/// column, so a wide table never makes that column narrower than prose.
-fn table_breakout_for(main_width: Pixels, show_rail: bool) -> TableBreakout {
-    let table_inset = if show_rail {
-        ((main_width - px(40. + CONTENT_MAX_WIDTH)) / 2.).clamp(
-            px(0.),
-            px(NAVIGATION_RAIL_LEFT + NAVIGATION_RAIL_WIDTH + NAVIGATION_RAIL_CONTENT_GAP - 20.),
-        )
-    } else {
-        px(0.)
-    };
+/// Column width for the transcript: the pane minus the row's horizontal
+/// padding, capped at the reading measure. The rail sits in the margin
+/// outside this column, so a table aligned with the prose covers no more of
+/// the rail than the prose already does.
+fn table_breakout_for(main_width: Pixels) -> TableBreakout {
     let available_width = (main_width - px(40.)).max(px(0.));
     let column_width = available_width.min(px(CONTENT_MAX_WIDTH));
-    TableBreakout {
-        max_width: (available_width - table_inset * 2.).max(column_width),
-        column_width,
-    }
+    TableBreakout { column_width }
 }
 
 /// Markdown body uses the theme's conversation measure. Spacing is graded by block pair rather
 /// than one uniform gap, so a heading reads as a section start, a list hugs
 /// the paragraph that introduces it, and consecutive paragraphs breathe.
 ///
-/// In the transcript, only tables escape the normal content column; the
-/// other blocks keep their existing measure. `collapsible` is false for live
+/// Tables use the same measure as the other blocks. `collapsible` is false for live
 /// rows — streaming code blocks
 /// never collapse out from under their own growing edge.
 #[allow(clippy::too_many_arguments)]
@@ -6320,7 +6315,7 @@ fn render_prose(
                     Block::Table { header, rows, .. } => Some(plan_table(
                         header,
                         rows,
-                        table_breakout.map(|breakout| f32::from(breakout.max_width)),
+                        table_breakout.map(|breakout| f32::from(breakout.column_width)),
                         theme,
                     )),
                     _ => None,
@@ -6328,17 +6323,16 @@ fn render_prose(
                 div()
                     .w_full()
                     .min_w_0()
-                    .when_some(table_breakout, |node, breakout| {
-                        if let Some(plan) = plan.as_ref() {
-                            // Small tables stay with the prose. Wider ones
-                            // extend equally into its margins, up to the pane.
-                            let width = px(plan.outer);
-                            let left = ((breakout.column_width - width) / 2.).min(px(0.));
-                            node.flex_none().w(width).relative().left(left)
-                        } else {
-                            node
-                        }
-                    })
+                    .when_some(
+                        plan.as_ref().filter(|_| table_breakout.is_some()),
+                        |node, plan| {
+                            // Definite px width: a percentage collapses to 0 during
+                            // GPUI's intrinsic pass on a narrow pane. `outer` is at
+                            // most the prose column, so a wide table scrolls inside
+                            // it. Short tables stay at their content width.
+                            node.w(px(plan.outer)).max_w_full()
+                        },
+                    )
                     .when(gap > 0.0, |node| node.mt(px(gap)))
                     .child(render_block(
                         &block.kind,
@@ -7660,6 +7654,7 @@ fn render_table(
         );
     }
     div()
+        .debug_selector(|| "md-table-frame".into())
         .w(px(plan.outer))
         .max_w_full()
         .min_w_0()
@@ -9930,7 +9925,15 @@ mod tests {
         let space = text.find(' ').unwrap();
         assert_eq!(word_range_at(text, space), space..space + 1);
 
-        for token in ["foo/bar", "a.b.c", "file_name.rs", "a--b", "a+b", "-x", "x-"] {
+        for token in [
+            "foo/bar",
+            "a.b.c",
+            "file_name.rs",
+            "a--b",
+            "a+b",
+            "-x",
+            "x-",
+        ] {
             assert_eq!(word_range_at(token, 0), 0..token.len(), "{token}");
             let last = token.char_indices().next_back().unwrap().0;
             assert_eq!(word_range_at(token, last), 0..token.len(), "{token}");
@@ -9967,10 +9970,7 @@ mod tests {
         assert_eq!(logical_line_range(wrapped, probe), 0..wrapped.len());
 
         let han = "行数";
-        assert_eq!(
-            unit_probe(han, han.len(), true),
-            han.find('数').unwrap()
-        );
+        assert_eq!(unit_probe(han, han.len(), true), han.find('数').unwrap());
         assert_eq!(unit_probe(han, 0, true), 0);
     }
 
@@ -10060,10 +10060,7 @@ mod tests {
         state.retarget_unit(0, word_range_at(text, 4));
         assert_eq!(state.selected_text().as_deref(), Some("unity-codegraph"));
         state.retarget_unit(0, pi.clone());
-        assert_eq!(
-            state.selected_text().as_deref(),
-            Some("unity-codegraph pi")
-        );
+        assert_eq!(state.selected_text().as_deref(), Some("unity-codegraph pi"));
 
         // Dragging back from `pi` takes the start of the earlier word.
         let mut state = selection_over(&[text], (0, pi.start), (0, pi.end));
@@ -10077,10 +10074,7 @@ mod tests {
             });
         }
         state.retarget_unit(0, first);
-        assert_eq!(
-            state.selected_text().as_deref(),
-            Some("unity-codegraph pi")
-        );
+        assert_eq!(state.selected_text().as_deref(), Some("unity-codegraph pi"));
 
         // Across blocks the middle block is copied whole.
         let mut state = selection_over(
@@ -10833,7 +10827,7 @@ mod tests {
             }
             let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
             let pad = f32::from(DynamicSpacing::Base12.px(&theme));
-            let available = f32::from(table_breakout_for(px(width), false).max_width);
+            let available = f32::from(table_breakout_for(px(width)).column_width);
             let short = plan_table(
                 &[
                     RichText::from_plain("One"),
@@ -10872,22 +10866,19 @@ mod tests {
                 bounds("Reservations").right() - bounds("Skill").left(),
                 px(wide.cols.iter().sum::<f32>() - 2.0 * pad)
             );
-            if width > CONTENT_MAX_WIDTH + 40. {
-                assert!(bounds("Skill").left() < paragraph.left());
-                assert!(bounds("Reservations").right() > paragraph.right());
-                let inset = px(pad + 1.);
-                let table_left = bounds("Skill").left() - inset;
-                let table_right = bounds("Reservations").right() + inset;
-                assert_eq!(table_right - table_left, px(wide.outer));
-                assert_eq!(table_left, (px(width) - px(wide.outer)) / 2.);
-            }
+            // A wide table fills the prose column and stays inside it.
+            let inset = px(pad + 1.);
+            let table_left = bounds("Skill").left() - inset;
+            let table_right = bounds("Reservations").right() + inset;
+            assert_eq!(table_right - table_left, px(wide.outer));
+            assert!(table_left >= paragraph.left());
+            assert!(table_right <= paragraph.right());
         }
     }
 
-    /// Exercise the whole virtualized row, not just an isolated table: the
-    /// old row-level width cap hid the breakout even when its cells were wide.
+    /// A wide table stays inside the prose column on both wide and narrow panes.
     #[gpui::test]
-    fn transcript_table_viewport_breaks_out_of_the_prose_strip(cx: &mut gpui::TestAppContext) {
+    fn table_stays_inside_the_prose_column(cx: &mut gpui::TestAppContext) {
         let cx = cx.add_empty_window();
         cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
         let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
@@ -10959,26 +10950,79 @@ mod tests {
             assert_eq!(before.left(), after.left());
             assert_eq!(before.size.width, after.size.width);
             assert!(after.top() > last.bottom());
-            if width > CONTENT_MAX_WIDTH + 40. {
-                assert!(
-                    first.left() < before.left(),
-                    "table extends into the left margin"
-                );
-                assert!(
-                    last.right() > before.right(),
-                    "table extends into the right margin"
-                );
-                assert!(
-                    last.right() < px(width),
-                    "all three columns are visible without scrolling"
-                );
-            } else {
-                assert!(
-                    first.left() > before.left(),
-                    "narrow panes contain the table viewport"
-                );
-            }
+            assert!(
+                first.left() > before.left(),
+                "table stays inside the prose column"
+            );
+            assert!(
+                last.right() < before.right(),
+                "table stays inside the prose column"
+            );
         }
+    }
+
+    /// When every column is already at its floor and the floors still exceed
+    /// the prose column, the frame stays inside the column and the extra
+    /// columns are clipped by the table's own scrollport.
+    #[gpui::test]
+    fn wide_table_scrolls_inside_the_prose_column(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+        let messages = test_messages();
+        let before = "Before the wide table, prose keeps its reading width. "
+            .repeat(6)
+            .trim()
+            .to_owned();
+        let after = "After the wide table, prose returns to the same reading width. "
+            .repeat(6)
+            .trim()
+            .to_owned();
+        let headers: Vec<String> = (0..14).map(|col| format!("H{col:02}")).collect();
+        let header_row = headers.join(" | ");
+        let rule = " --- |".repeat(14);
+        let cells = " x |".repeat(14);
+        messages.borrow_mut()[0].steps[0].text =
+            format!("{before}\n\n| {header_row} |\n|{rule}\n|{cells}\n\n{after}");
+        let scroller = MessageScrollerState::new(messages.borrow().len());
+        let view = cx.update(|_, cx| {
+            cx.new(|_| SelectTestView {
+                messages: messages.clone(),
+                state: state.clone(),
+                scroller,
+                main_width: px(1400.),
+                open_work: false,
+                live: false,
+            })
+        });
+        cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(1400.), px(1600.)),
+            |_, _| view.clone(),
+        );
+        let selection = state.borrow();
+        let bounds = |text: &str| {
+            selection
+                .blocks
+                .iter()
+                .find(|block| block.text.as_ref() == text)
+                .unwrap()
+                .bounds
+        };
+        let before = bounds(&before);
+        let after = bounds(&after);
+        let frame = cx
+            .debug_bounds("md-table-frame")
+            .expect("table frame is visible");
+        assert_eq!(before.size.width, px(CONTENT_MAX_WIDTH.min(1400. - 40.)));
+        assert_eq!(before.left(), after.left());
+        assert_eq!(before.size.width, after.size.width);
+        assert!(frame.left() >= before.left());
+        assert!(frame.right() <= before.right());
+        assert!(
+            bounds("H13").right() > frame.right(),
+            "the last column is clipped inside the table, not by growing the frame"
+        );
     }
 
     #[gpui::test]
