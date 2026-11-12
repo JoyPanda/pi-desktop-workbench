@@ -60,6 +60,7 @@ mod composer_send;
 mod context_meter;
 mod custom_ui;
 mod dialog;
+mod diff_select;
 mod diff_view;
 mod dither;
 mod explorer;

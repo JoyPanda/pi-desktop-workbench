@@ -92,6 +92,10 @@ pub struct ListScrollEvent {
 
     /// Whether the list has been scrolled.
     pub is_scrolled: bool,
+
+    /// Pixels between the viewport's bottom and the end of the content.
+    /// Zero when the reader is on the tail, including when the content fits.
+    pub offset_from_bottom: Pixels,
 }
 
 /// The sizing behavior to apply during layout.
@@ -527,6 +531,7 @@ impl StateInner {
                     visible_range,
                     count: self.items.summary().count,
                     is_scrolled: self.logical_scroll_top.is_some(),
+                    offset_from_bottom: scroll_max - new_scroll_top,
                 },
                 window,
                 cx,

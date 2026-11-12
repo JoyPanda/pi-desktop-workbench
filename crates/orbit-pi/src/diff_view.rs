@@ -3,18 +3,25 @@
 //!
 //! Extracted from the Review pane so the pane's diff and the Review page's
 //! per-file preview render identically. The pane still owns its virtualized
-//! list and gap expansion; this module owns the row vocabulary, which is why
-//! it has no state and takes only a [`Theme`].
+//! list and gap expansion; this module owns the row vocabulary. Code rows
+//! also register their layout with the pane's read-only selection.
+
+use std::ops::Range;
+use std::rc::Rc;
 
 use gpui::{
-    div, prelude::*, px, AnyElement, Div, Font, FontFeatures, FontStyle, FontWeight, Hsla, Pixels,
-    SharedString, StyledText, TextRun, Window,
+    div, prelude::*, px, AnyElement, Bounds, CursorStyle, Div, Element, ElementId, Font,
+    FontFeatures, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla,
+    InspectorElementId, IntoElement, LayoutId, Pixels, SharedString, StyledText, TextLayout,
+    TextRun, Window,
 };
 
 use crate::app::{file_glyph, icon};
+use crate::diff_select::{clip_to_mask, DiffSide, DiffTextState};
 use crate::review::{self, LineKind};
 use crate::theme::tokens::{DynamicSpacing, IconSize, TextSize};
 use crate::theme::{self, Theme, ThemeMode};
+use crate::transcript_view::highlight_runs;
 
 /// Review diff row metrics, shared by every surface that paints rows.
 pub const DIFF_TEXT_SIZE: f32 = 12.5;
@@ -182,8 +189,7 @@ pub fn render_section_header(
         )
 }
 
-pub fn render_hunk_header(content: &str, theme: Theme, wrap: bool) -> AnyElement {
-    let gutter_w = diff_gutter_width();
+pub fn render_hunk_header(content: &str, theme: Theme, wrap: bool, gutter_w: Pixels) -> AnyElement {
     div()
         .min_h(px(REVIEW_HUNK_HEIGHT))
         .w_full()
@@ -195,7 +201,7 @@ pub fn render_hunk_header(content: &str, theme: Theme, wrap: bool) -> AnyElement
         .text_color(theme.text_muted)
         .child(
             div()
-                .w(px(gutter_w))
+                .w(gutter_w)
                 .min_h(px(REVIEW_HUNK_HEIGHT))
                 .flex_none()
                 .border_r_1()
@@ -217,8 +223,7 @@ pub fn render_hunk_header(content: &str, theme: Theme, wrap: bool) -> AnyElement
         .into_any_element()
 }
 
-pub fn render_meta(content: &str, theme: Theme, wrap: bool) -> AnyElement {
-    let gutter_w = diff_gutter_width();
+pub fn render_meta(content: &str, theme: Theme, wrap: bool, gutter_w: Pixels) -> AnyElement {
     div()
         .min_h(px(REVIEW_HUNK_HEIGHT))
         .w_full()
@@ -228,12 +233,7 @@ pub fn render_meta(content: &str, theme: Theme, wrap: bool) -> AnyElement {
         .text_size(theme.code_px(DIFF_TEXT_SIZE))
         .line_height(theme.code_px(16.))
         .text_color(theme.text_muted)
-        .child(
-            div()
-                .w(px(gutter_w))
-                .min_h(px(REVIEW_HUNK_HEIGHT))
-                .flex_none(),
-        )
+        .child(div().w(gutter_w).min_h(px(REVIEW_HUNK_HEIGHT)).flex_none())
         .child(
             div()
                 .min_w_0()
@@ -248,10 +248,15 @@ pub fn render_meta(content: &str, theme: Theme, wrap: bool) -> AnyElement {
         .into_any_element()
 }
 
-/// The gutter of one diff row. Shared so a surface that sizes its own
-/// unwrapped rows can add the same chrome the painter does.
-pub fn diff_gutter_width() -> f32 {
-    (DIFF_TEXT_SIZE * 3. + 14.).round()
+/// The gutter of one diff row at the default editor size and three digits.
+/// Wider numbers and a larger editor font grow past this; they never shrink it.
+pub const DIFF_GUTTER_MIN_WIDTH: f32 = (DIFF_TEXT_SIZE * 3. + 14.).round();
+
+/// Gutter width for `digits` at the measured monospace advance. The fixed
+/// padding matches the historical `+ 14` and the 9px inset the row paints.
+pub fn diff_gutter_width(cell: Pixels, digits: usize) -> Pixels {
+    let digits = digits.max(1) as f32;
+    (cell * digits + px(14.)).max(px(DIFF_GUTTER_MIN_WIDTH))
 }
 
 /// The advance of one monospace cell at the diff font, used to give
@@ -275,7 +280,14 @@ fn diff_row_height() -> f32 {
 /// number, falling back to the old one) and syntax-coloured code. `wrap`
 /// false lets the row run its natural width; the surface that owns the list
 /// then pans horizontally.
-pub fn render_code_row(line: &review::Line, theme: Theme, wrap: bool) -> AnyElement {
+pub fn render_code_row(
+    line: &review::Line,
+    line_index: usize,
+    theme: Theme,
+    wrap: bool,
+    gutter_w: Pixels,
+    text: &DiffTextState,
+) -> AnyElement {
     let row_height = diff_row_height();
     let (body_bg, gutter_bg, edge, number_color) = match line.kind {
         LineKind::Addition => (
@@ -294,7 +306,7 @@ pub fn render_code_row(line: &review::Line, theme: Theme, wrap: bool) -> AnyElem
     };
     let shown_line = line.new_line.or(line.old_line);
     let number = shown_line.map(|n| n.to_string()).unwrap_or_default();
-    let content = code_text(line, theme);
+    let content = selectable_line(line, line_index, DiffSide::Unified, theme, text);
     div()
         .w_full()
         .min_w_0()
@@ -306,7 +318,7 @@ pub fn render_code_row(line: &review::Line, theme: Theme, wrap: bool) -> AnyElem
         .when_some(edge, |row, edge| row.border_l_2().border_color(edge))
         .child(
             div()
-                .w(px(diff_gutter_width()))
+                .w(gutter_w)
                 .min_h(px(row_height))
                 .flex_none()
                 .pr(px(9.))
@@ -377,41 +389,77 @@ impl SplitPairing {
 /// One side-by-side row: the old side's line in the left half, the new
 /// side's in the right. `None` paints the filler the opposite side leaves.
 /// A paired deletion/addition rides one row; context rides both halves.
+///
+/// `text_scroll` shifts unwrapped code inside each half. The halves
+/// themselves stay put, so both columns remain on screen.
 pub fn render_split_row(
-    left: Option<&review::Line>,
-    right: Option<&review::Line>,
+    left: Option<(&review::Line, usize)>,
+    right: Option<(&review::Line, usize)>,
     theme: Theme,
     wrap: bool,
+    gutter_w: Pixels,
+    text_scroll: Pixels,
+    text: &DiffTextState,
 ) -> AnyElement {
     let row_height = diff_row_height();
     div()
         .w_full()
         .min_w_0()
+        .overflow_hidden()
         .min_h(px(row_height))
         .flex()
         .font_family(theme::code_font_family())
         .text_size(theme.code_px(DIFF_TEXT_SIZE))
         .line_height(theme.code_px(16.))
-        .child(split_half(left, true, theme, wrap, row_height))
+        .child(split_half(
+            left,
+            DiffSide::Old,
+            theme,
+            wrap,
+            row_height,
+            gutter_w,
+            text_scroll,
+            text,
+        ))
         .child(div().w(px(1.)).flex_none().bg(theme.border))
-        .child(split_half(right, false, theme, wrap, row_height))
+        .child(split_half(
+            right,
+            DiffSide::New,
+            theme,
+            wrap,
+            row_height,
+            gutter_w,
+            text_scroll,
+            text,
+        ))
         .into_any_element()
 }
 
 fn split_half(
-    line: Option<&review::Line>,
-    old_side: bool,
+    line: Option<(&review::Line, usize)>,
+    side: DiffSide,
     theme: Theme,
     wrap: bool,
     row_height: f32,
+    gutter_w: Pixels,
+    text_scroll: Pixels,
+    text: &DiffTextState,
 ) -> AnyElement {
-    let Some(line) = line else {
-        return div()
-            .flex_1()
-            .min_w_0()
-            .min_h(px(row_height))
-            .bg(theme.overlay)
-            .into_any_element();
+    // Cap each half at half the row. A nowrap line is wider than the pane;
+    // without the cap its min-content width pushes the other column off screen.
+    let frame = div()
+        .flex_1()
+        .min_w_0()
+        .max_w(gpui::relative(0.5))
+        .overflow_hidden()
+        .min_h(px(row_height))
+        .debug_selector(move || match side {
+            DiffSide::Old => "diff-split-old".to_string(),
+            DiffSide::New => "diff-split-new".to_string(),
+            DiffSide::Unified => "diff-split-unified".to_string(),
+        });
+    let Some((line, line_index)) = line else {
+        return frame.bg(theme.overlay).into_any_element();
     };
     let (body_bg, gutter_bg, number_color) = match line.kind {
         LineKind::Addition => (
@@ -426,20 +474,34 @@ fn split_half(
         ),
         _ => (None, None, theme.text_muted),
     };
-    let shown_line = if old_side {
+    let shown_line = if side == DiffSide::Old {
         line.old_line
     } else {
         line.new_line
     };
     let number = shown_line.map(|n| n.to_string()).unwrap_or_default();
-    div()
-        .flex_1()
-        .min_w_0()
+    let code = selectable_line(line, line_index, side, theme, text);
+    // The scroll shift sits on its own box so a nowrap line can slide under
+    // the clip. Wrapped text stays a direct child: an extra box would size
+    // to the unwrapped line and the words would never wrap.
+    let body = div()
         .min_h(px(row_height))
+        .min_w_0()
+        .flex_1()
+        .px(DynamicSpacing::Base12.px(&theme))
+        .overflow_hidden()
+        .when_some(body_bg, |body, bg| body.bg(bg));
+    let body = if wrap {
+        body.whitespace_normal().child(code)
+    } else {
+        body.whitespace_nowrap()
+            .child(div().left(text_scroll).child(code))
+    };
+    frame
         .flex()
         .child(
             div()
-                .w(px(diff_gutter_width()))
+                .w(gutter_w)
                 .min_h(px(row_height))
                 .flex_none()
                 .pr(px(9.))
@@ -449,18 +511,7 @@ fn split_half(
                 .when_some(gutter_bg, |gutter, bg| gutter.bg(bg))
                 .child(number),
         )
-        .child(
-            div()
-                .min_h(px(row_height))
-                .min_w_0()
-                .flex_1()
-                .px(DynamicSpacing::Base12.px(&theme))
-                .overflow_hidden()
-                .when(wrap, |body| body.whitespace_normal())
-                .when(!wrap, |body| body.whitespace_nowrap())
-                .when_some(body_bg, |body, bg| body.bg(bg))
-                .child(code_text(line, theme)),
-        )
+        .child(body)
         .into_any_element()
 }
 
@@ -480,8 +531,25 @@ fn gutter_wash(theme: Theme) -> f32 {
     }
 }
 
+fn selectable_line(
+    line: &review::Line,
+    line_index: usize,
+    side: DiffSide,
+    theme: Theme,
+    text: &DiffTextState,
+) -> SelectableDiffText {
+    let highlight = text.borrow().highlight(line_index, side, &line.content);
+    SelectableDiffText {
+        line_index,
+        side,
+        plain: line.content.clone(),
+        text: code_text(line, theme, highlight),
+        state: Rc::clone(text),
+    }
+}
+
 /// Build syntax-colored text for one diff line.
-fn code_text(line: &review::Line, theme: Theme) -> StyledText {
+fn code_text(line: &review::Line, theme: Theme, highlight: Option<Range<usize>>) -> StyledText {
     let base = theme.text_secondary;
     let font = mono_font();
     let mut runs: Vec<TextRun> = Vec::new();
@@ -503,7 +571,98 @@ fn code_text(line: &review::Line, theme: Theme) -> StyledText {
     if runs.is_empty() {
         runs.push(run(line.content.len(), base, &font));
     }
+    let runs = highlight_runs(runs, highlight, selection_color(theme));
     StyledText::new(line.content.clone()).with_runs(runs)
+}
+
+fn selection_color(theme: Theme) -> Hsla {
+    theme.accent.opacity(if theme.mode == ThemeMode::Dark {
+        0.30
+    } else {
+        0.20
+    })
+}
+
+/// Syntax-coloured diff text that registers itself for hit-testing. It is not
+/// an input: the pane only reads the layout back to place a selection.
+struct SelectableDiffText {
+    line_index: usize,
+    side: DiffSide,
+    plain: String,
+    text: StyledText,
+    state: DiffTextState,
+}
+
+impl Element for SelectableDiffText {
+    type RequestLayoutState = ();
+    type PrepaintState = (Hitbox, TextLayout);
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> (LayoutId, ()) {
+        self.text.request_layout(None, inspector_id, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) -> (Hitbox, TextLayout) {
+        self.text
+            .prepaint(None, inspector_id, bounds, &mut (), window, cx);
+        let layout = self.text.layout().clone();
+        let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        (hitbox, layout)
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        (hitbox, layout): &mut (Hitbox, TextLayout),
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        self.text
+            .paint(None, inspector_id, bounds, &mut (), &mut (), window, cx);
+        let visible = clip_to_mask(bounds, &window.content_mask());
+        self.state.borrow_mut().register(
+            self.line_index,
+            self.side,
+            self.plain.clone(),
+            layout.clone(),
+            visible,
+        );
+        if hitbox.is_hovered(window) {
+            window.set_cursor_style(CursorStyle::IBeam, hitbox);
+        }
+    }
+}
+
+impl IntoElement for SelectableDiffText {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
 }
 
 fn run(len: usize, color: Hsla, font: &Font) -> TextRun {
@@ -530,6 +689,20 @@ fn mono_font() -> Font {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gutter_width_never_shrinks_and_grows_past_three_digits() {
+        let cell = px(8.);
+        assert_eq!(
+            diff_gutter_width(cell, 3),
+            px(DIFF_GUTTER_MIN_WIDTH),
+            "three digits stay on the historical slot"
+        );
+        assert_eq!(diff_gutter_width(cell, 1), px(DIFF_GUTTER_MIN_WIDTH));
+        let six = diff_gutter_width(cell, 6);
+        assert!(six > px(DIFF_GUTTER_MIN_WIDTH));
+        assert_eq!(six, px(8. * 6. + 14.));
+    }
 
     fn line(kind: LineKind, content: &str) -> review::Line {
         review::Line {

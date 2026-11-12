@@ -936,6 +936,7 @@ impl Render for OrbitApp {
                         .h(px(TOP_BAR_H))
                         .flex_none()
                         .w_full()
+                        .bg(theme.surface)
                         // Hairline under the body title bar, the same ink as
                         // the sidebar's right edge, across the whole column.
                         .border_b_1()

@@ -19,9 +19,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, FontWeight, ListAlignment,
-    ListOffset, ListState, MouseDownEvent, Pixels, Render, ScrollHandle,
-    StatefulInteractiveElement, Window,
+    anchored, canvas, deferred, div, prelude::*, px, AnyElement, ClickEvent, ClipboardItem,
+    Context, Entity, FontWeight, HitboxBehavior, ListAlignment, ListOffset, ListState, MouseButton,
+    MouseDownEvent, Pixels, Render, ScrollHandle, StatefulInteractiveElement, Window,
 };
 
 use crate::app::{
@@ -30,6 +30,7 @@ use crate::app::{
     TipExt, BUTTON_GROUP, PRESS_DIM,
 };
 use crate::composer::ComposerInput;
+use crate::diff_select::{register_diff_pointer, DiffTextSelection, DiffTextState};
 use crate::diff_view::{
     diff_gutter_width, render_code_row, render_file_header, render_hunk_header, render_meta,
     render_section_header, render_split_row, SplitPairing,
@@ -57,6 +58,22 @@ const TREE_MIN_PANE_W: f32 = 440.;
 /// Directory tree column width range.
 const TREE_MIN_COL_W: f32 = 180.;
 const TREE_MAX_COL_W: f32 = 240.;
+fn snapshot_fingerprint(snapshot: &Snapshot) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    snapshot.lines.len().hash(&mut hasher);
+    for line in &snapshot.lines {
+        line.file_index.hash(&mut hasher);
+        line.old_line.hash(&mut hasher);
+        line.new_line.hash(&mut hasher);
+        line.content.hash(&mut hasher);
+        std::mem::discriminant(&line.kind).hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// Review diff row metrics. The row painters live in [`crate::diff_view`], so
 /// the pane and the Review page's preview share them; only the gap height is
 /// the pane's alone (the page's preview lists whole files).
@@ -144,6 +161,13 @@ pub struct SidePane {
     split_pairing: SplitPairing,
     /// Widest row in monospace cells, for an unwrapped row's scroll range.
     content_cells: usize,
+    /// Digits in the widest line number, including lines still hidden in a gap.
+    gutter_digits: usize,
+    /// Read-only selection over the code rows. Shared with each row's paint.
+    diff_text: DiffTextState,
+    /// Fingerprint of the snapshot the selection was made against. A refresh
+    /// that paints the same lines keeps the selection.
+    diff_fingerprint: Option<u64>,
     /// The window width Full width expands to — set by the app every render,
     /// so it tracks a sidebar toggle or a window resize.
     available_width: Pixels,
@@ -222,6 +246,9 @@ impl SidePane {
             collapsed_files: HashSet::new(),
             split_pairing: SplitPairing::default(),
             content_cells: 0,
+            gutter_digits: 1,
+            diff_text: DiffTextSelection::state(),
+            diff_fingerprint: None,
             tree_open: true,
             tree_filter,
             tree_list: ListState::new(0, ListAlignment::Top, px(200.)),
@@ -416,9 +443,13 @@ impl SidePane {
         self.apply_width(width, cx);
     }
 
-    /// Toggle wrapped and unwrapped diff rows.
+    /// Toggle wrapped and unwrapped diff rows. Heights change, and an
+    /// unwrapped side-by-side view scrolls inside the columns, so the list
+    /// remeasures and the horizontal pan starts at the left edge.
     fn toggle_wrap(&mut self, cx: &mut Context<Self>) {
         self.wrap = !self.wrap;
+        self.reset_horizontal_scroll();
+        self.remeasure_diff_rows();
         cx.notify();
     }
 
@@ -426,8 +457,17 @@ impl SidePane {
     /// change, so the list must re-measure; the reader keeps their line.
     fn toggle_split(&mut self, cx: &mut Context<Self>) {
         self.split = !self.split;
+        self.clear_diff_selection();
+        self.reset_horizontal_scroll();
         self.remeasure_diff_rows();
         cx.notify();
+    }
+
+    /// Drop a leftover horizontal pan. The vertical component belongs to the
+    /// same handle but the list owns vertical scrolling, so it stays put.
+    fn reset_horizontal_scroll(&self) {
+        let y = self.h_scroll.offset().y;
+        self.h_scroll.set_offset(gpui::point(px(0.), y));
     }
 
     /// Collapse every changed file to its header, or expand them all back.
@@ -491,8 +531,14 @@ impl SidePane {
     /// unified rows pair into side-by-side ones.
     fn rebuild_view_metrics(&mut self) {
         match self.review.as_ref() {
-            Some(review) => self.content_cells = review.max_content_cells(),
-            None => self.content_cells = 0,
+            Some(review) => {
+                self.content_cells = review.max_content_cells();
+                self.gutter_digits = review.line_number_digits();
+            }
+            None => {
+                self.content_cells = 0;
+                self.gutter_digits = 1;
+            }
         }
         self.rebuild_split_pairing();
     }
@@ -593,6 +639,7 @@ impl SidePane {
         }
         self.open = false;
         self.source_menu_open = false;
+        self.clear_diff_selection();
         cx.notify();
     }
 
@@ -772,6 +819,11 @@ impl SidePane {
     }
 
     fn apply_snapshot(&mut self, snapshot: Snapshot) {
+        let fingerprint = snapshot_fingerprint(&snapshot);
+        if self.diff_fingerprint != Some(fingerprint) {
+            self.clear_diff_selection();
+            self.diff_fingerprint = Some(fingerprint);
+        }
         let previous_dirs = self.review.as_ref().map_or_else(HashSet::new, |snapshot| {
             review::directory_paths(&snapshot.files)
         });
@@ -911,6 +963,8 @@ impl SidePane {
 
     /// Drop the rendered diff + tree so a source change paints a fresh load.
     fn clear_diff(&mut self) {
+        self.clear_diff_selection();
+        self.diff_fingerprint = None;
         self.selected_file = None;
         self.tree_cursor = None;
         self.review = None;
@@ -1461,20 +1515,39 @@ impl SidePane {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let entity = cx.entity().downgrade();
-        // Unwrapped rows want their natural width. The list gets a minimum
-        // equal to the widest row and a scroll container lets the pointer pan
-        // it; the file header is counter-shifted by the pan so its name and
-        // counts stay fixed at the viewport's edges (see `pinned_row`), and
-        // the sticky header sits outside the scroller and never pans.
+        // Unwrapped unified rows want their natural width. The list gets a
+        // minimum equal to the widest row and a scroll container lets the
+        // pointer pan it; the file header is counter-shifted by the pan so
+        // its name and counts stay fixed at the viewport's edges (see
+        // `pinned_row`), and the sticky header sits outside the scroller.
+        // Side-by-side must not use that row width: two full lines park the
+        // right column past the viewport. The list is only as wide as one
+        // column's overflow past the pane, and each row is pinned to the
+        // viewport so the columns stay put while the text slides inside them.
+        let viewport = self.row_viewport();
         let min_w = if self.wrap {
+            px(0.)
+        } else if self.split && viewport > px(0.) {
+            self.split_unwrapped_scroll_width(viewport, window, theme)
+        } else if self.split {
             px(0.)
         } else {
             self.unwrapped_content_width(window, theme)
         };
+        let gutter_w = self.gutter_width(window, theme);
+        let text_scroll = if self.split && !self.wrap {
+            self.h_scroll.offset().x
+        } else {
+            px(0.)
+        };
         let list_el = gpui::list(self.diff_list.clone(), move |index, _window, cx| {
             entity
                 .upgrade()
-                .map(|entity| entity.update(cx, |this, cx| this.render_diff_line(index, cx)))
+                .map(|entity| {
+                    entity.update(cx, |this, cx| {
+                        this.render_diff_line(index, gutter_w, text_scroll, cx)
+                    })
+                })
                 .unwrap_or_else(|| div().into_any_element())
         })
         .h_full()
@@ -1493,6 +1566,24 @@ impl SidePane {
         };
 
         let sticky = self.render_sticky_header(&snapshot, theme, cx);
+        let selection = self.diff_text.clone();
+        let pointer = canvas(
+            {
+                let selection = selection.clone();
+                move |bounds, window, _| {
+                    // Prepaint runs before any row paints, so last frame's
+                    // bounds cannot be hit after a scroll.
+                    selection.borrow_mut().clear_blocks();
+                    window.insert_hitbox(bounds, HitboxBehavior::Normal)
+                }
+            },
+            move |bounds, hitbox, window, _| {
+                register_diff_pointer(selection, bounds, hitbox, window);
+            },
+        )
+        .absolute()
+        .inset_0()
+        .size_full();
         div()
             .flex_1()
             .min_h_0()
@@ -1500,8 +1591,95 @@ impl SidePane {
             .relative()
             .overflow_hidden()
             .child(rows)
+            .child(pointer)
+            // Sticky rows are later siblings and occlude, so a press on a
+            // pinned header does not start a selection on the code beneath.
             .children(sticky)
+            .children(self.render_diff_copy_menu(theme))
             .into_any_element()
+    }
+
+    /// Gutter width for the current snapshot at this window's code font.
+    fn gutter_width(&self, window: &Window, theme: Theme) -> Pixels {
+        let cell = crate::diff_view::code_cell_width(window, &theme);
+        diff_gutter_width(cell, self.gutter_digits)
+    }
+
+    /// Copy text for the current selection, or nothing when the caret is empty.
+    pub(crate) fn selected_diff_text(&self) -> Option<String> {
+        let snapshot = self.review.as_ref()?;
+        self.diff_text
+            .borrow()
+            .selected_text(&snapshot.lines, &self.collapsed_files)
+    }
+
+    fn clear_diff_selection(&mut self) {
+        self.diff_text.borrow_mut().clear_selection();
+    }
+
+    fn render_diff_copy_menu(&self, theme: Theme) -> Option<AnyElement> {
+        let position = self.diff_text.borrow().menu_position()?;
+        let selected = self.selected_diff_text();
+        let copy_text = selected.clone();
+        let close = self.diff_text.clone();
+        let enabled = selected.is_some();
+        let item = picker_entry(div().id("review-copy-selection"), &theme)
+            .h(picker::entry_height(&theme))
+            .flex_none()
+            .text_color(if enabled {
+                theme.text_secondary
+            } else {
+                theme.text_muted
+            })
+            .when(enabled, |item| {
+                item.cursor_pointer()
+                    .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        if let Some(text) = copy_text.clone() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        }
+                        close.borrow_mut().dismiss_menu();
+                        cx.stop_propagation();
+                        window.refresh();
+                    })
+            })
+            .child(icon(
+                "icons/copy.svg",
+                context_menu::ICON.px(&theme),
+                theme.text_muted,
+            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(tr!("transcript.copy_selection")),
+            );
+        let dismiss = self.diff_text.clone();
+        Some(
+            deferred(
+                anchored()
+                    .position(position)
+                    .snap_to_window_with_margin(popover::WINDOW_MARGIN)
+                    .child(
+                        picker_surface(div().id("review-diff-text-menu"), &theme)
+                            .w(px(220.))
+                            .py(picker::list_padding_y(&theme))
+                            .flex()
+                            .flex_col()
+                            .gap(DynamicSpacing::Base01.px(&theme))
+                            .overflow_hidden()
+                            .occlude()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_mouse_down_out(move |_, window, _| {
+                                dismiss.borrow_mut().dismiss_menu();
+                                window.refresh();
+                            })
+                            .child(item),
+                    ),
+            )
+            .into_any_element(),
+        )
     }
 
     /// A row that must not pan with unwrapped content. The file header keeps
@@ -1514,24 +1692,71 @@ impl SidePane {
             return row;
         }
         let offset = self.h_scroll.offset().x;
-        let viewport = self.h_scroll.bounds().size.width;
+        let viewport = self.row_viewport();
         div()
             .w_full()
             .child(div().w(viewport).left(-offset).child(row))
             .into_any_element()
     }
 
-    /// The horizontal extent an unwrapped row needs: the widest row in
-    /// monospace cells at the diff font's advance, plus the row chrome. Split
-    /// view gives each half that extent, so it doubles.
+    /// Width a pinned row should occupy. The scroller reports it after the
+    /// first paint; before that, side-by-side uses the diff column's width so
+    /// the two columns are not laid out at zero.
+    fn row_viewport(&self) -> Pixels {
+        let measured = self.h_scroll.bounds().size.width;
+        if measured > px(0.) || !self.split {
+            measured
+        } else {
+            self.estimated_diff_width()
+        }
+    }
+
+    /// Diff column width before the horizontal scroller has been painted. The
+    /// file tree, when open, takes a fixed slice of the pane beside it.
+    fn estimated_diff_width(&self) -> Pixels {
+        let width = self.pane_width();
+        let tree_visible = !self.embedded && width >= px(TREE_MIN_PANE_W) && self.tree_open;
+        if !tree_visible {
+            return width;
+        }
+        let column = (f32::from(self.width) * 0.42).clamp(TREE_MIN_COL_W, TREE_MAX_COL_W);
+        (width - px(column)).max(px(0.))
+    }
+
+    /// The horizontal extent an unwrapped unified row needs: the widest line
+    /// in monospace cells, plus the gutter and the row's horizontal padding.
     fn unwrapped_content_width(&self, window: &Window, theme: Theme) -> Pixels {
         let cell = crate::diff_view::code_cell_width(window, &theme);
-        let row = cell * self.content_cells.max(1) as f32 + px(diff_gutter_width() + 22.);
+        let gutter = diff_gutter_width(cell, self.gutter_digits);
+        cell * self.content_cells.max(1) as f32 + gutter + px(22.)
+    }
+
+    /// Pin a side-by-side row when lines are unwrapped. Wrapped rows already
+    /// fit the pane, and unified code rows are meant to pan with the list.
+    fn pin_split_row(&self, row: AnyElement) -> AnyElement {
         if self.split {
-            row * 2. + px(1.)
+            self.pinned_row(row)
         } else {
             row
         }
+    }
+
+    /// How wide the side-by-side scroller's content must be so the end of the
+    /// longest line can reach the right edge of a column. The columns
+    /// themselves stay viewport-wide via `pinned_row`; only the text moves.
+    fn split_unwrapped_scroll_width(
+        &self,
+        viewport: Pixels,
+        window: &Window,
+        theme: Theme,
+    ) -> Pixels {
+        let cell = crate::diff_view::code_cell_width(window, &theme);
+        let pad = DynamicSpacing::Base12.px(&theme);
+        let text = cell * self.content_cells.max(1) as f32 + pad + pad;
+        let gutter = self.gutter_width(window, theme);
+        let half = ((viewport - px(1.)) * 0.5).max(px(0.));
+        let text_view = (half - gutter - pad - pad).max(px(0.));
+        viewport + (text - text_view).max(px(0.))
     }
 
     /// The pinned copy of the current file's header. It lives outside the
@@ -1593,7 +1818,12 @@ impl SidePane {
                                 .top(section_height + push)
                                 .left_0()
                                 .w_full()
-                                .child(self.file_header_row(line.file_index, true, theme, cx)),
+                                .child(div().w_full().occlude().child(self.file_header_row(
+                                    line.file_index,
+                                    true,
+                                    theme,
+                                    cx,
+                                ))),
                         );
                         has_layer = true;
                     }
@@ -1614,9 +1844,9 @@ impl SidePane {
                     let actions = self.section_strip_actions(label, true, theme, cx);
                     layers =
                         layers.child(div().absolute().top(section_push).left_0().w_full().child(
-                            render_section_header(
+                            div().w_full().occlude().child(render_section_header(
                                 label, *icon, *count, *additions, *deletions, actions, theme,
-                            ),
+                            )),
                         ));
                     has_layer = true;
                 }
@@ -1727,10 +1957,16 @@ impl SidePane {
                 row = row.group("review-file-header").child(actions);
             }
         }
-        row.into_any_element()
+        row.when(sticky, |row| row.occlude()).into_any_element()
     }
 
-    fn render_diff_line(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_diff_line(
+        &self,
+        index: usize,
+        gutter_w: Pixels,
+        text_scroll: Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(snapshot) = self.review.as_ref() else {
             return div().into_any_element();
         };
@@ -1766,12 +2002,28 @@ impl SidePane {
             _ if self.collapsed_files.contains(&line.file_index) => {
                 div().h(px(0.)).into_any_element()
             }
-            LineKind::Gap(gap) => self.render_gap(index, gap.clone(), theme, cx),
-            LineKind::HunkHeader => render_hunk_header(&line.content, theme, self.wrap),
-            LineKind::Meta => render_meta(&line.content, theme, self.wrap),
+            LineKind::Gap(gap) => {
+                self.pin_split_row(self.render_gap(index, gap.clone(), gutter_w, theme, cx))
+            }
+            LineKind::HunkHeader => self.pin_split_row(render_hunk_header(
+                &line.content,
+                theme,
+                self.wrap,
+                gutter_w,
+            )),
+            LineKind::Meta => {
+                self.pin_split_row(render_meta(&line.content, theme, self.wrap, gutter_w))
+            }
             LineKind::Context | LineKind::Addition | LineKind::Deletion => {
                 if !self.split {
-                    return render_code_row(line, theme, self.wrap);
+                    return render_code_row(
+                        line,
+                        index,
+                        theme,
+                        self.wrap,
+                        gutter_w,
+                        &self.diff_text,
+                    );
                 }
                 if self
                     .split_pairing
@@ -1785,17 +2037,50 @@ impl SidePane {
                     return div().h(px(0.)).into_any_element();
                 }
                 let partner = self.split_pairing.partner.get(index).copied().flatten();
-                match (&line.kind, partner) {
-                    (LineKind::Addition, _) => render_split_row(None, Some(line), theme, self.wrap),
-                    (LineKind::Deletion, Some(partner)) => {
-                        render_split_row(Some(line), snapshot.lines.get(partner), theme, self.wrap)
-                    }
-                    (LineKind::Deletion, None) => {
-                        render_split_row(Some(line), None, theme, self.wrap)
-                    }
+                let text = &self.diff_text;
+                let row = match (&line.kind, partner) {
+                    (LineKind::Addition, _) => render_split_row(
+                        None,
+                        Some((line, index)),
+                        theme,
+                        self.wrap,
+                        gutter_w,
+                        text_scroll,
+                        text,
+                    ),
+                    (LineKind::Deletion, Some(partner_index)) => render_split_row(
+                        Some((line, index)),
+                        snapshot
+                            .lines
+                            .get(partner_index)
+                            .map(|partner| (partner, partner_index)),
+                        theme,
+                        self.wrap,
+                        gutter_w,
+                        text_scroll,
+                        text,
+                    ),
+                    (LineKind::Deletion, None) => render_split_row(
+                        Some((line, index)),
+                        None,
+                        theme,
+                        self.wrap,
+                        gutter_w,
+                        text_scroll,
+                        text,
+                    ),
                     // Context rides both halves, numbered per side.
-                    _ => render_split_row(Some(line), Some(line), theme, self.wrap),
-                }
+                    _ => render_split_row(
+                        Some((line, index)),
+                        Some((line, index)),
+                        theme,
+                        self.wrap,
+                        gutter_w,
+                        text_scroll,
+                        text,
+                    ),
+                };
+                self.pin_split_row(row)
             }
         }
     }
@@ -1804,6 +2089,7 @@ impl SidePane {
         &self,
         index: usize,
         gap: review::Gap,
+        gutter_w: Pixels,
         theme: Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -1817,7 +2103,7 @@ impl SidePane {
         let expandable = gap.is_expandable();
         let two = directions.len() > 1;
         let mut gutter = div()
-            .w(px(46.))
+            .w(gutter_w)
             .h_full()
             .flex_none()
             .flex()
@@ -1916,9 +2202,16 @@ impl SidePane {
         if let Some(expansion) = expansion {
             self.diff_list
                 .splice(line_index..line_index + 1, expansion.replacement_count);
+            // Later rows moved, so a selection stored by line index no longer
+            // points at the text the reader highlighted.
+            self.clear_diff_selection();
             // The line stream shifted under the pairing, and a cap-limited
             // reveal can leave another gap behind.
             self.rebuild_view_metrics();
+            self.diff_fingerprint = self
+                .review
+                .as_ref()
+                .map(|snapshot| snapshot_fingerprint(snapshot));
             cx.notify();
         }
     }
@@ -2343,6 +2636,20 @@ impl Source {
 
 impl Render for SidePane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Turning wrap off mounts the horizontal scroller for the first time,
+        // so this frame still sees a zero viewport and pins rows from the
+        // estimate. Once the scroller is painted, rebuild at its real width.
+        if (self.open || self.embedded)
+            && self.split
+            && !self.wrap
+            && self.h_scroll.bounds().size.width <= px(0.)
+        {
+            cx.on_next_frame(window, |this, _, cx| {
+                if this.split && !this.wrap && this.h_scroll.bounds().size.width > px(0.) {
+                    cx.notify();
+                }
+            });
+        }
         // Embedded: paint the browser directly, filling its host surface.
         if self.embedded {
             let theme = *theme::get(cx);
@@ -2754,6 +3061,105 @@ mod tests {
             "the header is fixed: {:?} -> {:?}",
             header.origin.x,
             after.origin.x
+        );
+    }
+
+    /// Unwrapped side-by-side keeps both columns inside the pane. Widening the
+    /// row to two full lines used to park the right column past the viewport.
+    #[gpui::test]
+    fn split_columns_stay_on_screen_when_lines_do_not_wrap(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+        let mut cx = cx.add_empty_window();
+        let pane = cx.update(|_, cx| cx.new(SidePane::new));
+        let long = "x".repeat(180);
+        let patch = format!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n\
+             index 1111111..2222222 100644\n\
+             --- a/src/lib.rs\n\
+             +++ b/src/lib.rs\n\
+             @@ -1 +1 @@\n\
+             -{long}\n\
+             +{long}\n"
+        );
+        cx.update(|_, cx| {
+            pane.update(cx, |pane, cx| {
+                pane.embedded = true;
+                pane.wrap = false;
+                pane.split = true;
+                pane.set_available_width(px(480.), cx);
+                pane.apply_snapshot(crate::review::parse_collected(
+                    Source::Uncommitted,
+                    "1\t1\tsrc/lib.rs\n",
+                    &patch,
+                    false,
+                ));
+                // Embedded review starts collapsed. Expand so the columns paint.
+                pane.toggle_all_files(cx);
+            });
+        });
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            let _ = cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(480.), px(400.)),
+                |_, _| {
+                    div()
+                        .w(px(480.))
+                        .h(px(400.))
+                        .flex()
+                        .flex_col()
+                        .child(pane.clone())
+                },
+            );
+        };
+        let columns_inside = |cx: &mut gpui::VisualTestContext| {
+            let left = cx
+                .debug_bounds("diff-split-old")
+                .expect("the old column is laid out");
+            let right = cx
+                .debug_bounds("diff-split-new")
+                .expect("the new column is laid out");
+            assert!(
+                left.size.width > px(80.) && right.size.width > px(80.),
+                "each column has a real width: left {left:?} right {right:?}"
+            );
+            assert!(
+                right.origin.x + px(1.) >= left.origin.x + left.size.width
+                    && right.origin.x + right.size.width <= px(484.),
+                "both columns sit inside the pane: left {left:?} right {right:?}"
+            );
+            right.origin.x
+        };
+        // The scroller has no bounds yet. The columns still have to fit.
+        draw(&mut cx);
+        let first = columns_inside(&mut cx);
+        draw(&mut cx);
+        let before = columns_inside(&mut cx);
+        assert!(
+            (before - first).abs() < px(1.),
+            "learning the viewport must not move the columns: {first:?} -> {before:?}"
+        );
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: point(px(200.), px(200.)),
+            delta: gpui::ScrollDelta::Pixels(point(px(-300.), px(0.))),
+            ..Default::default()
+        });
+        draw(&mut cx);
+        let right = cx
+            .debug_bounds("diff-split-new")
+            .expect("the new column is still laid out");
+        assert!(
+            (right.origin.x - before).abs() < px(1.),
+            "panning slides the text, not the column: {before:?} -> {:?}",
+            right.origin.x
+        );
+        assert!(
+            right.origin.x + right.size.width <= px(484.),
+            "the new column stays inside the pane after panning, got {right:?}"
+        );
+        let offset = cx.update(|_, cx| pane.read(cx).h_scroll.offset().x);
+        assert!(
+            offset < px(0.),
+            "a long unwrapped line can still pan inside the columns, got {offset:?}"
         );
     }
 

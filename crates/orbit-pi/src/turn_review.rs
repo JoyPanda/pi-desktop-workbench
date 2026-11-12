@@ -565,6 +565,10 @@ fn push_edit_hunk(
     }
     let mut body = String::new();
     let mut emitted = 0usize;
+    // Header counts follow the lines actually written. Numstat still counts a
+    // line the cap drops, matching `push_write_hunk`.
+    let mut old_emitted = 0usize;
+    let mut new_emitted = 0usize;
     for (kind, old_ix, new_ix) in ops {
         let (marker, text) = match kind {
             DiffLineKind::Context => (' ', old_ix.and_then(|ix| old_lines.get(ix)).copied()),
@@ -581,6 +585,14 @@ fn push_edit_hunk(
             continue;
         }
         emitted += 1;
+        match kind {
+            DiffLineKind::Context => {
+                old_emitted += 1;
+                new_emitted += 1;
+            }
+            DiffLineKind::Deletion => old_emitted += 1,
+            DiffLineKind::Addition => new_emitted += 1,
+        }
         body.push(marker);
         body.push_str(text.unwrap_or(""));
         body.push('\n');
@@ -588,7 +600,13 @@ fn push_edit_hunk(
     if emitted == 0 {
         return false;
     }
-    patch.push_str("@@\n");
+    // Snippet-local numbers. An edit carries no file offset, so each side
+    // starts at 1 when it has lines and at 0 when it does not.
+    let old_start = if old_emitted == 0 { 0 } else { 1 };
+    let new_start = if new_emitted == 0 { 0 } else { 1 };
+    patch.push_str(&format!(
+        "@@ -{old_start},{old_emitted} +{new_start},{new_emitted} @@\n"
+    ));
     patch.push_str(&body);
     true
 }
@@ -915,6 +933,68 @@ mod tests {
         assert_eq!(first.content, "one");
         let empty = snapshot(&[write_call("a.rs", "")]);
         assert!(empty.files.is_empty());
+    }
+
+    #[test]
+    fn an_edit_hunk_numbers_each_side_from_one() {
+        let snapshot = snapshot(&[edit_call("src/lib.rs", &[("old", "new")])]);
+        let deletion = snapshot
+            .lines
+            .iter()
+            .find(|line| matches!(line.kind, LineKind::Deletion))
+            .expect("deletion");
+        assert_eq!(deletion.old_line, Some(1));
+        assert_eq!(deletion.new_line, None);
+        assert_eq!(deletion.content, "old");
+        let addition = snapshot
+            .lines
+            .iter()
+            .find(|line| matches!(line.kind, LineKind::Addition))
+            .expect("addition");
+        assert_eq!(addition.new_line, Some(1));
+        assert_eq!(addition.old_line, None);
+        assert_eq!(addition.content, "new");
+    }
+
+    #[test]
+    fn a_pure_insert_numbers_only_the_new_side() {
+        let snapshot = snapshot(&[edit_call("a.rs", &[("", "hello\n")])]);
+        let additions: Vec<_> = snapshot
+            .lines
+            .iter()
+            .filter(|line| matches!(line.kind, LineKind::Addition))
+            .collect();
+        assert_eq!(additions.len(), 1);
+        assert_eq!(additions[0].new_line, Some(1));
+        assert_eq!(additions[0].old_line, None);
+        assert_eq!(additions[0].content, "hello");
+        assert!(snapshot
+            .lines
+            .iter()
+            .all(|line| !matches!(line.kind, LineKind::Deletion)));
+    }
+
+    #[test]
+    fn two_edit_hunks_in_one_file_stay_separated_and_restart_at_one() {
+        let snapshot = snapshot(&[
+            edit_call("a.rs", &[("old", "new")]),
+            edit_call("a.rs", &[("foo", "bar")]),
+        ]);
+        let headers = snapshot
+            .lines
+            .iter()
+            .filter(|line| matches!(line.kind, LineKind::HunkHeader))
+            .count();
+        assert_eq!(headers, 1);
+        let deletions: Vec<_> = snapshot
+            .lines
+            .iter()
+            .filter(|line| matches!(line.kind, LineKind::Deletion))
+            .collect();
+        assert_eq!(deletions.len(), 2);
+        assert!(deletions.iter().all(|line| line.old_line == Some(1)));
+        assert!(matches!(snapshot.lines[0].kind, LineKind::FileHeader));
+        assert!(!matches!(snapshot.lines[1].kind, LineKind::HunkHeader));
     }
 
     #[test]

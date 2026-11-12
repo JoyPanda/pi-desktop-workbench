@@ -800,7 +800,7 @@ fn gutter_distance(block: &TextBlock, position: gpui::Point<Pixels>) -> f32 {
 
 /// Snap a byte offset back to a char boundary (layout offsets are glyph
 /// boundaries already; this guards stale offsets from a streaming edit).
-fn byte_boundary(text: &str, mut offset: usize) -> usize {
+pub(crate) fn byte_boundary(text: &str, mut offset: usize) -> usize {
     offset = offset.min(text.len());
     while offset > 0 && !text.is_char_boundary(offset) {
         offset -= 1;
@@ -830,7 +830,7 @@ struct WordSegment {
 /// UAX #29, then merge a segment into its neighbors when both sides are
 /// selectable and at least one is a joiner. A click on whitespace or other
 /// punctuation stays on that segment.
-fn word_range_at(text: &str, offset: usize) -> Range<usize> {
+pub(crate) fn word_range_at(text: &str, offset: usize) -> Range<usize> {
     if text.is_empty() {
         return 0..0;
     }
@@ -1028,7 +1028,11 @@ fn snap_to_unit(
 /// Split `runs` so the selected byte range carries the selection wash as a
 /// run background — gpui paints run backgrounds itself, so the highlight
 /// needs no separate layout math and never reflows text.
-fn highlight_runs(runs: Vec<TextRun>, range: Option<Range<usize>>, color: Hsla) -> Vec<TextRun> {
+pub(crate) fn highlight_runs(
+    runs: Vec<TextRun>,
+    range: Option<Range<usize>>,
+    color: Hsla,
+) -> Vec<TextRun> {
     let Some(range) = range else {
         return runs;
     };
@@ -2809,13 +2813,6 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
     // Changed files render ONLY in the end-of-task summary card pinned
     // after the last row (once the run settles) — not per message.
 
-    // A turn that ended in a provider/agent error (e.g. an unsupported
-    // model). pi carries the message in `errorMessage`; render it so a
-    // failed turn is never an empty row.
-    if let Some(error) = &message.error {
-        content = content.child(render_assistant_error(error, ix, theme));
-    }
-
     // A cancelled turn keeps its partial content and says so, quietly —
     // "Stopped", never an error card (the user asked for the stop).
     if message.aborted && !paint.live {
@@ -2860,72 +2857,6 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
     }
 
     row
-}
-
-/// A settled assistant turn that failed: the provider/agent `errorMessage`
-/// pi carries on the message, as a red card. Mirrors the app-level error
-/// banner so the failure is visible in context too.
-fn render_assistant_error(error: &str, ix: usize, theme: Theme) -> AnyElement {
-    div()
-        .w_full()
-        .max_w_full()
-        .min_w_0()
-        .bg(theme.error.opacity(0.1))
-        .border_1()
-        .border_color(theme.error.opacity(0.45))
-        .rounded(panel::RADIUS.px(&theme))
-        .px(DynamicSpacing::Base12.px(&theme))
-        .py(DynamicSpacing::Base08.px(&theme))
-        .flex()
-        .items_start()
-        .gap_2p5()
-        .child(glyph(
-            "icons/info.svg",
-            IconSize::Medium.px(&theme),
-            theme.error,
-        ))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(
-                    div()
-                        .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_primary)
-                        .child(tr!("transcript_view.agent_error")),
-                )
-                .child(
-                    div()
-                        .text_size(TextSize::Small.px(&theme))
-                        .text_color(theme.text_secondary)
-                        .whitespace_normal()
-                        .child({
-                            let text: SharedString = error.to_string().into();
-                            let key = ElementId::NamedInteger("agent-error".into(), ix as u64);
-                            let scope = text_scope();
-                            let range = scope
-                                .as_ref()
-                                .and_then(|scope| scope.state.borrow().range_for(&key, &text));
-                            let runs = highlight_runs(
-                                vec![code_run(text.len(), theme.text_secondary, &ui_font())],
-                                range,
-                                selection_color(theme),
-                            );
-                            SelectableText::new(
-                                key,
-                                StyledText::new(text.clone()).with_runs(runs),
-                                text,
-                                Vec::new(),
-                                scope,
-                            )
-                        }),
-                ),
-        )
-        .into_any_element()
 }
 
 /// The group's activity summary: counts every tool kind across its steps —
@@ -10752,6 +10683,83 @@ mod tests {
             .debug_bounds("working-indicator")
             .expect("the live row is painted while the reply is pending");
         assert!(bounds.size.width > px(0.), "the indicator carries a label");
+    }
+
+    /// A provider/agent failure already surfaces on the composer banner.
+    /// Painting the same text as a red card in the transcript body duplicated
+    /// that prompt (timeouts, aborted RPC, unsupported models).
+    #[gpui::test]
+    fn a_failed_turn_does_not_paint_an_inline_agent_error(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let error = "Request timed out.: This operation was aborted (20)";
+        let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+        let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![ChatMessage {
+            user: false,
+            summary: None,
+            steps: vec![Step {
+                text: "I'll read the file.".into(),
+                tools: vec![ToolCall {
+                    name: "read".into(),
+                    summary: "src/main.rs".into(),
+                    path: Some("src/main.rs".into()),
+                    added: 0,
+                    removed: 0,
+                    id: None,
+                    args: None,
+                    output: None,
+                    failed: false,
+                    facts: Default::default(),
+                }],
+                ..Step::default()
+            }],
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: Some(error.into()),
+            aborted: false,
+        }]));
+        let scroller = MessageScrollerState::new(messages.borrow().len());
+        let view = cx.update(|_, cx| {
+            cx.new(|_| SelectTestView {
+                messages,
+                state: state.clone(),
+                scroller,
+                main_width: px(900.),
+                open_work: true,
+                live: false,
+            })
+        });
+        let _ = cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(900.), px(800.)),
+            |_, _| view.clone(),
+        );
+
+        assert!(
+            cx.debug_bounds("activity-group-0-0").is_some(),
+            "the turn's tool work still paints"
+        );
+        assert!(
+            cx.debug_bounds("assistant-step-0-0").is_some(),
+            "the turn's answer still paints"
+        );
+        let texts: Vec<String> = state
+            .borrow()
+            .blocks
+            .iter()
+            .map(|block| block.text.to_string())
+            .collect();
+        assert!(
+            texts
+                .iter()
+                .any(|text| text.contains("I'll read the file.")),
+            "the answer must register as selectable text so the error check is not vacuous, got {texts:?}"
+        );
+        assert!(
+            texts.iter().all(|text| !text.contains(error)),
+            "the error body must not be selectable transcript text, got {texts:?}"
+        );
     }
 
     /// The compaction / branch-summary boundary cards must paint — collapsed

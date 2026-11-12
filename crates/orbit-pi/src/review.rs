@@ -185,6 +185,26 @@ impl Snapshot {
         ))
     }
 
+    /// Widest line number in this diff, including context still hidden in a
+    /// gap. `0` when nothing is numbered.
+    pub fn max_line_number(&self) -> u32 {
+        let mut max_number = 0u32;
+        for line in &self.lines {
+            accumulate_line_number(line, &mut max_number);
+        }
+        max_number
+    }
+
+    /// Digits needed to paint [`Self::max_line_number`]. At least 1.
+    pub fn line_number_digits(&self) -> usize {
+        let max_number = self.max_line_number();
+        if max_number == 0 {
+            1
+        } else {
+            max_number.ilog10() as usize + 1
+        }
+    }
+
     /// The widest scrolling row in monospace cells: code, metadata, and any
     /// context still hidden in a gap. An unwrapped row multiplies this by one
     /// glyph advance to size the pane's horizontal scroll range without
@@ -545,6 +565,24 @@ fn parse(source: Source, numstat: &str, patch: &str, complete_context: bool) -> 
 
         if let Some((next_old, next_new)) = parse_hunk_starts(raw) {
             positioned = true;
+            // A full-file patch has one hunk, so this stays quiet. Synthesized
+            // edit snippets are separate hunks in one file; without a divider
+            // their context runs together and collapse would hide lines from
+            // two unrelated edits in one gap.
+            if complete_context
+                && lines
+                    .last()
+                    .is_some_and(|line| line.kind != LineKind::FileHeader)
+            {
+                lines.push(Line {
+                    file_index,
+                    old_line: None,
+                    new_line: None,
+                    kind: LineKind::HunkHeader,
+                    content: String::new(),
+                    tokens: Vec::new(),
+                });
+            }
             let old_gap = next_old.saturating_sub(previous_old_next);
             let new_gap = next_new.saturating_sub(previous_new_next);
             let gap = old_gap.max(new_gap);
@@ -768,6 +806,20 @@ fn push_context_gap(
 
 fn is_change_line(line: &Line) -> bool {
     matches!(line.kind, LineKind::Addition | LineKind::Deletion)
+}
+
+fn accumulate_line_number(line: &Line, max_number: &mut u32) {
+    if let Some(number) = line.old_line {
+        *max_number = (*max_number).max(number);
+    }
+    if let Some(number) = line.new_line {
+        *max_number = (*max_number).max(number);
+    }
+    if let LineKind::Gap(gap) = &line.kind {
+        for hidden in &gap.hidden {
+            accumulate_line_number(hidden, max_number);
+        }
+    }
 }
 
 fn cap_visible_lines(lines: Vec<Line>) -> (Vec<Line>, bool) {
@@ -1091,6 +1143,52 @@ index 3333333..4444444 100644
             Some((second, None))
         );
         assert_eq!((snapshot.additions, snapshot.deletions), (3, 2));
+    }
+
+    #[test]
+    fn complete_context_keeps_two_hunks_from_sharing_a_gap() {
+        let mut patch = String::from(
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,9 +1,9 @@\n-changeA\n",
+        );
+        for index in 1..=8 {
+            patch.push_str(&format!(" c{index}\n"));
+        }
+        patch.push_str("@@ -20,9 +20,9 @@\n");
+        for index in 1..=8 {
+            patch.push_str(&format!(" d{index}\n"));
+        }
+        patch.push_str("+changeB\n");
+        let snapshot = parse(Source::Uncommitted, "", &patch, true);
+        assert!(snapshot
+            .lines
+            .iter()
+            .any(|line| matches!(line.kind, LineKind::HunkHeader)));
+        assert!(matches!(snapshot.lines[0].kind, LineKind::FileHeader));
+        assert!(matches!(snapshot.lines[1].kind, LineKind::Deletion));
+        for line in &snapshot.lines {
+            if let LineKind::Gap(gap) = &line.kind {
+                let has_c = gap
+                    .hidden
+                    .iter()
+                    .any(|hidden| hidden.content.starts_with('c'));
+                let has_d = gap
+                    .hidden
+                    .iter()
+                    .any(|hidden| hidden.content.starts_with('d'));
+                assert!(!(has_c && has_d), "one gap hid lines from both hunks");
+            }
+        }
+    }
+
+    #[test]
+    fn line_numbers_include_context_hidden_in_a_gap() {
+        let snapshot = parse(Source::Uncommitted, "", &full_patch(30, &[8, 17]), true);
+        assert!(snapshot
+            .lines
+            .iter()
+            .all(|line| !matches!(line.kind, LineKind::HunkHeader)));
+        assert_eq!(snapshot.max_line_number(), 30);
+        assert_eq!(snapshot.line_number_digits(), 2);
     }
 
     fn full_patch(total_lines: u32, changes: &[u32]) -> String {

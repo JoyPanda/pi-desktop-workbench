@@ -87,8 +87,8 @@ pub struct ChatMessage {
     /// carry pi's own `timestamp`; live ones are stamped at `message_end`.
     pub finished_at: Option<i64>,
     /// Provider/agent error that ended this assistant turn
-    /// (`stopReason: "error"` + `errorMessage`). Rendered inline so a failed
-    /// turn is never an empty row.
+    /// (`stopReason: "error"` + `errorMessage`). The composer banner shows
+    /// this text; the transcript body does not repeat it.
     pub error: Option<String>,
     /// The turn was cancelled (`stopReason: "aborted"`). The partial answer
     /// stays; a quiet marker says the generation was stopped.
@@ -794,14 +794,14 @@ fn message_role(value: &Value) -> Option<&str> {
 
 /// The provider/agent error carried by a finalized assistant message, if any.
 /// pi sets `stopReason: "error"` and `errorMessage` when the LLM call fails
-/// (e.g. an unsupported model). The app raises the error banner from this and
-/// the transcript renders the same text inline.
+/// (e.g. an unsupported model). The app raises the composer error banner
+/// from this; the transcript body does not paint the same text again.
 ///
 /// A user abort is not an agent failure: pi's `createAbortedMessage` marks the
 /// message `stopReason: "aborted"` but still carries `errorMessage`
-/// ("Request was aborted"). Treating that as an error would render both the
-/// inline error card and the app banner on top of the transcript's own quiet
-/// "Stopped" marker. An aborted turn therefore reports no error here.
+/// ("Request was aborted"). Treating that as an error would raise the banner
+/// on top of the transcript's own quiet "Stopped" marker. An aborted turn
+/// therefore reports no error here.
 pub fn message_error(value: &Value) -> Option<String> {
     let value = value.get("message").unwrap_or(value);
     if value.get("role").and_then(Value::as_str) != Some("assistant") {

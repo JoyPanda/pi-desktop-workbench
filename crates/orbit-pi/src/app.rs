@@ -1777,7 +1777,17 @@ impl OrbitApp {
                     return;
                 }
                 let _ = app.update(cx, |app, cx| {
-                    let Some(text) = app.transcript.selected_text() else {
+                    if let Some(text) = app.transcript.selected_text() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
+                        cx.stop_propagation();
+                        return;
+                    }
+                    // The docked Review pane only. The Git page has its own
+                    // pane; its selection copies from the right-click menu.
+                    if !app.changes_docked(cx) {
+                        return;
+                    }
+                    let Some(text) = app.sidepane.read(cx).selected_diff_text() else {
                         return;
                     };
                     cx.write_to_clipboard(ClipboardItem::new_string(text));

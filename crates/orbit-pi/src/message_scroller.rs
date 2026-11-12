@@ -12,9 +12,9 @@
 use std::{cell::Cell, ops::Range, rc::Rc};
 
 use gpui::{
-    canvas, div, fill, linear_color_stop, linear_gradient, point, prelude::*, px, rems, size, svg,
-    App, Background, Bounds, DispatchPhase, ElementId, Hsla, ListAlignment, ListOffset,
-    ListScrollEvent, ListState, MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Window,
+    canvas, div, fill, point, prelude::*, px, size, svg, App, Background, Bounds, DispatchPhase,
+    ElementId, Hsla, ListAlignment, ListOffset, ListScrollEvent, ListState, MouseButton,
+    MouseMoveEvent, MouseUpEvent, Pixels, Window,
 };
 
 use crate::app::{button_frame, icon_button_frame, TipExt, BUTTON_GROUP};
@@ -28,6 +28,15 @@ const SCROLLBAR_HIT_WIDTH: f32 = 10.;
 const SCROLLBAR_EDGE: f32 = 0.5;
 /// Extra pixels above and below the thumb that still start a drag.
 const SCROLLBAR_THUMB_SLOP: f32 = 4.;
+/// The reader is still on the live edge when the tail is inside this band.
+/// Streaming growth does not release the pin here; only a scroll that leaves
+/// the band does. Coming back inside locks on again. Same width Cursor uses
+/// for the composer (`itg`, 50px).
+const TAIL_SLACK: f32 = 50.;
+/// Leftmost ink of `icons/arrow-down.svg` in its 24px viewBox. The arrowhead
+/// starts at x=6, and the round cap adds half of the 1.5px stroke.
+const ARROW_INK_LEFT: f32 = 5.25;
+const ARROW_VIEWBOX: f32 = 24.;
 
 const LIST_OVERDRAW: f32 = 400.0;
 
@@ -42,6 +51,10 @@ pub struct MessageScrollerState {
     /// New content arrived while the reader was away from the live edge —
     /// the jump-to-latest control says so until they return.
     unread: Rc<Cell<bool>>,
+    /// The transcript has overflowed. A streaming remeasure reports height 0
+    /// for one frame; the jump control stays up through that blip instead of
+    /// flickering off.
+    overflowing: Rc<Cell<bool>>,
     /// Live thumb drag. Window-level move and release listeners read it, so a
     /// drag that leaves the strip — or a frame where the strip is gone — still
     /// ends and unfreezes the list's scrollbar height.
@@ -62,13 +75,25 @@ impl MessageScrollerState {
         let list = ListState::new(item_count, ListAlignment::Bottom, px(LIST_OVERDRAW));
         let following_tail = Rc::new(Cell::new(true));
         let visible_start = Rc::new(Cell::new(0));
+        let unread = Rc::new(Cell::new(false));
+        let overflowing = Rc::new(Cell::new(false));
         {
             let following_tail = following_tail.clone();
             let visible_start = visible_start.clone();
+            let unread = unread.clone();
+            let overflowing = overflowing.clone();
             list.set_scroll_handler(move |event: &ListScrollEvent, _, cx| {
-                // Bottom alignment: `is_scrolled` means the reader left the tail.
-                following_tail.set(!event.is_scrolled);
                 visible_start.set(event.visible_range.start);
+                // The list is already borrowed for this gesture, so the gap
+                // comes from the event instead of a second read. Scrollbar
+                // drags and chained deltas update the pin themselves. Content
+                // growth does not come through here.
+                note_tail_distance(
+                    f32::from(event.offset_from_bottom),
+                    &following_tail,
+                    &unread,
+                    &overflowing,
+                );
                 cx.refresh_windows();
             });
         }
@@ -76,7 +101,8 @@ impl MessageScrollerState {
             list,
             following_tail,
             visible_start,
-            unread: Rc::new(Cell::new(false)),
+            unread,
+            overflowing,
             thumb_drag: Rc::new(Cell::new(None)),
         }
     }
@@ -123,7 +149,30 @@ impl MessageScrollerState {
 
     /// True when the reader has left the live edge and there is room to scroll.
     pub fn is_scrolled_up(&self) -> bool {
-        self.list.max_offset_for_scrollbar().height > px(0.) && !self.is_following_tail()
+        if self.is_following_tail() {
+            return false;
+        }
+        let overflow = self.list.max_offset_for_scrollbar().height > px(0.);
+        if overflow {
+            self.overflowing.set(true);
+            return true;
+        }
+        // A remeasure marks the live row unmeasured, so its height reads as 0
+        // until the next layout. Keep the control visible across that frame.
+        self.overflowing.get()
+    }
+
+    /// Lock or release tail-following from the current pixel distance.
+    ///
+    /// A max of about 0 is ignored: that is either a transcript that fits, or
+    /// the unmeasured frame of a splice, and neither should flip the pin.
+    fn sync_tail_follow(&self) {
+        sync_tail_follow(
+            &self.list,
+            &self.following_tail,
+            &self.unread,
+            &self.overflowing,
+        );
     }
 
     /// True when the transcript holds more content than the viewport shows
@@ -262,6 +311,7 @@ impl MessageScrollerState {
     /// Resume tail following and scroll to the latest row.
     pub fn scroll_to_end(&self) {
         self.unread.set(false);
+        self.overflowing.set(false);
         self.following_tail.set(true);
         self.list.scroll_to(ListOffset {
             item_ix: self.item_count(),
@@ -289,27 +339,27 @@ impl MessageScrollerState {
         if target == max {
             self.scroll_to_end();
         } else {
-            self.following_tail.set(false);
             self.list
                 .set_offset_from_scrollbar(gpui::point(px(0.), -target));
             // Programmatic scrolling does not invoke the list's scroll handler.
             self.note_visible_start(self.list.logical_scroll_top().item_ix);
+            self.sync_tail_follow();
         }
     }
 
-    /// Move the list to `target` pixels down from the top. The live edge
-    /// resumes tail following; anywhere above it leaves following and refreshes
-    /// the rail's visible-row hint. Programmatic offsets do not fire the
-    /// list's scroll handler, so both are written here.
+    /// Move the list to `target` pixels down from the top. Within
+    /// [`TAIL_SLACK`] of the live edge this keeps following; further up it
+    /// releases. Programmatic offsets do not fire the list's scroll handler,
+    /// so the pin and the rail hint are written here.
     fn apply_scrollbar_offset(&self, target: Pixels) {
         let max = self.list.max_offset_for_scrollbar().height;
         let target = target.clamp(px(0.), max);
         if max <= px(SCROLLBAR_EDGE) || target >= max - px(SCROLLBAR_EDGE) {
             self.scroll_to_end();
         } else {
-            self.following_tail.set(false);
             self.list.set_offset_from_scrollbar(point(px(0.), -target));
             self.note_visible_start(self.list.logical_scroll_top().item_ix);
+            self.sync_tail_follow();
         }
     }
 
@@ -402,12 +452,72 @@ impl MessageScrollerState {
     }
 }
 
+/// Distance from the tail, in pixels. `None` when the list cannot scroll or
+/// its rows have not been measured yet — callers must not treat that as
+/// "at the bottom" or a splice will relatch the reader mid-stream.
+fn tail_distance(list: &ListState) -> Option<f32> {
+    let max = f32::from(list.max_offset_for_scrollbar().height);
+    if max <= SCROLLBAR_EDGE {
+        return None;
+    }
+    let scrolled = (-f32::from(list.scroll_px_offset_for_scrollbar().y)).clamp(0., max);
+    Some((max - scrolled).max(0.))
+}
+
+fn within_tail_slack(distance: f32) -> bool {
+    distance <= TAIL_SLACK
+}
+
+/// Lock following when `distance` is inside the slack, and release it past that.
+/// Returning to the slack clears the unread mark: the reader has caught up.
+fn note_tail_distance(
+    distance: f32,
+    following_tail: &Cell<bool>,
+    unread: &Cell<bool>,
+    overflowing: &Cell<bool>,
+) {
+    if within_tail_slack(distance) {
+        following_tail.set(true);
+        unread.set(false);
+        overflowing.set(false);
+    } else {
+        following_tail.set(false);
+    }
+}
+
+/// Lock or release from the list's measured offset. A list that cannot scroll,
+/// or whose rows are still unmeasured, is left alone.
+fn sync_tail_follow(
+    list: &ListState,
+    following_tail: &Cell<bool>,
+    unread: &Cell<bool>,
+    overflowing: &Cell<bool>,
+) {
+    let Some(distance) = tail_distance(list) else {
+        return;
+    };
+    note_tail_distance(distance, following_tail, unread, overflowing);
+}
+
+/// Right inset of the "New" label. The arrow's ink sits `ARROW_INK_LEFT`
+/// into the icon box, so the gap from the pill's left edge to the stroke is
+/// the frame padding plus that inset. The label has no matching inset; this
+/// adds it on the right.
+fn new_label_padding_right(theme: &Theme) -> Pixels {
+    let pad = f32::from(ButtonSize::Large.padding_x(theme));
+    let icon = f32::from(ButtonSize::Large.icon_size().px(theme));
+    px(pad + icon * (ARROW_INK_LEFT / ARROW_VIEWBOX))
+}
+
 /// Viewport + jump-to-latest chrome around a virtualized `list()`.
 pub fn render_scroller(
     state: MessageScrollerState,
     theme: Theme,
     list: impl IntoElement,
 ) -> impl IntoElement {
+    // A shrink can carry the reader back into the slack without a scroll
+    // event. Re-read the distance before deciding whether the pill is up.
+    state.sync_tail_follow();
     let scrolled_up = state.is_scrolled_up();
     div()
         .id(ElementId::Name("message-scroller".into()))
@@ -427,37 +537,20 @@ pub fn render_scroller(
                 .child(list),
         )
         .when(scrolled_up, |shell| {
-            shell
-                .child(render_bottom_fade(theme))
-                .child(render_jump_button(state, theme))
+            shell.child(render_jump_button(state, theme))
         })
-}
-
-fn render_bottom_fade(theme: Theme) -> impl IntoElement {
-    div()
-        .id(ElementId::Name("message-scroller-fade".into()))
-        .absolute()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .h(rems(3.))
-        .bg(linear_gradient(
-            180.,
-            linear_color_stop(theme.background.opacity(0.), 0.),
-            linear_color_stop(theme.background, 1.),
-        ))
 }
 
 fn render_jump_button(state: MessageScrollerState, theme: Theme) -> impl IntoElement {
     // Content arrived while the reader was scrolled up: the round jump
-    // affordance grows a "New activity" label so the stream's continued
-    // progress is visible from anywhere in the transcript.
+    // affordance grows a "New" label so the stream's continued progress is
+    // visible from anywhere in the transcript.
     let unread = state.has_unread();
     let button = div()
         .id(ElementId::Name("message-scroller-jump".into()))
         .group(BUTTON_GROUP);
     let button = if unread {
-        button_frame(button, &theme, ButtonSize::Large)
+        button_frame(button, &theme, ButtonSize::Large).pr(new_label_padding_right(&theme))
     } else {
         icon_button_frame(button, &theme, ButtonSize::Large)
     };
@@ -905,22 +998,71 @@ mod tests {
         let bottom = cx.debug_bounds("probe-row-2").unwrap();
 
         // A small residual from a nested Thought card must move immediately,
-        // not require a single gesture larger than the viewport.
+        // not require a single gesture larger than the viewport. Twenty pixels
+        // is still inside the tail slack, so the pin stays and new output is
+        // not marked unread.
         state.scroll_by(px(-20.));
         draw_probe(cx, &probe);
-        assert!(!state.is_following_tail());
+        assert!(state.is_following_tail());
         assert_eq!(
             cx.debug_bounds("probe-row-2").unwrap().top(),
             bottom.top() + px(20.)
         );
         assert_eq!(state.first_visible_index(), 2);
         state.note_activity();
+        assert!(!state.has_unread());
+
+        // Past the slack the reader leaves, and output that arrives there is
+        // unread until they come back inside the band.
+        state.scroll_by(px(-40.));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        assert_eq!(
+            cx.debug_bounds("probe-row-2").unwrap().top(),
+            bottom.top() + px(60.)
+        );
+        state.note_activity();
+        assert!(state.has_unread());
 
         state.scroll_by(px(20.));
         draw_probe(cx, &probe);
         assert!(state.is_following_tail());
         assert!(!state.has_unread());
-        assert_eq!(cx.debug_bounds("probe-row-2").unwrap().top(), bottom.top());
+        assert_eq!(
+            cx.debug_bounds("probe-row-2").unwrap().top(),
+            bottom.top() + px(40.)
+        );
+    }
+
+    /// Streaming while the reader is only a few pixels off the tail keeps the
+    /// pin and pulls the viewport back to the live edge, instead of flashing
+    /// the jump control.
+    #[gpui::test]
+    fn streaming_inside_the_tail_slack_stays_pinned(cx: &mut gpui::TestAppContext) {
+        let state = MessageScrollerState::new(3);
+        let heights: RowHeights =
+            Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+        heights.borrow_mut().insert(2, 1200.);
+        let cx = cx.add_empty_window();
+        let probe = cx.update(|_, cx| {
+            cx.new(|_| TranscriptProbe {
+                state: state.clone(),
+                heights: heights.clone(),
+            })
+        });
+        draw_probe(cx, &probe);
+
+        state.scroll_by(px(-20.));
+        draw_probe(cx, &probe);
+        assert!(state.is_following_tail());
+
+        heights.borrow_mut().insert(2, 1400.);
+        assert!(state.remeasure_items(2..3));
+        state.note_activity();
+        draw_probe(cx, &probe);
+        assert!(state.is_following_tail());
+        assert!(!state.has_unread());
+        assert_eq!(cx.debug_bounds("probe-row-2").unwrap().bottom(), px(400.));
     }
 
     #[test]
@@ -942,6 +1084,25 @@ mod tests {
         // A refused scroll must not move the hint.
         assert!(!state.scroll_to_item(40));
         assert_eq!(state.first_visible_index(), 39);
+    }
+
+    #[test]
+    fn tail_slack_keeps_a_few_pixels_and_releases_past_fifty() {
+        assert!(super::within_tail_slack(0.));
+        assert!(super::within_tail_slack(3.));
+        assert!(super::within_tail_slack(super::TAIL_SLACK));
+        assert!(!super::within_tail_slack(super::TAIL_SLACK + 1.));
+    }
+
+    #[test]
+    fn new_label_padding_matches_the_arrow_ink() {
+        let theme = crate::theme::Theme::dark();
+        let pad = f32::from(ButtonSize::Large.padding_x(&theme));
+        let icon = f32::from(ButtonSize::Large.icon_size().px(&theme));
+        let right = f32::from(super::new_label_padding_right(&theme));
+        let ink_gap = pad + icon * (super::ARROW_INK_LEFT / super::ARROW_VIEWBOX);
+        assert!((right - ink_gap).abs() < 0.001);
+        assert!((right - 11.5).abs() < 0.001);
     }
 
     #[test]

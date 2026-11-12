@@ -421,8 +421,9 @@ impl OrbitApp {
                 Event::MessageEnd { value } => {
                     // A failed LLM call ends the assistant message with
                     // `stopReason: "error"` + `errorMessage` (e.g. an
-                    // unsupported model). Surface it in the banner; the
-                    // transcript renders the same text inline.
+                    // unsupported model). Surface it in the composer banner
+                    // only — a second red card in the transcript duplicates
+                    // the same prompt.
                     if let Some(error) = transcript::message_error(value) {
                         self.set_error_from(
                             AGENT_ERROR_SOURCE,
