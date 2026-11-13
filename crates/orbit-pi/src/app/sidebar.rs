@@ -630,13 +630,12 @@ pub(crate) fn status_lane_ink(lane: StatusLane, theme: &Theme) -> Hsla {
     }
 }
 
-/// Attention states get words as well as a glyph, so colour is not the only
-/// distinction between a result needing review and a viewed result.
+/// Words beside the glyph for states that need a label. An unread finished
+/// turn is the eye alone: the glyph, and its tooltip, carry the review mark.
 pub(crate) fn status_lane_words(lane: StatusLane) -> Option<String> {
     match lane {
         StatusLane::Blocked(BlockReason::Approval) => Some(tr!("sidebar.status_approval")),
         StatusLane::Blocked(BlockReason::Input) => Some(tr!("sidebar.status_input")),
-        StatusLane::UnreadDone => Some(tr!("sidebar.status_review_required")),
         StatusLane::UnreadFailed | StatusLane::Failed => Some(tr!("sidebar.status_failed")),
         _ => None,
     }
@@ -1105,9 +1104,8 @@ pub(crate) fn render_side_row(
     // that is not a git repository (or sits on a detached HEAD).
     branches: &Rc<HashMap<PathBuf, BranchLine>>,
     // Sessions whose last turn settled while the user was looking elsewhere.
-    // An unread glyph (plus its "Needs review" label) remains until the
-    // session is shown in a foreground window (issue #83); the execution state
-    // remains after that mark is spent.
+    // An unread eye remains until the session is shown in a foreground window
+    // (issue #83); the execution state remains after that mark is spent.
     review_marks: &Rc<HashMap<PathBuf, ReviewMark>>,
     session_statuses: &Rc<HashMap<PathBuf, SessionStatus>>,
     session_menu: Option<&SessionMenu>,
@@ -1585,6 +1583,10 @@ pub(crate) fn render_side_row(
                 && !matches!(lane, StatusLane::Idle | StatusLane::Unknown);
             let tail_label = if status == Some(SessionStatus::Disconnected) {
                 SessionStatus::Disconnected.label()
+            } else if lane == StatusLane::UnreadDone {
+                // The review mark is the eye. Do not fill the slot with a label
+                // or the relative time.
+                String::new()
             } else {
                 status_lane_words(lane).unwrap_or_else(|| {
                     if show_updated {
@@ -1598,6 +1600,7 @@ pub(crate) fn render_side_row(
             // would only repeat it, so the badge stays away unless the row
             // still has an age to show.
             let show_badge = lane != StatusLane::Progress || !tail_label.is_empty();
+            let show_tail = !tail_label.is_empty();
             let row_slot = div()
                 .flex_none()
                 .max_w(px(110.))
@@ -1640,7 +1643,7 @@ pub(crate) fn render_side_row(
                                 .when(lane != StatusLane::Progress, |badge| {
                                     badge.child(session_status_lane(lane, status, theme))
                                 })
-                                .child(row_slot),
+                                .when(show_tail, |badge| badge.child(row_slot)),
                         )
                     })
             });
@@ -3812,16 +3815,17 @@ mod tests {
         assert_eq!(status_lane(None, None), Unknown);
     }
 
-    /// Attention states get words; quiet states leave room for the age.
+    /// Labeled attention states get words. An unread finished turn is the eye
+    /// alone, and quiet states leave room for the age.
     #[test]
     fn attention_states_get_words() {
         assert!(status_lane_words(StatusLane::Blocked(BlockReason::Approval)).is_some());
         assert!(status_lane_words(StatusLane::Blocked(BlockReason::Input)).is_some());
         assert!(status_lane_words(StatusLane::Failed).is_some());
-        assert!(status_lane_words(StatusLane::UnreadDone).is_some());
         assert!(status_lane_words(StatusLane::UnreadFailed).is_some());
         for quiet in [
             StatusLane::Progress,
+            StatusLane::UnreadDone,
             StatusLane::Done,
             StatusLane::Stopped,
             StatusLane::Idle,
