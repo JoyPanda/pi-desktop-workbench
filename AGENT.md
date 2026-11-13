@@ -643,6 +643,72 @@ tests; a successful run with zero selected tests is not coverage.
   compiling, linking, or running tests. Poll the existing process instead of
   restarting it. Stop after the required checks pass; widen only for a reason.
 
+### Build costs, measured — plan the loop around them
+
+One touched `.rs` file in `orbit-pi`, on the 16-core Windows dev box:
+
+| Command | Cost | What it buys |
+|---|---|---|
+| `cargo check -p orbit-pi --all-targets` | **~30 s** | type-checks the crate and its test target |
+| `cargo build -p orbit-pi` | **~7 min** | codegen + link of the app binary |
+| `cargo test -p orbit-pi --bin orbit-pi --no-run` | **~7 min** | codegen + link of the test binary |
+| `cargo test -p orbit-pi --bin orbit-pi -- <filter>` | 7 min build, then the run | one module's tests |
+| the whole suite, already built (1348 tests) | **~3.5 min** run | everything |
+
+Why codegen is 7 min and checking is 30 s: `[profile.dev]` is `opt-level = 1` with
+`incremental = false` (the macOS arm64 link fix above), so every edit re-codegens
+the whole crate. The usual compile-time advice does not help here: **sccache and
+lld/mold are not installed**, and neither a shared cache nor a faster linker
+avoids re-codegen of the same crate; lowering `opt-level` is the one real codegen
+lever, and it changes what `bacon run` feels like.
+
+The numbers are one measurement on this checkout, not a promise — re-measure with
+the commands above when a decision depends on them, and prefer the ratio (check
+is ~14× cheaper than any codegen build) over the absolute values.
+
+So:
+
+- **Loop on `cargo check`.** It is the only per-edit command that is cheap. Batch
+  edits, then check once.
+- **One codegen build per finished change.** A filtered `cargo test` and a
+  `cargo build` cost the same 7 minutes; run the one you need, and never run both
+  back to back. The full suite is a 3.5 min *run* — affordable at the end of a
+  change, not in the middle of one, and not twice.
+- **Filter the test name.** `cargo test -p orbit-pi --bin orbit-pi -- <filter>`
+  runs one module; the build is the same, the run drops from minutes to seconds.
+- **`--no-run` goes before `--`.** `cargo test … -- <filter> --no-run` silently
+  compiles the test binary for 7 minutes and then fails with `Unrecognized
+  option: 'no-run'`.
+- **Never `git stash` to find out whether a failure predates your edit.** Each
+  stash or pop forces another 7 min rebuild. Read the failure, and check the
+  baseline list below instead.
+- **Doc-only changes cost nothing.** Review the diff; do not touch Cargo on their
+  account.
+- Levers that would change the numbers, each needing an explicit decision because
+  it invalidates `target/` once and can desynchronise machines: `[profile.test]
+  debug = 0` (smaller test binary, no codegen change), `[profile.test]
+  opt-level = 0` (biggest codegen win; validates nothing about optimized
+  behavior), installing sccache (helps only repeated identical builds, not the
+  edit loop) or lld (link is a fraction of the 7 min).
+- **Spawn cost is not build cost.** When an action that starts a pi process feels
+  slow, `ORBIT_SPAWN_TIMING=1 bacon run` prints the RPC-patch check that every
+  spawn runs, and the wall time of the background spawn itself (the first-message
+  path; the in-place spawns print only the patch check). Read that before guessing: on this checkout the patch check is ~30–60 ms
+  on its fast path, so a multi-second stall is usually not the spawn.
+  `ORBIT_DEBUG_DRAFTS=1` traces the other half of that class of report — when a New
+  Task row leaves the sidebar (settled away, deleted, or clipped by a group's
+  history cap), which looks identical on screen.
+
+**Known failures on this Windows box, at HEAD, with no local edits** — do not
+chase these inside an unrelated change:
+
+- `onboarding::tests::install_hints_match_the_host` — asserts the host's own
+  install hint; the Windows hint differs.
+- `app::popup_layout_tests::model_picker_arrows_move_the_highlight` — ↓ stops one
+  row short here. Reproduced on a clean tree, so it is not your edit.
+- `transcript_view::tests::table_columns_follow_shaped_text_and_share_the_pane` —
+  font-shaping dependent; fails on some runs and passes on rerun.
+
 ### Manual app checks
 
 Exercise the affected flow for a localized UI change. Use the full smoke checklist
