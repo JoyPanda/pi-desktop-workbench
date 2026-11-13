@@ -40,7 +40,10 @@ const WORKFLOW_POLICY_JS: &str =
     include_str!("../../../contrib/orbit-workflow-extension/policy.js");
 
 /// The bundled extensions materialized on disk, kept for the process lifetime.
-#[derive(Default)]
+///
+/// `Clone` exists for one caller: a spawn that runs off the UI thread needs its
+/// own copy of the entry points (see `OrbitApp::spawn_pi_client_later`).
+#[derive(Clone, Default)]
 pub(crate) struct BundledExtensions {
     /// The quota bridge's `index.js`; `None` when it could not be written
     /// (quota then depends on the `quota.*` RPC, as before).
@@ -103,8 +106,20 @@ impl BundledExtensions {
         // A `pi update` can restore the pristine RPC bundle while Orbit is
         // running; re-check before every spawn so a session switch or Runtime
         // restart still gets custom UI, quota, and auth. The unchanged fast
-        // path is a stat, so this costs nothing in the common case.
-        crate::rpc_patches::apply_on_launch();
+        // path is a stat, so this costs nothing in the common case. The timer
+        // prints only under `ORBIT_SPAWN_TIMING`, to attribute the New Task
+        // pause (the patch check is the one part of a spawn that can run node).
+        let patches_started = std::time::Instant::now();
+        let patches = crate::rpc_patches::apply_on_launch();
+        if spawn_timing_enabled() {
+            eprintln!(
+                "orbit: rpc patch check applied={:?} already={} error={:?} after {:?}",
+                patches.applied,
+                patches.already.len(),
+                patches.error,
+                patches_started.elapsed()
+            );
+        }
         let args = if apply_default {
             SessionDefault::load().cli_args()
         } else {
@@ -271,4 +286,17 @@ mod tests {
         assert!(entry.with_file_name("title.js").exists());
         fs::remove_dir_all(&dir).ok();
     }
+}
+
+/// Whether to print spawn timings to stderr. A diagnostic for attributing the
+/// New Task pause (`ORBIT_SPAWN_TIMING=1` in the environment), off by default
+/// so a normal launch stays quiet.
+pub(crate) fn spawn_timing_enabled() -> bool {
+    env_flag_set("ORBIT_SPAWN_TIMING")
+}
+
+/// Whether an environment flag is set to a non-empty value. The spawn and
+/// draft diagnostics both read their switch through this.
+pub(crate) fn env_flag_set(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }

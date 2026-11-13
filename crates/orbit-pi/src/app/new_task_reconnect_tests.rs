@@ -1,10 +1,8 @@
 //! Regression tests for issue #30: with pi disconnected (the process exited,
-//! the reconnect banner is up), the sidebar's New Task button did nothing.
-//! `on_new_session` only checked whether a run was in flight, so it sent
-//! `new_session` into the dead process's stdin — a write nobody answers —
-//! instead of spawning a fresh process. The decision is `can_reuse_session`:
-//! reuse only when the process is alive and idle; otherwise start a task on a
-//! fresh process.
+//! the reconnect banner is up), the sidebar's New Task button did nothing. It
+//! used to send `new_session` into the dead process's stdin — a write nobody
+//! answers. A click now starts nothing at all (see D16): the first message
+//! starts a process of its own, so a dead one can never be written to.
 #![cfg(unix)]
 
 use super::*;
@@ -99,47 +97,29 @@ fn an_exited_pi_process_never_reuses_the_session(cx: &mut gpui::TestAppContext) 
             app.runtime.alive = false;
             app.runtime.exited = true;
 
-            assert!(!app.runtime_is_live());
-            assert!(
-                !app.can_reuse_session(),
-                "a dead pi process cannot honor new_session"
-            );
+            assert!(!app.runtime_is_live(), "a dead process is not live");
         });
     });
 }
 
-/// A runtime that was never started (or was stopped): no process to reuse.
+/// A runtime that was never started (or was stopped) is not live, and a
+/// click on it starts nothing.
 #[gpui::test]
-fn a_missing_pi_process_never_reuses_the_session(cx: &mut gpui::TestAppContext) {
+fn a_stopped_runtime_is_not_live(cx: &mut gpui::TestAppContext) {
     let app = test_app(cx);
     cx.update(|cx| {
         app.update(cx, |app, _| {
             app.drop_client();
-            assert!(!app.can_reuse_session());
+            assert!(!app.runtime_is_live());
         });
     });
 }
 
-/// A run in flight: `new_session` would abort the live turn, so the task
-/// must start on its own parked-and-replaced process.
+/// A click starts nothing: the idle live process is parked warm (not reused
+/// with `new_session`), and the new task's process is born with its first
+/// message.
 #[gpui::test]
-fn a_running_turn_never_reuses_the_session(cx: &mut gpui::TestAppContext) {
-    let app = test_app(cx);
-    let fake = FakePi::start();
-    cx.update(|cx| {
-        app.update(cx, |app, _| {
-            adopt_fake_pi(app, &fake);
-            assert!(app.can_reuse_session(), "an idle live process is reusable");
-            app.busy = true;
-            assert!(!app.can_reuse_session(), "a live turn is not reusable");
-        });
-    });
-}
-
-/// The warm path stays warm: an idle live process takes `new_session` in
-/// place — no second spawn, and the command reaches pi's stdin.
-#[gpui::test]
-fn an_idle_live_session_reuses_the_process_for_the_new_task(cx: &mut gpui::TestAppContext) {
+fn an_idle_live_session_is_parked_not_reused(cx: &mut gpui::TestAppContext) {
     let app = test_app(cx);
     let fake = FakePi::start();
     let started_at = cx.update(|cx| {
@@ -151,20 +131,26 @@ fn an_idle_live_session_reuses_the_process_for_the_new_task(cx: &mut gpui::TestA
     let cx = cx.add_empty_window();
     cx.update(|window, cx| {
         app.update(cx, |app, cx| {
-            assert!(app.can_reuse_session());
+            assert!(app.runtime_is_live());
             app.on_new_session(&crate::NewSession, window, cx);
         });
     });
     let stdin = fake.stdin();
     assert!(
-        stdin.contains("\"type\":\"new_session\""),
-        "expected new_session on pi's stdin, got: {stdin:?}"
+        !stdin.contains("\"type\":\"new_session\""),
+        "a click must not replace the parked session, got: {stdin:?}"
     );
     cx.update(|_, cx| {
         app.update(cx, |app, _| {
+            assert!(app.client.is_none(), "the new task has no process yet");
+            assert_eq!(
+                app.lives.len() + app.pending_parks.len(),
+                1,
+                "the idle process stays warm in the background"
+            );
             assert_eq!(
                 app.runtime.started_at, started_at,
-                "reusing the live process must not spawn another"
+                "and nothing was spawned"
             );
         });
     });

@@ -1,10 +1,11 @@
 //! Sidebar drafts: a new task the user opened but has not sent yet.
 //!
-//! Clicking New inserts a row immediately. Leaving that row drops it when the
+//! Clicking New inserts a row immediately and starts nothing; the first user
+//! message is what starts a pi process. Leaving the row drops it when the
 //! composer is still empty, and keeps it when the composer has text or an
 //! attachment. The first user message promotes the row into an ordinary
-//! session. These functions are pure so the rules can be tested without a
-//! pi process.
+//! session. The fate rule is pure so it can be tested without a pi process;
+//! the one impure helper here is the diagnostic switch below.
 
 use std::path::PathBuf;
 
@@ -31,17 +32,6 @@ pub(crate) fn settle_listed_draft(has_user_message: bool, composer_empty: bool) 
     }
 }
 
-/// An idle live process can take `new_session` in place only for the folder
-/// it is already in, and only when that view is not an unsent draft. An
-/// unsent draft owns the process; a different folder needs its own process.
-pub(crate) fn reuse_live_process(
-    can_reuse: bool,
-    same_workspace: bool,
-    unsent_draft: bool,
-) -> bool {
-    can_reuse && same_workspace && !unsent_draft
-}
-
 /// Clicking New again stays on the current row only when that row is already
 /// an empty draft in the same workspace.
 pub(crate) fn reuse_blank_draft(
@@ -52,6 +42,14 @@ pub(crate) fn reuse_blank_draft(
     composer_empty: bool,
 ) -> bool {
     same_workspace && is_current_draft && !promoted && !has_user_message && composer_empty
+}
+
+/// Whether to trace when a New Task row is removed or clipped from the
+/// sidebar (`ORBIT_DEBUG_DRAFTS=1`). A row can vanish because something settled
+/// it away or because the group's history cap pushed it out, and the two look
+/// identical on screen.
+pub(crate) fn trace_enabled() -> bool {
+    crate::bundled_extensions::env_flag_set("ORBIT_DEBUG_DRAFTS")
 }
 
 /// Path used for a draft before pi reports a session file. It is not a file
@@ -87,13 +85,5 @@ mod tests {
         assert!(!reuse_blank_draft(true, true, false, false, false));
         assert!(!reuse_blank_draft(true, true, true, false, true));
         assert!(!reuse_blank_draft(true, false, false, false, true));
-    }
-
-    #[test]
-    fn a_live_process_is_reused_only_in_its_own_workspace() {
-        assert!(reuse_live_process(true, true, false));
-        assert!(!reuse_live_process(true, false, false));
-        assert!(!reuse_live_process(true, true, true));
-        assert!(!reuse_live_process(false, true, false));
     }
 }

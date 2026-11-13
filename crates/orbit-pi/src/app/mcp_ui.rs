@@ -249,7 +249,7 @@ impl OrbitApp {
             Ok(client) => {
                 self.adopt_client(client);
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&workspace));
-                self.send(
+                self.replacement_in_flight = self.send_tracked(
                     CommandBody::SwitchSession {
                         session_path: session_path.to_string_lossy().into_owned(),
                     },

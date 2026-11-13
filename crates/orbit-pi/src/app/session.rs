@@ -107,15 +107,6 @@ impl OrbitApp {
         self.available_thinking_levels.len() > 1
     }
 
-    /// Whether New Task can reuse the active process in place with
-    /// `new_session`: only when no turn is in flight and the process is
-    /// alive. A run in flight must be parked so `new_session` cannot abort
-    /// it; a dead process must be replaced by a fresh spawn instead of
-    /// sending the command into a stdin nobody reads (issue #30).
-    pub(super) fn can_reuse_session(&self) -> bool {
-        !self.is_running() && self.runtime_is_live()
-    }
-
     /// The open row is still an unsent draft. Pin, archive, rename, and
     /// clone do not apply to it.
     pub(super) fn active_is_unsent_draft(&self) -> bool {
@@ -272,6 +263,20 @@ impl OrbitApp {
         // above the composer mirrors it.
         let running = self.is_running();
         let (body, label) = mode.command(running, text.clone(), Self::prompt_images(&attachments));
+        // A brand-new task has no process yet: this message is what starts one
+        // (see `queue_prompt_for_new_process`). Its transcript is empty by
+        // construction, which is what makes the optimistic append safe to
+        // unwind if the spawn fails.
+        if !running && self.client.is_none() && self.active_is_unsent_draft() {
+            let composer = ComposerDraft {
+                text,
+                attachments,
+                files,
+                pasted_texts,
+            };
+            self.queue_prompt_for_new_process(body, label, composer, cx);
+            return;
+        }
         let Some(id) = self.send_tracked(body, label) else {
             // Keep the prompt and attachments so nothing is lost.
             self.attachments = attachments;
@@ -295,9 +300,25 @@ impl OrbitApp {
             cx.notify();
             return;
         }
-        // Not running: a normal prompt starts a new turn. Sending it commits
-        // the user to a folder, so make sure it is in Orbit's own sidebar
-        // list — the launch-cwd path never picked one explicitly.
+        // Not running: a normal prompt starts a new turn. The command is out;
+        // the UI half is shared with the path that waits for a process.
+        self.show_prompt_turn(&text, &attachments, cx);
+        // The composer's own prompt is the only one whose `handled` answer may
+        // tear down the working row (see `prompt_in_flight`).
+        self.prompt_in_flight = Some(id.clone());
+        self.execution.prompt_id = Some(id);
+        cx.notify();
+    }
+
+    /// Put a sent (or about-to-be-sent) prompt on screen: the live "Working
+    /// for…" row, the user message, the turn clock, and the composer cleared.
+    ///
+    /// Shared by [`Self::submit_as`] and [`Self::queue_prompt_for_new_process`]
+    /// so a message that had to wait for a pi process looks exactly like one
+    /// that did not.
+    fn show_prompt_turn(&mut self, text: &str, attachments: &[Attachment], cx: &mut Context<Self>) {
+        // Sending commits the user to a folder, so make sure it is in Orbit's
+        // own sidebar list — the launch-cwd path never picked one explicitly.
         if let Some(cwd) = self
             .current_workspace
             .clone()
@@ -306,10 +327,6 @@ impl OrbitApp {
             self.add_workspace(cwd, cx);
         }
         let opened = self.begin_turn(cx);
-        // The composer's own prompt is the only one whose `handled` answer may
-        // tear down the working row (see `prompt_in_flight`).
-        self.prompt_in_flight = Some(id.clone());
-        self.execution.prompt_id = Some(id);
         // The turn is in flight from here, not from pi's `agent_start`: the
         // composer flips to Stop, the heartbeat polls at 60 Hz, and every
         // `is_running()` gate agrees, so a slow provider (or a pi that is still
@@ -317,14 +334,14 @@ impl OrbitApp {
         // re-sets the same flag, and every settle path clears it.
         self.busy = true;
         self.execution.start();
-        // Same for the transcript: the live "Working for…" row goes up now,
-        // with its clock running from the send.
+        // The live "Working for…" row goes up now, with its clock running
+        // from the send.
         self.transcript.expect_reply();
         // Show the prompt immediately — pi does not echo it back in RPC mode.
         // The decoded previews ride along so the chat window shows what was
         // attached (pi echoes/snapshots carry image blocks for reloads).
         let appended = self.transcript.append_user_message(
-            &text,
+            text,
             attachments
                 .iter()
                 .filter_map(|a| a.preview.clone())
@@ -341,6 +358,64 @@ impl OrbitApp {
             self.mark_current_draft_sent();
         }
         self.input.update(cx, |input, cx| input.clear(cx));
+    }
+
+    /// The first message of a brand-new task: no pi process exists yet, so the
+    /// message goes up first and the process is started under it. The command
+    /// is delivered by `admit_spawned_client` once pi is up.
+    fn queue_prompt_for_new_process(
+        &mut self,
+        body: CommandBody,
+        label: &str,
+        composer: ComposerDraft,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.transcript.is_empty() {
+            // Only a task whose transcript is empty can be unwound cleanly. A
+            // second message while the first one waits for its process lands
+            // here; it stays in the composer instead of being swallowed.
+            self.attachments = composer.attachments;
+            self.files = composer.files;
+            self.pasted_texts = composer.pasted_texts;
+            cx.notify();
+            return;
+        }
+        self.prompt_history.borrow_mut().record(&composer.text);
+        self.show_prompt_turn(&composer.text, &composer.attachments, cx);
+        self.pending_prompt = Some(PendingPrompt {
+            body,
+            label: label.to_string(),
+            composer,
+        });
+        let cwd = self.task_cwd();
+        self.spawn_pi_client_later(cwd, SpawnThen::Prompt, cx);
+        cx.notify();
+    }
+
+    /// Undo an optimistic prompt whose process never came up: the message
+    /// never reached pi, so it leaves the transcript (which held only it), the
+    /// text goes back into the composer, and the row stops claiming to be sent.
+    pub(super) fn unwind_pending_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_prompt.take() else {
+            return;
+        };
+        self.busy = false;
+        self.execution = SessionExecution::default();
+        self.prompt_in_flight = None;
+        self.transcript.clear();
+        self.reset_turns(cx);
+        if let Some(id) = self.current_draft_id {
+            if let Some(draft) = self.listed_drafts.iter_mut().find(|draft| draft.id == id) {
+                draft.promoted = false;
+                draft.sent_title = None;
+            }
+        }
+        // The text already carries the folded pastes and `@path` mentions
+        // (`submit_as` folds them in before this), so restoring the trays as
+        // well would attach everything twice on the next send.
+        self.input.update(cx, |input, cx| {
+            input.set_text(pending.composer.text.clone(), cx)
+        });
         cx.notify();
     }
 
@@ -469,6 +544,10 @@ impl OrbitApp {
     /// leaving it active would let the incoming `adopt_client` overwrite — and
     /// kill — a live run on the next switch (issue #46).
     pub(super) fn park_active_session(&mut self) {
+        // The parked process is the view's, so the view's pending spawn is
+        // moot: a client that arrives after this would be adopted onto a page
+        // that has already moved on.
+        self.invalidate_pending_spawn();
         let Some(client) = self.client.take() else {
             return;
         };
@@ -767,6 +846,15 @@ impl OrbitApp {
     /// like a dead button — [`Self::check_stalled_stop`] turns a stop pi never
     /// answered into an action Orbit takes itself.
     pub(super) fn request_abort(&mut self, cx: &mut Context<Self>) {
+        // A turn whose process has not started yet has nothing to abort: cancel
+        // the spawn and hand the message back, the same as an abort would.
+        if self.pending_prompt.is_some() && self.client.is_none() {
+            self.invalidate_pending_spawn();
+            self.unwind_pending_prompt(cx);
+            self.set_status(tr!("runtime.pi_process_stopped"));
+            cx.notify();
+            return;
+        }
         // A second press is the user saying "now" — once it reads as a second
         // press. Stop and Esc share this path and a double-tapped Esc is common,
         // so inside the retry window the first request stands: a healthy pi is
@@ -833,6 +921,14 @@ impl OrbitApp {
     /// never clear it at all.
     pub(super) fn force_stop_run(&mut self, cx: &mut Context<Self>) {
         self.abort_sent_at = None;
+        // Same as the first press: a start still in flight is cancelled here.
+        if self.pending_prompt.is_some() && self.client.is_none() {
+            self.invalidate_pending_spawn();
+            self.unwind_pending_prompt(cx);
+            self.set_status(tr!("runtime.pi_process_stopped"));
+            cx.notify();
+            return;
+        }
         // Nothing pi never acknowledged can still be delivered, so hand the
         // queued text back before the drop resets the queue: a stop must not eat
         // what the user typed while they waited.
@@ -1086,6 +1182,21 @@ impl OrbitApp {
         }
     }
 
+    /// Whether a name report (`session_info_changed`, or the `session_name` a
+    /// `get_state` reply carries) may paint the header right now.
+    ///
+    /// Two things hold it. A footer fork holds its `(N)` title until
+    /// `set_session_name` answers, because pi runs that beside the
+    /// `get_state` queued first and that report still carries the copied
+    /// name. A replacement we sent (`new_session` / `switch_session`) holds
+    /// every report until its own reply, and so does a spawn that has not
+    /// landed yet: until then, whatever name arrives describes the session
+    /// being left — which is how the previous task's title flickered over a
+    /// New Task page before settling on `New task`.
+    pub(super) fn name_report_held(&self) -> bool {
+        self.fork_hold_blocks() || self.replacement_in_flight.is_some() || self.spawn_pending()
+    }
+
     /// The fork rename has not been answered yet. Reports from pi stay
     /// ignored for the whole wait, including one that already matches.
     pub(super) fn fork_hold_blocks(&self) -> bool {
@@ -1229,7 +1340,7 @@ impl OrbitApp {
         let outgoing = self.settle_outgoing(cx);
         self.retire_outgoing(outgoing, cx);
         self.reset_for_new_task(cx);
-        self.launch_fresh_draft(cwd, true, window, cx);
+        self.launch_fresh_draft(cwd, window, cx);
     }
 
     pub(super) fn task_cwd(&self) -> PathBuf {
@@ -1241,8 +1352,11 @@ impl OrbitApp {
 
     /// New Task from a button, shortcut, or workspace "+". An empty draft in
     /// the same workspace is focused instead of stacking a second blank row.
-    /// A listed draft that must stay (it has text, or a message) keeps its
-    /// process; an ordinary idle session is reused in place.
+    ///
+    /// A click here starts nothing: it lists the row and shows the page. The
+    /// pi process is born with the first message (`submit_as`), because a
+    /// blank row is dropped when the reader leaves it and a cold pi costs
+    /// seconds — spawning on the click pays that for tasks nobody writes.
     pub(super) fn start_listed_draft(
         &mut self,
         cwd: PathBuf,
@@ -1254,24 +1368,7 @@ impl OrbitApp {
             cx.notify();
             return;
         }
-        if crate::app::drafts::reuse_live_process(
-            self.can_reuse_session(),
-            self.workspace_matches(&cwd),
-            self.active_is_unsent_draft(),
-        ) {
-            self.reuse_process_for_new_task(cwd, window, cx);
-            return;
-        }
         self.begin_new_task(cwd, window, cx);
-    }
-
-    /// `true` when `cwd` is the folder the open view is already working in.
-    fn workspace_matches(&self, cwd: &Path) -> bool {
-        let current = self
-            .current_workspace
-            .clone()
-            .unwrap_or_else(|| self.task_cwd());
-        sessions::canonical_workspace_path(&current) == sessions::canonical_workspace_path(cwd)
     }
 
     /// `true` when the open view is already an empty draft for `cwd`.
@@ -1292,36 +1389,6 @@ impl OrbitApp {
         )
     }
 
-    /// Send `new_session` on the process already running. The old path is
-    /// cleared in the same turn so a click that lands before pi answers
-    /// cannot park the new session under the old file.
-    fn reuse_process_for_new_task(
-        &mut self,
-        cwd: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.prepare_new_task_shell(cx);
-        let outgoing = self.settle_outgoing(cx);
-        match outgoing {
-            Outgoing::Session | Outgoing::Promoted { path: Some(_), .. } => {
-                // A sent session already has its file. `new_session` on this
-                // idle process leaves that file on disk, the same way New
-                // behaves on an ordinary session.
-                self.current_session_path = None;
-                self.transcript.begin_new_session();
-                self.launch_fresh_draft(cwd, false, window, cx);
-            }
-            other => {
-                // The page already had text, so it became a kept draft and
-                // still owns this process. Park it, then start a new one.
-                self.retire_outgoing(other, cx);
-                self.reset_for_new_task(cx);
-                self.launch_fresh_draft(cwd, true, window, cx);
-            }
-        }
-    }
-
     fn prepare_new_task_shell(&mut self, cx: &mut Context<Self>) {
         self.cancel_fork_followup();
         self.cancel_custom_surfaces(cx);
@@ -1334,31 +1401,36 @@ impl OrbitApp {
         self.execution = SessionExecution::default();
         self.busy = false;
         self.transcript.clear();
-        self.current_title = None;
-        self.reset_session_name(cx);
+        self.reset_session_identity(cx);
         self.current_session_path = None;
         self.current_draft_id = None;
         self.added = 0;
         self.removed = 0;
-        self.context = None;
-        self.session_usage = None;
         self.reset_turns(cx);
         self.reset_queue();
-        self.session_id = None;
         self.workflow_pending = None;
         self.workflow_mode = WorkflowMode::default();
     }
 
-    /// Insert a blank sidebar draft and point pi at a new session. `spawn`
-    /// starts a process; the reuse path sends `new_session` on the one it
-    /// already has.
-    fn launch_fresh_draft(
-        &mut self,
-        cwd: PathBuf,
-        spawn: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Forget who the open task was: pi's title, an explicit rename, the
+    /// session id, and the usage reported for it. The transcript is the
+    /// caller's business — a parked view keeps its own copy, and a `new_session`
+    /// on a live process has to hold notices for the session pi is about to
+    /// start (see [`Transcript::begin_new_session`]).
+    fn reset_session_identity(&mut self, cx: &mut Context<Self>) {
+        self.current_title = None;
+        self.replacement_in_flight = None;
+        self.pending_switch = None;
+        self.reset_session_name(cx);
+        self.session_id = None;
+        self.context = None;
+        self.session_usage = None;
+    }
+
+    /// Insert a blank sidebar draft and show it. Nothing is spawned and no
+    /// command is sent: the first message starts the process (see
+    /// [`Self::queue_prompt_for_new_process`]).
+    fn launch_fresh_draft(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let cwd = sessions::canonical_workspace_path(&cwd);
         self.add_workspace(cwd.clone(), cx);
         self.set_current_workspace(cwd.clone(), cx);
@@ -1368,7 +1440,7 @@ impl OrbitApp {
             id,
             path: crate::app::drafts::draft_placeholder(id),
             bound: false,
-            cwd: cwd.clone(),
+            cwd,
             created: SystemTime::now(),
             composer: None,
             promoted: false,
@@ -1377,27 +1449,6 @@ impl OrbitApp {
         self.current_draft_id = Some(id);
         self.current_session_path = None;
         self.apply_composer(None, cx);
-        if spawn || self.client.is_none() {
-            match self.extensions.spawn(&cwd, true, &self.mcp.secret_env()) {
-                Ok(client) => {
-                    self.adopt_client(client);
-                    self.mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
-                    self.send(CommandBody::NewSession, "new_session");
-                    self.refresh_catalogs();
-                    self.probe_auth();
-                    self.set_status(tr!("session.new_session"));
-                }
-                Err(err) => {
-                    let message = tr!("runtime.pi_spawn_failed", error = err);
-                    self.client = None;
-                    self.runtime.error = Some(message.clone());
-                    self.set_status(message);
-                }
-            }
-        } else {
-            self.send(CommandBody::NewSession, "new_session");
-            self.set_status(tr!("session.new_session"));
-        }
         self.input.read(cx).focus(window);
         cx.notify();
     }
@@ -1411,6 +1462,14 @@ impl OrbitApp {
     /// Save the composer and decide what the open task becomes. Does not
     /// touch the pi process — [`Self::retire_outgoing`] does that.
     fn settle_outgoing(&mut self, cx: &mut Context<Self>) -> Outgoing {
+        // A message still waiting for its process never reached pi, so leaving
+        // the page takes it back: the text returns to the composer before it is
+        // settled, which keeps the row a draft instead of a session that claims
+        // to exist.
+        if self.pending_prompt.is_some() {
+            self.invalidate_pending_spawn();
+            self.unwind_pending_prompt(cx);
+        }
         let composer = self.take_composer(cx);
         let has_user = self.transcript.first_user_message().is_some();
         if let Some(id) = self.current_draft_id.take() {
@@ -1427,6 +1486,9 @@ impl OrbitApp {
             let fate = crate::app::drafts::settle_listed_draft(has_user, composer.is_none());
             match fate {
                 crate::app::drafts::DraftFate::Discard => {
+                    if crate::app::drafts::trace_enabled() {
+                        eprintln!("orbit: draft {id} discarded while leaving it");
+                    }
                     self.listed_drafts.retain(|draft| draft.id != id);
                     self.scrub_draft_history(id);
                     Outgoing::Discarded {
@@ -1580,6 +1642,9 @@ impl OrbitApp {
     pub(super) fn admit_rekeyed_park(&mut self, path: PathBuf, parked: ParkedSession) {
         if parked.discard {
             if let Some(id) = parked.draft {
+                if crate::app::drafts::trace_enabled() {
+                    eprintln!("orbit: draft {id} discarded when its parked process was re-keyed");
+                }
                 self.listed_drafts.retain(|draft| draft.id != id);
                 self.scrub_draft_history(id);
             }
@@ -1783,33 +1848,25 @@ impl OrbitApp {
         self.reset_for_new_task(cx);
         self.unbind_draft(id);
         self.current_draft_id = Some(id);
-        self.boot_draft_process(&cwd, cx);
+        // Showing a draft does not start pi: the row is the user's unsent
+        // work, and the process is born with the message that sends it.
+        self.show_draft_page(&cwd, cx);
         self.restore_draft_composer(id, cx);
         cx.notify();
+    }
+
+    /// Point the view at a draft's folder without starting a process.
+    fn show_draft_page(&mut self, cwd: &Path, cx: &mut Context<Self>) {
+        self.add_workspace(cwd.to_path_buf(), cx);
+        self.set_current_workspace(cwd.to_path_buf(), cx);
+        self.reveal_workspace_group(cwd);
     }
 
     /// Spawn a process for a draft that already owns the composer. Does not
     /// settle the outgoing task — the caller did that.
     fn boot_draft_process(&mut self, cwd: &Path, cx: &mut Context<Self>) {
-        self.add_workspace(cwd.to_path_buf(), cx);
-        self.set_current_workspace(cwd.to_path_buf(), cx);
-        self.reveal_workspace_group(cwd);
-        match self.extensions.spawn(cwd, true, &self.mcp.secret_env()) {
-            Ok(client) => {
-                self.adopt_client(client);
-                self.mcp_stamp = self.mcp.fingerprint_for(Some(cwd));
-                self.send(CommandBody::NewSession, "new_session");
-                self.refresh_catalogs();
-                self.probe_auth();
-                self.set_status(tr!("session.new_session"));
-            }
-            Err(err) => {
-                let message = tr!("runtime.pi_spawn_failed", error = err);
-                self.client = None;
-                self.runtime.error = Some(message.clone());
-                self.set_status(message);
-            }
-        }
+        self.show_draft_page(cwd, cx);
+        self.spawn_pi_client_later(cwd.to_path_buf(), SpawnThen::NewSession, cx);
     }
 
     fn unbind_draft(&mut self, id: u64) {
@@ -1980,6 +2037,9 @@ impl OrbitApp {
     /// Remove a draft row, its process, and a header-only file. Missing
     /// files are not an error — the row may never have been written.
     pub(super) fn delete_listed_draft(&mut self, id: u64, cx: &mut Context<Self>) {
+        if crate::app::drafts::trace_enabled() {
+            eprintln!("orbit: draft {id} deleted by an explicit action");
+        }
         let Some(pos) = self.listed_drafts.iter().position(|draft| draft.id == id) else {
             return;
         };
@@ -2104,6 +2164,15 @@ impl OrbitApp {
         push: bool,
         cx: &mut Context<Self>,
     ) {
+        // pi tears the outgoing session down before it applies the incoming
+        // one, and a command landing in that window is what makes an
+        // extension's `session_shutdown` see an already-invalidated ctx. Hold
+        // the click and run it when pi answers: the last one clicked wins.
+        if self.replacement_in_flight.is_some() {
+            self.pending_switch = Some(session);
+            cx.notify();
+            return;
+        }
         self.pending_session_rename = None;
         self.session_rename_ready = false;
         // Opening a session means viewing the chat: leave whichever full-page
@@ -2287,7 +2356,7 @@ impl OrbitApp {
                     Ok(client) => {
                         self.adopt_client(client);
                         self.mcp_stamp = mcp_stamp;
-                        self.send(
+                        self.replacement_in_flight = self.send_tracked(
                             CommandBody::SwitchSession {
                                 session_path: session.path.to_string_lossy().into_owned(),
                             },

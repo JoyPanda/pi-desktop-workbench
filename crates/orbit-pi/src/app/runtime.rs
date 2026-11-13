@@ -166,6 +166,9 @@ impl OrbitApp {
     /// `get_state`) *before* [`probe_auth`](Self::probe_auth), so the slow
     /// provider-auth/quota probes never queue in front of the session load.
     pub(super) fn adopt_client(&mut self, client: PiClient) {
+        // Whatever spawn was still on its way is moot: this process owns the
+        // view now, so a late result must not replace it.
+        self.invalidate_pending_spawn();
         self.runtime = RuntimeStatus {
             started_at: Some(Instant::now()),
             alive: true,
@@ -181,8 +184,193 @@ impl OrbitApp {
         self.abort_sent_at = None;
     }
 
+    /// Give up the spawn still on its way, if any. Any process the app already
+    /// owns — or just gave up — supersedes it: the late result finds no pending
+    /// ticket to match in [`Self::admit_spawned_client`] and drops the child it
+    /// started instead of adopting it over the current view.
+    pub(super) fn invalidate_pending_spawn(&mut self) {
+        self.pending_spawn = None;
+    }
+
+    /// End a replacement: name reports may paint again, and a click that
+    /// arrived while pi was mid-replacement runs now instead of being dropped.
+    pub(super) fn end_replacement(&mut self, cx: &mut Context<Self>) {
+        self.replacement_in_flight = None;
+        if let Some(session) = self.pending_switch.take() {
+            self.switch_to_session(session, true, cx);
+        }
+    }
+
+    /// Whether a background spawn is still on its way.
+    pub(super) fn spawn_pending(&self) -> bool {
+        self.pending_spawn.is_some()
+    }
+
+    /// Start a pi process for a brand-new session without blocking the frame
+    /// that asked for it, and without knowing yet why it is wanted.
+    ///
+    /// Two callers share this seam because both start a brand-new session on a
+    /// new process, not a resume:
+    ///
+    /// - [`SpawnThen::Prompt`] — the first message of a New Task. The click
+    ///   listed the row and showed the page without starting anything; the
+    ///   message went on screen and is delivered here once pi is up.
+    /// - [`SpawnThen::NewSession`] — the Settings restarts that reload
+    ///   credentials or a catalog onto an empty draft (`resume_after_drop`).
+    ///
+    /// [`Self::runtime_start`] and the session-switch paths still spawn in
+    /// place — they send a command the moment the client exists, and their
+    /// ordering (re-attach a parked session, keep a run alive) needs its own
+    /// pass.
+    pub(super) fn spawn_pi_client_later(
+        &mut self,
+        cwd: PathBuf,
+        then: SpawnThen,
+        cx: &mut Context<Self>,
+    ) {
+        self.invalidate_pending_spawn();
+        self.spawn_generation = self.spawn_generation.wrapping_add(1);
+        // Everything the spawn needs is a plain value: the extension entry
+        // points, the MCP secret values (so pi can expand `${NAME}` in
+        // `mcp.json` without the config holding a credential), and the folder.
+        let extensions = self.extensions.clone();
+        let env = self.mcp.secret_env();
+        #[cfg(test)]
+        let test_bin = self.spawn_bin.clone();
+        #[cfg(not(test))]
+        let test_bin: Option<PathBuf> = None;
+        // The MCP stamp travels with the ticket, not read back when the result
+        // lands: these are the secrets this child was actually spawned with,
+        // and a config edited in between must not be recorded as its own.
+        let mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
+        let ticket = SpawnTicket {
+            generation: self.spawn_generation,
+            cwd,
+            mcp_stamp,
+            then,
+        };
+        self.pending_spawn = Some(ticket.clone());
+        let ticket_for_spawn = ticket.clone();
+        cx.spawn(async move |this, cx| {
+            let spawned = cx
+                .background_executor()
+                .spawn(async move {
+                    let started = Instant::now();
+                    let result = match test_bin {
+                        Some(bin) => PiClient::spawn_with_bin(
+                            bin.to_string_lossy().as_ref(),
+                            &ticket_for_spawn.cwd,
+                            None,
+                        ),
+                        None => extensions.spawn(&ticket_for_spawn.cwd, true, &env),
+                    };
+                    if crate::bundled_extensions::spawn_timing_enabled() {
+                        eprintln!(
+                            "orbit: pi spawn took {:?} for {}",
+                            started.elapsed(),
+                            ticket_for_spawn.cwd.display()
+                        );
+                    }
+                    result
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| app.admit_spawned_client(ticket, spawned, cx));
+        })
+        .detach();
+        self.set_status(tr!("runtime.starting_pi"));
+        cx.notify();
+    }
+
+    /// The main-thread half of [`Self::spawn_pi_client_later`]: adopt the
+    /// process if the view is still waiting for it, then do what the ticket
+    /// was taken for.
+    ///
+    /// A ticket that is no longer the pending one is dropped here — dropping
+    /// the [`PiClient`] kills the child — so a spawn that finished after the
+    /// user opened another session never steals it.
+    pub(super) fn admit_spawned_client(
+        &mut self,
+        ticket: SpawnTicket,
+        spawned: anyhow::Result<PiClient>,
+        cx: &mut Context<Self>,
+    ) {
+        // The view still has to be waiting for *this* spawn: a newer one, or a
+        // view that gave up (switch, stop), leaves nothing to match.
+        if !self
+            .pending_spawn
+            .as_ref()
+            .is_some_and(|pending| pending.generation == ticket.generation)
+        {
+            return;
+        }
+        self.pending_spawn = None;
+        match spawned {
+            Ok(client) => {
+                self.adopt_client(client);
+                self.mcp_stamp = ticket.mcp_stamp;
+                match ticket.then {
+                    SpawnThen::Prompt => {
+                        // The message that started this process is already on
+                        // screen; hand it over now, and let its id drive the
+                        // reply bookkeeping the way a live send does.
+                        if let Some(pending) = self.pending_prompt.take() {
+                            match self.send_tracked(pending.body, &pending.label) {
+                                Some(id) => {
+                                    // Delivered, so it joins the ↑/↓ recall log
+                                    // — which is not when it was typed.
+                                    self.prompt_history
+                                        .borrow_mut()
+                                        .record(&pending.composer.text);
+                                    self.prompt_in_flight = Some(id.clone());
+                                    self.execution.prompt_id = Some(id);
+                                }
+                                // The write failed: the message never left, so
+                                // it goes back like any other failed send.
+                                None => self.unwind_pending_prompt(cx),
+                            }
+                        }
+                    }
+                    SpawnThen::NewSession => {
+                        // The session command goes out first: the catalog,
+                        // auth, and quota probes queue behind it (see
+                        // [`Self::adopt_client`]).
+                        self.replacement_in_flight =
+                            self.send_tracked(CommandBody::NewSession, "new_session");
+                        self.set_status(tr!("session.new_session"));
+                    }
+                }
+                self.refresh_catalogs();
+                self.probe_auth();
+            }
+            Err(err) => {
+                // Nothing is adopted, so only what this ticket owed is undone:
+                // a waiting message goes back into the composer, and the banner
+                // explains why nothing sent. Tagged with the command the spawn
+                // owed, so a later success on that command retires it instead
+                // of leaving a red banner the user has to dismiss.
+                let source = match ticket.then {
+                    SpawnThen::Prompt => "prompt",
+                    SpawnThen::NewSession => "new_session",
+                };
+                let message = tr!("runtime.pi_spawn_failed", error = err);
+                self.client = None;
+                self.runtime.error = Some(message.clone());
+                if ticket.then == SpawnThen::Prompt {
+                    self.unwind_pending_prompt(cx);
+                }
+                self.set_error_from(source, message.clone());
+                self.set_status(message);
+            }
+        }
+        cx.notify();
+    }
+
     /// Tear down the active pi process (dropping `PiClient` kills the child).
     pub(super) fn drop_client(&mut self) {
+        // Giving up the view gives up its pending spawn too: the caller is
+        // about to open something else, and a client that arrives afterwards
+        // would land on the wrong page.
+        self.invalidate_pending_spawn();
         if self.execution.status().is_in_progress() {
             self.execution.stop();
         }
@@ -204,6 +392,9 @@ impl OrbitApp {
         // A prompt the departing process never answered cannot be recognised
         // later, and the next process starts its own id sequence.
         self.prompt_in_flight = None;
+        // The commands went with the process they were sent to.
+        self.replacement_in_flight = None;
+        self.pending_switch = None;
         // Extension widgets belonged to the departing process.
         self.extension_widgets.clear();
         self.subagents = crate::subagent_status::SubagentBoard::default();
@@ -569,9 +760,11 @@ impl OrbitApp {
         self.auto_restart_scheduled && self.should_auto_restart_now()
     }
 
-    /// Spawn the pi process (Start button). No-op while one is running.
+    /// Spawn the pi process (Start button). No-op while one is running, and
+    /// while a background spawn (New Task) is still on its way — that spawn
+    /// already owns the launch, and a second process would only be dropped.
     pub(super) fn runtime_start(&mut self, cx: &mut Context<Self>) {
-        if self.client.is_some() {
+        if self.client.is_some() || self.spawn_pending() {
             return;
         }
         let cwd = self
@@ -601,7 +794,17 @@ impl OrbitApp {
 
     /// Stop the pi process (Stop button).
     pub(super) fn runtime_stop(&mut self, cx: &mut Context<Self>) {
+        // A process still starting is stopped the same way: cancel the spawn so
+        // its client is dropped when it lands instead of adopted a moment after
+        // the user asked for it to stop, and hand a waiting message back.
+        let was_starting = self.spawn_pending();
+        self.invalidate_pending_spawn();
         if self.client.is_none() {
+            if was_starting {
+                self.unwind_pending_prompt(cx);
+                self.set_status(tr!("runtime.pi_process_stopped"));
+                cx.notify();
+            }
             return;
         }
         self.cancel_fork_followup();
@@ -646,7 +849,7 @@ impl OrbitApp {
             Ok(client) => {
                 self.adopt_client(client);
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&workspace));
-                self.send(
+                self.replacement_in_flight = self.send_tracked(
                     CommandBody::SwitchSession {
                         session_path: session_path.to_string_lossy().into_owned(),
                     },
@@ -834,4 +1037,28 @@ fn clip_stderr_line(line: &str) -> String {
     let mut out: String = line.chars().take(MAX_CHARS).collect();
     out.push('…');
     out
+}
+
+/// One background spawn, carried from the request to the frame its process
+/// lands on (`OrbitApp::spawn_pi_client_later` → `admit_spawned_client`).
+///
+/// `generation` is the claim on the view: it must still be the app's current
+/// one, or the result is dropped. `mcp_stamp` is the config the child was
+/// actually handed, read at spawn time rather than when it lands. `then` is
+/// what the caller wants done with an empty process.
+#[derive(Clone)]
+pub(super) struct SpawnTicket {
+    generation: u64,
+    cwd: PathBuf,
+    mcp_stamp: u64,
+    then: SpawnThen,
+}
+
+/// What a spawned process is for, once it is up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SpawnThen {
+    /// Deliver the message that started it (a New Task's first send).
+    Prompt,
+    /// Ask pi for a new session on it (the Settings credential/catalog restart).
+    NewSession,
 }

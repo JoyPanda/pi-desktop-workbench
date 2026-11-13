@@ -47,6 +47,7 @@ use orbit_rpc::{
 };
 use serde_json::Value;
 
+use self::runtime::{SpawnThen, SpawnTicket};
 use self::session_status::{SessionExecution, SessionStatus};
 
 use crate::access::AccessMode;
@@ -328,6 +329,39 @@ pub struct OrbitApp {
     client: Option<PiClient>,
     /// Live state of the active pi process, surfaced in Settings → Runtime.
     runtime: RuntimeStatus,
+    /// Mints one token per background spawn. The ticket carries the value it
+    /// was started under, and the pending ticket is the only thing that can
+    /// match it — so a result whose spawn was superseded (a newer one, or a
+    /// view that gave up) is dropped, killing the child it started, instead of
+    /// being adopted over the view the user is on.
+    spawn_generation: u64,
+    /// The replacement command (`new_session` / `switch_session`) this view is
+    /// waiting on. Until pi answers it, no name report may reach the header: a
+    /// `get_state` reply or a title extension still describing the session
+    /// being replaced would paint its title over the new one (see
+    /// [`OrbitApp::name_report_held`]), and a second replacement must not be
+    /// sent into the same window — pi tears the old session down before it
+    /// applies the new one, and a command landing in between is what makes an
+    /// extension's `session_shutdown` see a ctx pi already invalidated.
+    replacement_in_flight: Option<String>,
+    /// A session the reader asked for while a replacement was still in flight.
+    /// Opened as soon as pi answers, so a click is deferred rather than dropped.
+    pending_switch: Option<SessionInfo>,
+    /// The message that started a process for a brand-new task and is waiting
+    /// for it to come up (see `OrbitApp::queue_prompt_for_new_process`). The
+    /// transcript already shows it; this is what gets delivered on adopt, and
+    /// what goes back into the composer if the spawn fails.
+    pending_prompt: Option<PendingPrompt>,
+    /// The spawn that is still on its way, if any — asked for but not yet
+    /// landed or failed. The page and its sidebar row are already on screen by
+    /// then; the composer keeps accepting text, but a send is held until there
+    /// is a process to send to (see [`OrbitApp::spawn_pi_client_later`]).
+    pending_spawn: Option<SpawnTicket>,
+    /// Test seam: the `pi` launcher a background spawn uses instead of the
+    /// bundled-extension spawn, so a test can drive the pending window with a
+    /// scripted child instead of a real one. Production never sets it.
+    #[cfg(test)]
+    spawn_bin: Option<PathBuf>,
     /// Automatic respawns since the last run that stayed up for
     /// [`AUTO_RESTART_HEALTHY_UPTIME`]. Counts a crash loop so a pi that dies
     /// on every start cannot be restarted forever.
@@ -1328,6 +1362,16 @@ impl ComposerDraft {
     }
 }
 
+/// A message that started a pi process for a brand-new task and is waiting for
+/// it (see `OrbitApp::queue_prompt_for_new_process`). The transcript already
+/// shows it; this is the command to deliver once the process is up, plus the
+/// composer state to hand back — nothing lost — if the spawn fails.
+struct PendingPrompt {
+    body: CommandBody,
+    label: String,
+    composer: ComposerDraft,
+}
+
 /// An image queued to ride along with the next prompt.
 #[derive(Clone)]
 struct Attachment {
@@ -1977,6 +2021,13 @@ impl OrbitApp {
         let mut app = Self {
             client,
             runtime,
+            spawn_generation: 0,
+            replacement_in_flight: None,
+            pending_switch: None,
+            pending_prompt: None,
+            pending_spawn: None,
+            #[cfg(test)]
+            spawn_bin: None,
             rpc_patches,
             sidebar_width: px(crate::layout::sidebar_width()
                 .unwrap_or(SIDEBAR_DEFAULT_W)
@@ -3796,15 +3847,21 @@ mod draft_sidebar_tests;
 #[cfg(test)]
 mod error_label_tests;
 #[cfg(test)]
+mod fake_pi;
+#[cfg(test)]
 mod new_task_panels_tests;
 #[cfg(test)]
 mod new_task_reconnect_tests;
+#[cfg(test)]
+mod new_task_spawn_tests;
 #[cfg(test)]
 mod popup_layout_tests;
 #[cfg(test)]
 mod process_exit_cleanup_tests;
 #[cfg(test)]
 mod refresh_tests;
+#[cfg(test)]
+mod right_dock_wheel_tests;
 #[cfg(test)]
 mod send_control_tests;
 #[cfg(test)]

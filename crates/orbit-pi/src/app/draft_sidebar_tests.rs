@@ -1,76 +1,8 @@
 //! Sidebar drafts: a New Task row appears immediately, an empty one
 //! disappears on leave, and typed text (or an attachment) stays with the row.
 
+use super::fake_pi::{adopt_alive, prepare, FakePi};
 use super::*;
-use crate::theme::{Theme, ThemeKey};
-
-/// A process that stays alive long enough for New Task to reuse it, without
-/// launching a real pi. Dropped after the app releases the client.
-struct KeepAlive {
-    dir: PathBuf,
-}
-
-impl KeepAlive {
-    fn start(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "orbit-draft-{tag}-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).expect("fake pi dir");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let bin = dir.join("fake-pi");
-            std::fs::write(&bin, "#!/bin/sh\nexec cat >/dev/null\n").expect("fake pi");
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        }
-        #[cfg(windows)]
-        {
-            std::fs::write(
-                dir.join("fake-pi.cmd"),
-                "@echo off\r\nping -n 40 127.0.0.1 > nul\r\n",
-            )
-            .expect("fake pi");
-        }
-        Self { dir }
-    }
-
-    fn bin(&self) -> PathBuf {
-        #[cfg(unix)]
-        {
-            self.dir.join("fake-pi")
-        }
-        #[cfg(windows)]
-        {
-            self.dir.join("fake-pi.cmd")
-        }
-    }
-}
-
-impl Drop for KeepAlive {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
-
-fn prepare(cx: &mut gpui::TestAppContext) {
-    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
-}
-
-fn adopt_alive(app: &mut OrbitApp, fake: &KeepAlive) {
-    let workspace = app
-        .current_workspace
-        .clone()
-        .unwrap_or_else(|| std::env::temp_dir());
-    let client =
-        PiClient::spawn_with_bin(fake.bin().to_str().expect("utf-8 path"), &workspace, None)
-            .expect("spawn keep-alive");
-    app.adopt_client(client);
-}
 
 fn info(path: &str, cwd: &Path) -> SessionInfo {
     SessionInfo {
@@ -109,12 +41,12 @@ fn blank_draft(id: u64, cwd: &Path) -> ListedDraft {
     }
 }
 
-/// Reuse saves the session being left, clears the new composer, and a click
-/// that lands before pi names the file cannot write that new text onto the
-/// old session.
+/// New Task saves the session being left, clears the new composer, and a click
+/// that lands before pi names the file cannot write that new text onto the old
+/// session. The kept draft parks under its own id.
 #[gpui::test]
-fn reuse_keeps_old_text_and_a_typed_draft_survives_leaving(cx: &mut gpui::TestAppContext) {
-    let fake = KeepAlive::start("reuse");
+fn a_kept_draft_keeps_its_text_and_parks_under_its_id(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("reuse");
     prepare(cx);
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
@@ -146,6 +78,9 @@ fn reuse_keeps_old_text_and_a_typed_draft_survives_leaving(cx: &mut gpui::TestAp
             assert_eq!(app.listed_drafts.len(), 1, "a blank draft is not stacked");
             assert_eq!(app.current_draft_id, id);
 
+            // A draft with a process behind it: New Task parked the session it
+            // left, so the draft takes a live client of its own here.
+            adopt_alive(app, &fake);
             app.input
                 .update(cx, |input, cx| input.set_text("fresh", cx));
             app.files.push(AttachedFile {
@@ -188,7 +123,7 @@ fn reuse_keeps_old_text_and_a_typed_draft_survives_leaving(cx: &mut gpui::TestAp
 /// arrives, deletes it only when it is still header-only.
 #[gpui::test]
 fn an_empty_draft_is_discarded_and_its_header_file_is_removed(cx: &mut gpui::TestAppContext) {
-    let fake = KeepAlive::start("discard");
+    let fake = FakePi::start("discard");
     prepare(cx);
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
@@ -203,6 +138,9 @@ fn an_empty_draft_is_discarded_and_its_header_file_is_removed(cx: &mut gpui::Tes
             adopt_alive(app, &fake);
             app.input.update(cx, |input, cx| input.set_text("stay", cx));
             app.on_new_session(&crate::NewSession, window, cx);
+            // The blank row needs a process to park when it is left: the New
+            // Task click parked the old session rather than reusing it.
+            adopt_alive(app, &fake);
             app.switch_to_session(missing_session("elsewhere"), false, cx);
 
             assert!(app.listed_drafts.is_empty());
@@ -223,7 +161,10 @@ fn an_empty_draft_is_discarded_and_its_header_file_is_removed(cx: &mut gpui::Tes
             let parked = app.pending_parks.pop().expect("park");
             app.admit_rekeyed_park(file.clone(), parked);
             assert!(!file.exists(), "a header-only new-task file is removed");
-            assert!(app.lives.is_empty());
+            assert!(
+                !app.lives.contains_key(&file),
+                "a discarded draft never joins the warm pool"
+            );
         });
     });
 }
@@ -434,7 +375,7 @@ fn an_unlisted_page_keeps_the_task_folder(cx: &mut gpui::TestAppContext) {
 /// title of the view that was on screen.
 #[gpui::test]
 fn reopening_a_pending_draft_does_not_keep_the_other_title(cx: &mut gpui::TestAppContext) {
-    let fake = KeepAlive::start("pending-resume");
+    let fake = FakePi::start("pending-resume");
     prepare(cx);
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
@@ -495,7 +436,7 @@ fn starting_in_the_same_folder_does_not_stack_a_blank_row(cx: &mut gpui::TestApp
 /// A draft whose process is still warm comes back as that process.
 #[gpui::test]
 fn a_warm_draft_resumes_without_switching_session(cx: &mut gpui::TestAppContext) {
-    let fake = KeepAlive::start("lives-resume");
+    let fake = FakePi::start("lives-resume");
     prepare(cx);
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));

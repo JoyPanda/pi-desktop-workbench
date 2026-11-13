@@ -65,6 +65,16 @@ pub(crate) fn visible_sessions_in_group(
             }
         }
     }
+    if crate::app::drafts::trace_enabled() {
+        eprintln!(
+            "orbit: sidebar group clipped to {limit} of {} rows; active {:?} visible: {}",
+            ixs.len(),
+            active_path,
+            active_path
+                .as_ref()
+                .is_some_and(|active| indices.iter().any(|ix| &sessions[*ix].path == active))
+        );
+    }
     indices
 }
 

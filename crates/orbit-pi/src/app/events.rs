@@ -217,7 +217,7 @@ impl OrbitApp {
                     // answers. pi runs that command beside the `get_state`
                     // queued first, so the echo can arrive before a report
                     // that still carries the name copied from the source.
-                    if self.fork_hold_blocks() {
+                    if self.name_report_held() {
                         self.title_generating = false;
                         refresh_sessions = true;
                     } else {
@@ -384,8 +384,13 @@ impl OrbitApp {
                 }
                 Event::ProcessExited => {
                     // The rename can no longer answer, and a held title would
-                    // ignore the next session's name reports.
+                    // ignore the next session's name reports. The same goes for
+                    // a replacement: the process that owed the answer is gone,
+                    // so its gate and any click queued behind it are dropped
+                    // (a click on a dead process starts a new one instead).
                     self.cancel_fork_followup();
+                    self.replacement_in_flight = None;
+                    self.pending_switch = None;
                     self.pending_session_rename = None;
                     self.session_rename_ready = false;
                     self.busy = false;
@@ -963,6 +968,11 @@ impl OrbitApp {
                 self.pending_session_rename = None;
                 self.session_rename_ready = false;
             }
+            // A failed replacement still ends the wait: pi refused it, so no
+            // answer is coming and the gate must not outlive it.
+            if matches!(command, "new_session" | "switch_session") {
+                self.end_replacement(cx);
+            }
             self.on_command_failure(command, error, cx);
             match command {
                 "compact" => {
@@ -1165,7 +1175,7 @@ impl OrbitApp {
                 // may be the `get_state` queued before `set_session_name`,
                 // still carrying the copied name. Leave the fork title
                 // alone until that rename answers.
-                if !self.fork_hold_blocks() {
+                if !self.name_report_held() {
                     match &state.session_name {
                         Some(name) if self.session_name.as_deref() != Some(name.as_str()) => {
                             self.session_name = Some(name.clone());
@@ -1305,6 +1315,9 @@ impl OrbitApp {
                 }
             }
             "switch_session" => {
+                // pi is on the requested session now: name reports may paint
+                // again, and a click that arrived mid-switch runs.
+                self.end_replacement(cx);
                 if success {
                     // A resumed session keeps the model in its file (D-D).
                     self.default_model_armed = false;
@@ -1321,6 +1334,9 @@ impl OrbitApp {
                 }
             }
             "new_session" => {
+                // pi is on the new session now: name reports below describe it,
+                // and a click that arrived meanwhile runs.
+                self.end_replacement(cx);
                 self.cancel_fork_followup();
                 if !self.busy {
                     self.execution = SessionExecution::default();

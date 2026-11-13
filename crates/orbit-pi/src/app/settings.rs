@@ -7880,7 +7880,15 @@ impl OrbitApp {
         self.resume_after_process_drop(cx);
         self.provider_auth_dirty = false;
         self.reload_custom_providers(cx);
-        self.toast_success(tr!("settings.pi_restarted_credentials_loaded"));
+        // A draft with no session file yet gets a fresh process, and that
+        // spawn runs off the frame (see `OrbitApp::spawn_pi_client_later`).
+        // The credentials are loaded when it is up, so say what is happening
+        // instead of claiming the restart already finished.
+        if self.spawn_pending() {
+            self.toast_info(tr!("runtime.starting_pi"));
+        } else {
+            self.toast_success(tr!("settings.pi_restarted_credentials_loaded"));
+        }
         cx.notify();
     }
 

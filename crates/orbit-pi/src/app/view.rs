@@ -792,10 +792,21 @@ impl Render for OrbitApp {
                                     .child({
                                         let live = self.runtime_is_live();
                                         let retrying = self.sidebar_runtime_retrying();
+                                        // A New Task page has no process until its
+                                        // first message starts one, so "Offline"
+                                        // would report a failure that never
+                                        // happened: it is connecting while a spawn
+                                        // is on its way, and idle otherwise.
+                                        let waiting = self.spawn_pending();
+                                        let unstarted = !live && self.current_draft_id.is_some();
                                         let (label, dot) = if live {
                                             (tr!("status.connected"), theme.success)
                                         } else if retrying {
                                             (tr!("sidebar.status_retrying"), theme.warning)
+                                        } else if waiting {
+                                            (tr!("status.connecting"), theme.warning)
+                                        } else if unstarted {
+                                            (tr!("sidebar.status_idle"), theme.text_muted)
                                         } else {
                                             (tr!("status.offline"), theme.error)
                                         };
@@ -806,21 +817,24 @@ impl Render for OrbitApp {
                                             .min_w_0()
                                             .items_center()
                                             .gap(DynamicSpacing::Base06.px(&theme))
-                                            .when(!live && !retrying, |status| {
-                                                status
-                                                    .cursor_pointer()
-                                                    .tip(tr!("view.reconnect"))
-                                                    .hover(|s| s.text_color(theme.text_primary))
-                                                    .active(|s| s.opacity(PRESS_DIM))
-                                                    .on_mouse_up(
-                                                        MouseButton::Left,
-                                                        cx.listener(
-                                                            |this, _: &MouseUpEvent, _, cx| {
-                                                                this.runtime_restart(cx)
-                                                            },
-                                                        ),
-                                                    )
-                                            })
+                                            .when(
+                                                !live && !retrying && !waiting && !unstarted,
+                                                |status| {
+                                                    status
+                                                        .cursor_pointer()
+                                                        .tip(tr!("view.reconnect"))
+                                                        .hover(|s| s.text_color(theme.text_primary))
+                                                        .active(|s| s.opacity(PRESS_DIM))
+                                                        .on_mouse_up(
+                                                            MouseButton::Left,
+                                                            cx.listener(
+                                                                |this, _: &MouseUpEvent, _, cx| {
+                                                                    this.runtime_restart(cx)
+                                                                },
+                                                            ),
+                                                        )
+                                                },
+                                            )
                                             .text_color(theme.text_secondary)
                                             .child({
                                                 let dot = div()
@@ -4037,17 +4051,7 @@ impl OrbitApp {
             // pointer, hover, or click handler to invite a press that cannot
             // land. The tooltip says why instead of naming a shortcut that
             // would do nothing.
-            let tooltip = tr!("composer.nothing_to_send");
-            return icon_button_frame(div().id("send-btn"), &theme, ButtonSize::Medium)
-                .rounded_full()
-                .bg(theme.overlay)
-                .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
-                .child(icon(
-                    icon_path,
-                    ButtonSize::Medium.icon_size().px(&theme),
-                    theme.text_disabled,
-                ))
-                .into_any_element();
+            return self.disabled_send_button(icon_path, tr!("composer.nothing_to_send"), theme);
         }
         let shortcut = if running {
             mode.shortcut_label(mode)
@@ -4071,6 +4075,26 @@ impl OrbitApp {
                 icon_path,
                 ButtonSize::Medium.icon_size().px(&theme),
                 theme.action_fg,
+            ))
+            .into_any_element()
+    }
+
+    /// A send control that cannot be pressed, with the tooltip that explains
+    /// why.
+    fn disabled_send_button(
+        &self,
+        icon_path: &'static str,
+        tooltip: String,
+        theme: Theme,
+    ) -> AnyElement {
+        icon_button_frame(div().id("send-btn"), &theme, ButtonSize::Medium)
+            .rounded_full()
+            .bg(theme.overlay)
+            .tooltip(move |_, cx| cx.new(|_| Tooltip::new(tooltip.clone())).into())
+            .child(icon(
+                icon_path,
+                ButtonSize::Medium.icon_size().px(&theme),
+                theme.text_disabled,
             ))
             .into_any_element()
     }

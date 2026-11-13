@@ -52,6 +52,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **New Task starts pi when you send, not when you click.** The row, its `New Task`
+  title, and a focused composer are the whole cost of a click; the pi process for
+  that task is started by its first message, off the UI thread, and the message is
+  handed over when the process is up. It goes on screen immediately with the live
+  "Working for…" row, so a cold pi reads as work in progress instead of a dead
+  Enter. A blank row used to pay a full cold spawn — the RPC patch check, the `pi`
+  PATH scan, node's boot — and then be dropped the moment you left it; now an
+  abandoned row costs nothing. An idle session is parked warm when the row is
+  created rather than reused with `new_session`. If the spawn fails, or you press
+  Stop while it is starting, the text comes back to the composer and the optimistic
+  message goes with it, with the usual banner explaining why.
+
+- **Switching sessions no longer races pi's teardown.** While a replacement
+  (`new_session` / `switch_session`) is unanswered, a click on another session
+  waits for pi and then runs, instead of sending a second replacement into the
+  window where pi has already invalidated the outgoing session — the window that
+  made extensions report *"This extension ctx is stale after session
+  replacement"*. Name reports are held for the same window, so the header (and the
+  open sidebar row) no longer flashes the session being left before settling on
+  `New task`.
+
 - **Stop and Esc now interrupt a stuck pi.** They sent `abort` and then waited
   for `agent_settled`, which a pi whose event loop is wedged never sends — one
   bash call that dumps several GB (`rg -r '' -n ""` over a large repo) was enough

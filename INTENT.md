@@ -306,6 +306,25 @@ visual language app-wide reach while leaving the current design pixel-identical.
 `ThemeId::ALL` and the palette-invariant tests; the Appearance Theme dropdown filters the
 catalog with `themes_for_system`, and the Design-system control is the normal way to switch.
 
+### D16 — A session's pi process is born with its first message, not with its view
+**Choice:** clicking New Task (or a project's `+`) lists the sidebar row and shows the page, and
+starts nothing. The first message that is sent on that row starts the process
+(`queue_prompt_for_new_process` → `spawn_pi_client_later(SpawnThen::Prompt)` → the message is
+delivered on adopt). The message goes on screen immediately, with the live "Working for…" row,
+so the wait for pi is visible instead of being a dead Enter. A spawn that fails, or a Stop in
+that window, hands the text back to the composer and removes the optimistic message.
+**Rationale:** a blank row is dropped when the reader leaves it (`drafts::settle_listed_draft`),
+so spawning on the click paid a cold pi — the RPC patch check, the PATH scan, node's boot — for
+tasks nobody wrote. It also made the click's frame the trigger for a session replacement
+(`new_session`), which is a pi-internal teardown window nothing on screen was waiting for.
+**Consequence:** the New Task page can be shown with no process at all. The model/thinking chips
+keep the last reported catalog (the two catalog fields survive a process drop) and refresh on
+the first spawn; auth/quota/MCP read as not connected rather than as a stale fact. Reuse of a
+warm process for a *new* task is gone: an idle session is parked when the row is created, and a
+task that gets sent always gets its own process, so no replacement command is sent on that path.
+The Settings credential/catalog restarts still spawn eagerly and still send `new_session`
+(`SpawnThen::NewSession`) because they exist to reload pi itself.
+
 ## The feature parity contract
 
 Everything below must behave identically in the GPUI app (against the pi CLI) as it does in the
@@ -334,6 +353,28 @@ on leave; text, an image, a file, or a long paste keeps it for the rest of the
 process. The first sent message promotes the row so a later empty composer
 does not remove it. These rows are not restored after a restart, and a
 header-only session file is still omitted from the disk scan.
+
+The click itself starts nothing (D16): the row, its `New Task` title, and a focused composer
+are the whole cost. The first message sent on that row starts the pi process off the UI thread
+(`queue_prompt_for_new_process` → `spawn_pi_client_later` → `admit_spawned_client`), and the
+message is delivered when the process is up. Until then it is already on screen with the live
+"Working for…" row, so a cold spawn reads as work in progress rather than a dead Enter; a spawn
+that fails or is stopped hands the text back to the composer and takes the optimistic message
+with it. A spawn carries a ticket (generation + the MCP config the child was actually handed),
+and a result whose view moved on — another task, a session opened from the sidebar, Runtime →
+Stop — is dropped, dropping the `PiClient` and killing the child, instead of adopted.
+
+A replacement in flight is a gate, not just a token: while a `new_session` / `switch_session` is
+unanswered, no second replacement goes to the same process (pi tears the outgoing session down
+before it applies the incoming one, and a command in that window makes an extension's
+`session_shutdown` see a ctx pi already invalidated), and a click that arrives meanwhile is run
+when pi answers instead of being dropped. The same flag holds every name report
+(`OrbitApp::name_report_held`) until the reply, so a `get_state` answer or a title extension
+still describing the session being replaced cannot paint its title over the new one.
+Reopening a draft row is lazy too — showing an unsent task must not spawn anything — while the
+Settings credential/catalog restarts still spawn eagerly, since reloading pi is their whole
+point. Runtime → Start/Restart, the session-switch paths, and the launch session still spawn in
+place, because their caller sends a command the moment the client exists.
 
 Appearance's interface-font picker includes bundled Onest in Regular, Medium,
 SemiBold, and Bold weights; it works offline without an OS font installation.
