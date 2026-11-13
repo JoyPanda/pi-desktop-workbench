@@ -1108,6 +1108,11 @@ impl Transcript {
         self.scroller.scroll_by(distance);
     }
 
+    #[cfg(test)]
+    pub(crate) fn first_visible_index(&self) -> usize {
+        self.scroller.first_visible_index()
+    }
+
     pub fn new() -> Self {
         let messages = Rc::new(RefCell::new(Vec::new()));
         Self {

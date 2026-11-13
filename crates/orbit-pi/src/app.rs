@@ -613,7 +613,6 @@ pub struct OrbitApp {
     /// Wheel gesture for each subagent transcript. It lasts a few hundred
     /// milliseconds, so it stays on the live app and is cleared when the
     /// session changes.
-    subagent_wheel_gestures: HashMap<String, crate::transcript_view::WheelGesture>,
     subagent_list_scroll: ScrollHandle,
     /// The right dock's tab list: Changes, Files, and subagent output.
     right_dock: right_dock::RightDock,
@@ -2117,7 +2116,6 @@ impl OrbitApp {
             extension_widgets: Vec::new(),
             subagents: crate::subagent_status::SubagentBoard::default(),
             subagent_scrolls: HashMap::new(),
-            subagent_wheel_gestures: HashMap::new(),
             subagent_list_scroll: ScrollHandle::new(),
             right_dock: right_dock::RightDock::default(),
             dock_seen_reveal: 0,

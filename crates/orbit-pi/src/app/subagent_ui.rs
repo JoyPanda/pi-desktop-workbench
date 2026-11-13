@@ -527,6 +527,7 @@ impl OrbitApp {
         let wheel_before = Rc::new(Cell::new(px(0.)));
         let mut body = div()
             .id(ElementId::Name(format!("subagent-body-{id}").into()))
+            .debug_selector(|| "subagent-body".to_string())
             .flex_1()
             .min_h_0()
             .w_full()
@@ -535,8 +536,8 @@ impl OrbitApp {
             .occlude()
             .on_scroll_wheel({
                 let wheel_before = wheel_before.clone();
-                cx.listener(move |this, event: &ScrollWheelEvent, _, cx| {
-                    this.on_subagent_wheel(&wheel_before, event, cx);
+                cx.listener(move |this, _: &ScrollWheelEvent, _, cx| {
+                    this.on_subagent_wheel(&wheel_before, cx);
                 })
             })
             .flex()
@@ -714,12 +715,7 @@ impl OrbitApp {
         cx.notify();
     }
 
-    fn on_subagent_wheel(
-        &mut self,
-        before: &Cell<Pixels>,
-        event: &ScrollWheelEvent,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_subagent_wheel(&mut self, before: &Cell<Pixels>, cx: &mut Context<Self>) {
         let Some(id) = self.subagents.pane_key().map(str::to_string) else {
             return;
         };
@@ -729,22 +725,19 @@ impl OrbitApp {
         let offset = handle.offset();
         let max = handle.max_offset().height;
         let previous = before.get();
-        let Some((clamped, residual)) =
+        // The pane clamps the event the platform already applied, so a notch at
+        // either edge stops here. The leftover used to be handed to
+        // `scroll_transcript_by` — a habit from when this pane replaced the
+        // transcript in the same slot — which yanked the conversation the reader
+        // was reading. The dock is a column beside the conversation, not a
+        // scroller nested in it, so nothing about this wheel belongs to the
+        // message list.
+        let Some((clamped, _residual)) =
             transcript_view::split_wheel_since_snapshot(previous, offset.y, max)
         else {
             return;
         };
         let delta_y = offset.y - previous;
-        let residual = {
-            let gesture = self.subagent_wheel_gestures.entry(id.clone()).or_default();
-            transcript_view::residual_after_gesture(
-                residual,
-                delta_y,
-                transcript_view::wheel_event_is_precise(event),
-                gesture,
-                transcript_view::wheel_clock_ms(),
-            )
-        };
         let following = max <= px(0.) || clamped <= -max;
         let was_following = self.subagents.anchor(&id).following;
         if following {
@@ -763,9 +756,6 @@ impl OrbitApp {
         }
         if clamped != offset.y {
             handle.set_offset(point(offset.x, clamped));
-        }
-        if residual != px(0.) {
-            self.transcript.scroll_transcript_by(-residual);
         }
         cx.notify();
     }

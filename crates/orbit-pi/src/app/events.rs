@@ -1358,7 +1358,6 @@ impl OrbitApp {
                 self.extension_widgets.clear();
                 self.subagents = crate::subagent_status::SubagentBoard::default();
                 self.subagent_scrolls.clear();
-                self.subagent_wheel_gestures.clear();
                 self.subagent_list_scroll = ScrollHandle::new();
                 self.subagent_scroll_placed = 0;
                 self.subagent_list_rows = 0;
