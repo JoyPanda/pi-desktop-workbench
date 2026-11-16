@@ -121,15 +121,23 @@ impl RightDock {
     pub fn reconcile(&mut self, alive: &[DockTab]) {
         self.tabs.retain(|tab| alive.contains(tab));
         let mut opened = None;
+        // Changes or Files in this pass means the reader just opened that
+        // panel, so the dock comes forward. A subagent tab is pushed last and
+        // only because the session still had it open; that alone must not
+        // undo a hide. A click still expands, via `open`.
+        let mut expand = false;
         for tab in alive {
             if !self.tabs.contains(tab) {
                 self.tabs.push(tab.clone());
                 opened = Some(tab.clone());
+                expand |= !matches!(tab, DockTab::Subagent(_));
             }
         }
         if let Some(tab) = opened {
             self.active = Some(tab);
-            self.collapsed = false;
+            if expand {
+                self.collapsed = false;
+            }
         }
         if self
             .active
@@ -137,9 +145,6 @@ impl RightDock {
             .is_none_or(|active| !self.tabs.contains(active))
         {
             self.active = self.tabs.last().cloned();
-        }
-        if self.tabs.is_empty() {
-            self.collapsed = false;
         }
     }
 }
@@ -679,6 +684,8 @@ impl OrbitApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::OrbitApp;
+    use gpui::Context;
 
     fn sub(id: &str) -> DockTab {
         DockTab::Subagent(id.to_string())
@@ -747,13 +754,133 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_dock_is_never_stuck_collapsed() {
+    fn hiding_survives_the_last_tab_dropping_out_from_under_the_dock() {
         let mut dock = RightDock::default();
         dock.open(DockTab::Files);
         dock.set_collapsed(true);
+        // A session switch drops a tab the incoming board does not know.
+        // That is not the reader closing the panel, so the hide stays.
         dock.reconcile(&[]);
-        assert!(!dock.collapsed());
+        assert!(dock.collapsed());
         dock.open(DockTab::Files);
         assert!(dock.visible());
+    }
+
+    fn running_leaf(app: &mut OrbitApp) {
+        app.subagents.apply_snapshot_value(&serde_json::json!({
+            "runs": [{ "id": "r1", "label": "Helper", "state": "running" }]
+        }));
+    }
+
+    /// The other session does not know this leaf, so its frame drops the tab.
+    /// Coming back puts the parked board in place and reconciles again.
+    fn round_trip(app: &mut OrbitApp, cx: &mut Context<OrbitApp>) {
+        let parked = std::mem::take(&mut app.subagents);
+        app.sync_dock(cx);
+        app.subagents = parked;
+        app.sync_dock(cx);
+    }
+
+    #[gpui::test]
+    fn a_closed_subagent_stays_closed_when_its_session_returns(cx: &mut gpui::TestAppContext) {
+        use crate::theme::{Theme, ThemeKey};
+
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+        let app = cx.update(|cx| cx.new(OrbitApp::new));
+        cx.update(|cx| {
+            app.update(cx, |app, cx| {
+                running_leaf(app);
+                app.open_subagent_tab("r1", cx);
+                assert!(app.subagents.is_open());
+                assert!(app.right_dock.visible());
+                app.close_dock_tab(&sub("r1"), cx);
+                assert!(!app.subagents.is_open());
+                round_trip(app, cx);
+                assert!(
+                    !app.subagents.is_open(),
+                    "closing the transcript is part of the session"
+                );
+                assert!(!app.right_dock.contains(&sub("r1")));
+                assert!(!app.right_dock.visible());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn hiding_the_subagent_dock_stays_hidden_when_its_session_returns(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::theme::{Theme, ThemeKey};
+
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+        let app = cx.update(|cx| cx.new(OrbitApp::new));
+        cx.update(|cx| {
+            app.update(cx, |app, cx| {
+                running_leaf(app);
+                app.open_subagent_tab("r1", cx);
+                app.toggle_dock_collapsed(cx);
+                assert!(app.subagents.is_open());
+                assert!(!app.right_dock.visible());
+                round_trip(app, cx);
+                assert!(
+                    app.subagents.is_open(),
+                    "hiding the dock does not forget which transcript was open"
+                );
+                assert!(
+                    !app.right_dock.visible(),
+                    "switching away and back must not pop the hidden dock open"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn an_open_subagent_is_showing_again_when_its_session_returns(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::theme::{Theme, ThemeKey};
+
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+        let app = cx.update(|cx| cx.new(OrbitApp::new));
+        cx.update(|cx| {
+            app.update(cx, |app, cx| {
+                running_leaf(app);
+                app.open_subagent_tab("r1", cx);
+                assert!(app.right_dock.visible());
+                round_trip(app, cx);
+                assert!(app.subagents.is_open());
+                assert!(app.right_dock.is_active(&sub("r1")));
+                assert!(app.right_dock.visible());
+            });
+        });
+    }
+
+    #[test]
+    fn a_returning_subagent_tab_does_not_undo_a_hide() {
+        let mut dock = RightDock::default();
+        dock.open(sub("a"));
+        dock.set_collapsed(true);
+        dock.reconcile(&[]);
+        assert!(dock.collapsed());
+        dock.reconcile(&[sub("a")]);
+        assert!(dock.is_active(&sub("a")));
+        assert!(
+            dock.collapsed(),
+            "coming back to the session must not pop the dock open"
+        );
+        assert!(!dock.visible());
+    }
+
+    #[test]
+    fn a_panel_opened_beside_a_returning_subagent_still_shows_the_dock() {
+        let mut dock = RightDock::default();
+        dock.set_collapsed(true);
+        // The subagent tab is restored last, the same order `sync_dock` uses.
+        dock.reconcile(&[DockTab::Files, sub("a")]);
+        assert!(dock.is_active(&sub("a")));
+        assert!(
+            dock.visible(),
+            "Files opening in the same pass must bring the dock forward"
+        );
     }
 }
