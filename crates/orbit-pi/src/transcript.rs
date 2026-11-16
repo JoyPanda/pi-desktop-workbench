@@ -1102,12 +1102,6 @@ pub struct Transcript {
 }
 
 impl Transcript {
-    /// Hand a leftover wheel delta to the message list. `distance` is
-    /// positive toward the live edge, matching [`MessageScrollerState::scroll_by`].
-    pub(crate) fn scroll_transcript_by(&self, distance: Pixels) {
-        self.scroller.scroll_by(distance);
-    }
-
     #[cfg(test)]
     pub(crate) fn first_visible_index(&self) -> usize {
         self.scroller.first_visible_index()

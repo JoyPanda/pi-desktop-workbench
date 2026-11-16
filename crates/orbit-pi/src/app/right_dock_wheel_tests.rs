@@ -90,6 +90,13 @@ fn a_wheel_over_the_subagent_tab_never_moves_the_conversation(cx: &mut gpui::Tes
     // to travel, and no earlier event to make it look like a continuing
     // stream. (A pane whose content fits is the same case with `max == 0`.)
     // Pinning the offset instead of wheeling there keeps the gesture fresh.
+    // Detach first: a reader who is still following is pinned to the bottom
+    // on the next paint, which would undo this offset.
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.subagents.note_follow("r1", false, 40);
+        });
+    });
     handle.set_offset(point(px(0.), px(0.)));
     let viewport = cx.update(|window, _| window.viewport_size());
     let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
@@ -132,5 +139,131 @@ fn a_wheel_over_the_subagent_tab_never_moves_the_conversation(cx: &mut gpui::Tes
         cx.update(|_, cx| app.read(cx).transcript.first_visible_index()),
         conversation,
         "notches past the bottom belong to nobody"
+    );
+
+    // The title strip is not the scroller. A notch there used to fall through
+    // the same way a notch on a code fence did: the body's occluder does not
+    // cover it, and the conversation list is painted behind the dock.
+    let pane = cx
+        .debug_bounds("subagent-pane")
+        .expect("the dock pane laid out");
+    let header_at = point(pane.center().x, pane.origin.y + px(8.));
+    assert!(
+        header_at.y < body.origin.y,
+        "the header sits above the scroller"
+    );
+    wheel(&mut cx, &app, header_at, 400.);
+    assert_eq!(
+        cx.update(|_, cx| app.read(cx).transcript.first_visible_index()),
+        conversation,
+        "a wheel over the pane header must not follow the conversation"
+    );
+}
+
+#[gpui::test]
+fn new_output_sticks_to_the_bottom_until_the_reader_scrolls(cx: &mut gpui::TestAppContext) {
+    let app = dock_app(cx);
+    let cx = cx.add_empty_window();
+    let viewport = cx.update(|window, _| window.viewport_size());
+    for _ in 0..2 {
+        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    }
+
+    let handle = cx.update(|_, cx| {
+        app.read(cx)
+            .subagent_scrolls
+            .get("r1")
+            .cloned()
+            .expect("the pane tracked its scroll offset")
+    });
+    assert!(
+        handle.max_offset().height > px(0.),
+        "the pane must be scrollable for this test to mean anything"
+    );
+    assert_eq!(
+        handle.offset().y,
+        -handle.max_offset().height,
+        "the pane opens on the newest line"
+    );
+
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            let request = app.subagents.alloc_request_id();
+            app.subagents.note_inflight("r1", &request, 40);
+            let messages: Vec<serde_json::Value> = (0..80)
+                .map(|index| json!({ "kind": "text", "text": format!("step {index}") }))
+                .collect();
+            app.subagents
+                .apply_inspect_value(&json!({ "requestId": request, "messages": messages }));
+        });
+    });
+    let viewport = cx.update(|window, _| window.viewport_size());
+    for _ in 0..2 {
+        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    }
+    assert!(
+        handle.max_offset().height > px(0.),
+        "the longer inspect still overflows"
+    );
+    assert_eq!(
+        handle.offset().y,
+        -handle.max_offset().height,
+        "new lines keep the reader on the bottom when they have not scrolled away"
+    );
+}
+
+#[gpui::test]
+fn a_detached_reader_stays_put_in_a_final_answer_with_no_messages(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+    let app = cx.update(|cx| cx.new(OrbitApp::new));
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.subagents.apply_snapshot_value(&json!({
+                "runs": [{ "id": "r1", "label": "Helper", "state": "running" }]
+            }));
+            app.open_subagent_tab("r1", cx);
+            let request = app.subagents.alloc_request_id();
+            app.subagents.note_inflight("r1", &request, 40);
+            let final_output = (0..80)
+                .map(|index| format!("answer line {index}"))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            app.subagents.apply_inspect_value(&json!({
+                "requestId": request,
+                "messages": [],
+                "finalOutput": final_output,
+            }));
+        });
+    });
+
+    let cx = cx.add_empty_window();
+    let viewport = cx.update(|window, _| window.viewport_size());
+    for _ in 0..2 {
+        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    }
+    let handle = cx.update(|_, cx| {
+        app.read(cx)
+            .subagent_scrolls
+            .get("r1")
+            .cloned()
+            .expect("the pane tracked its scroll offset")
+    });
+    assert!(
+        handle.max_offset().height > px(0.),
+        "the final answer must overflow for this test to mean anything"
+    );
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            app.subagents.note_follow("r1", false, 0);
+        });
+    });
+    handle.set_offset(point(px(0.), px(0.)));
+    let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    assert_eq!(
+        handle.offset().y,
+        px(0.),
+        "an empty message list must not pin a detached reader every frame"
     );
 }

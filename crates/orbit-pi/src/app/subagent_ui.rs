@@ -71,26 +71,35 @@ impl OrbitApp {
     /// Place the open transcript from its anchor when a new inspect arrived
     /// or the reader switched leaves. A wheel that only moves within the
     /// current window does not come through here, so it is not pulled back.
+    ///
+    /// Following is re-armed every frame. `scroll_to_bottom` is a one-shot
+    /// flag, and the first layout of this pane often still has a zero
+    /// viewport, so a pin that ran only when the epoch changed left the
+    /// reader at the top while new lines arrived underneath. An empty
+    /// message list can still scroll its final answer, and a wheel there
+    /// can only record `from_bottom == 0`, so that case pins on a new
+    /// inspect and not on every frame.
     pub(super) fn place_subagent_scroll(&mut self) {
         self.sync_subagent_folds();
         let epoch = self.subagents.scroll_epoch();
-        if epoch != self.subagent_scroll_placed {
+        let epoch_changed = epoch != self.subagent_scroll_placed;
+        if epoch_changed {
             self.subagent_scroll_placed = epoch;
-            if self.subagents.is_open() {
-                if let Some(id) = self.subagents.pane_key().map(str::to_string) {
-                    let anchor = self.subagents.anchor(&id);
-                    let count = self.subagents.messages(&id).len();
-                    let handle = self
-                        .subagent_scrolls
-                        .entry(id)
-                        .or_insert_with(ScrollHandle::new)
-                        .clone();
-                    if anchor.following || count == 0 {
-                        handle.scroll_to_bottom();
-                    } else {
-                        let index = count.saturating_sub(anchor.from_bottom.min(count));
-                        handle.set_offset(point(px(0.), px(-(index as f32 * MESSAGE_ROW))));
-                    }
+        }
+        if self.subagents.is_open() {
+            if let Some(id) = self.subagents.pane_key().map(str::to_string) {
+                let anchor = self.subagents.anchor(&id);
+                let count = self.subagents.messages(&id).len();
+                let handle = self
+                    .subagent_scrolls
+                    .entry(id)
+                    .or_insert_with(ScrollHandle::new)
+                    .clone();
+                if anchor.following || (count == 0 && epoch_changed) {
+                    handle.scroll_to_bottom();
+                } else if epoch_changed {
+                    let index = count.saturating_sub(anchor.from_bottom.min(count));
+                    handle.set_offset(point(px(0.), px(-(index as f32 * MESSAGE_ROW))));
                 }
             }
         }
@@ -365,15 +374,22 @@ impl OrbitApp {
             .cloned()
             .unwrap_or_else(ScrollHandle::new);
         // The tab body of the right dock: the dock owns the width, the resize
-        // handle, and the left hairline.
+        // handle, and the left hairline. Occlude the whole shell, header
+        // included. A wheel over a code fence or the title would otherwise
+        // keep bubbling to the conversation list painted behind the dock.
         div()
             .id("subagent-pane")
+            .debug_selector(|| "subagent-pane".to_string())
             .relative()
             .flex_1()
             .w_full()
             .min_h_0()
             .flex()
             .flex_col()
+            .occlude()
+            .on_scroll_wheel(cx.listener(|_, _: &ScrollWheelEvent, _, cx| {
+                cx.stop_propagation();
+            }))
             .child(
                 div()
                     .flex_1()
@@ -716,6 +732,13 @@ impl OrbitApp {
     }
 
     fn on_subagent_wheel(&mut self, before: &Cell<Pixels>, cx: &mut Context<Self>) {
+        // End the event here. Nested horizontal scrollers (code fences,
+        // tables) are painted in front of this body and do not stop a
+        // vertical notch, and the conversation list is painted before the
+        // dock, so its handler runs later in the bubble. The leftover used
+        // to be handed to the conversation — a habit from when this
+        // pane replaced the transcript in the same slot.
+        cx.stop_propagation();
         let Some(id) = self.subagents.pane_key().map(str::to_string) else {
             return;
         };
@@ -726,11 +749,7 @@ impl OrbitApp {
         let max = handle.max_offset().height;
         let previous = before.get();
         // The pane clamps the event the platform already applied, so a notch at
-        // either edge stops here. The leftover used to be handed to
-        // `scroll_transcript_by` — a habit from when this pane replaced the
-        // transcript in the same slot — which yanked the conversation the reader
-        // was reading. The dock is a column beside the conversation, not a
-        // scroller nested in it, so nothing about this wheel belongs to the
+        // either edge stops here. Nothing about this wheel belongs to the
         // message list.
         let Some((clamped, _residual)) =
             transcript_view::split_wheel_since_snapshot(previous, offset.y, max)
