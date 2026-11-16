@@ -434,8 +434,9 @@ for the first nine sessions. Spacing and mark geometry
 follow the existing theme tokens, and the list remains virtualized with the
 same session data and action handlers.
 The sidebar view menu's **Show** submenu toggles Updated and Summary. Updated
-is on by default and shows the relative time in the status slot when the row
-has no status words. Summary is off by default and adds the first-message line
+is on by default and shows the relative time in the status slot. An unread
+finished turn stays the eye alone and does not show that time. Summary is off
+by default and adds the first-message line
 under the title; the title is always drawn. The choice persists as a `show`
 array of `updated` and `summary` in `workspaces.json`. A missing key keeps the
 default, and an empty array turns both fields off. Toggling never edits session
@@ -478,15 +479,16 @@ Session rows lead with a list marker in the sidebar's icon column: a muted dot, 
 accent spinner while `status_lane` is Progress (Running, Retrying, Compacting). That
 spinner is the only animated glyph, and it is not repeated in the trailing badge. Every
 other execution state still spends one trailing glyph (`status_lane_icon`,
-`status_lane_ink`, `status_lane_words`): amber lock for an approval gate or chat glyph
+`status_lane_ink`): amber lock for an approval gate or chat glyph
 for a question, green check for a read result, green eye for an unread one, red cross
 for a failure or a dead process, mute stop for an aborted run, and no trailing glyph
-for Idle / Unknown. Only the spinner animates. Blocked, unread, and failed states add
-words in place of the age, so colour is never the only signal; the tooltip names the
-rest, including which in-progress kind the leading spinner is.
+for Idle / Unknown. Only the spinner animates. The row does not spell the state;
+the glyph's shape and its tooltip do, including which in-progress kind the leading
+spinner is. With Updated on, the relative time sits in that trailing slot, except
+on an unread finished turn, which stays the eye alone.
 
 A turn that settles while the user is not reading it leaves a separate unread mark on
-its row (`OrbitApp::awaiting_review`) — a green eye with "Needs review", or a red cross
+its row (`OrbitApp::awaiting_review`) — a green eye, or a red cross
 with a small corner dot when the turn failed. The execution glyph underneath
 distinguishes Completed from Failed and remains after the mark is spent, so reading a
 result costs the mark, not the outcome. Only the mark clears when the session is

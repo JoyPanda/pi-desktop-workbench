@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Sidebar session rows no longer spell out their status.** A failed run, a
+  wait for approval or input, and a disconnected session keep the icon and the
+  tooltip. The words ("Failed", "Waiting for approval", and the rest) are gone,
+  the same way an unread finished turn is already just the eye. With **Show →
+  Updated** on, the relative time still sits beside the icon, except on that
+  unread eye.
+
 - **`@` file mentions are instant and no longer need `fd`.** The composer ranks
   an in-memory index of the workspace instead of spawning a search process on
   every keystroke, which stalled the window for 300–700 ms per character on a

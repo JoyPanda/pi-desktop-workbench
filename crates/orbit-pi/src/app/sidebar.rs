@@ -541,7 +541,7 @@ pub(crate) fn sticky_sidebar_header(list: &ListState, rows: &[SideRow]) -> Optio
 /// Progress paints in the leading list-marker slot (the dot becomes the
 /// spinner). Every other state paints in the trailing badge, so a lock, an
 /// eye, or a cross never shares the row with a second "what is happening"
-/// glyph. Glyph, ink, and words resolve separately from the state, so the
+/// glyph. Glyph and ink resolve separately from the state, so the
 /// mapping is testable without a theme and paints from exactly one place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StatusLane {
@@ -627,17 +627,6 @@ pub(crate) fn status_lane_ink(lane: StatusLane, theme: &Theme) -> Hsla {
         StatusLane::UnreadFailed | StatusLane::Failed => theme.error,
         StatusLane::Stopped => theme.text_muted,
         StatusLane::Idle | StatusLane::Unknown => theme.text_disabled,
-    }
-}
-
-/// Words beside the glyph for states that need a label. An unread finished
-/// turn is the eye alone: the glyph, and its tooltip, carry the review mark.
-pub(crate) fn status_lane_words(lane: StatusLane) -> Option<String> {
-    match lane {
-        StatusLane::Blocked(BlockReason::Approval) => Some(tr!("sidebar.status_approval")),
-        StatusLane::Blocked(BlockReason::Input) => Some(tr!("sidebar.status_input")),
-        StatusLane::UnreadFailed | StatusLane::Failed => Some(tr!("sidebar.status_failed")),
-        _ => None,
     }
 }
 
@@ -1561,40 +1550,24 @@ pub(crate) fn render_side_row(
                 // the current truth, and the settle that ends this run sets a
                 // fresh one.
                 .filter(|_| !running);
-            // Resolve the glyph and attention label from the same state.
+            // The glyph and its tooltip carry the state. The trailing slot is
+            // the relative time when Updated is on.
             let lane = status_lane(status, review);
             let meta_ink = if active {
                 theme.text_secondary
             } else {
                 theme.text_muted
             };
-            // Keep the status or age visible even while the pointer is over the row.
-            let slot_words = if status == Some(SessionStatus::Disconnected) {
-                Some(SessionStatus::Disconnected.label())
-            } else {
-                status_lane_words(lane)
-            };
-            let slot_ink = if slot_words.is_some() {
-                status_lane_ink(lane, &theme)
-            } else {
-                meta_ink
-            };
             let has_state = lane != StatusLane::Progress
                 && !matches!(lane, StatusLane::Idle | StatusLane::Unknown);
-            let tail_label = if status == Some(SessionStatus::Disconnected) {
-                SessionStatus::Disconnected.label()
-            } else if lane == StatusLane::UnreadDone {
-                // The review mark is the eye. Do not fill the slot with a label
-                // or the relative time.
+            let tail_label = if lane == StatusLane::UnreadDone {
+                // The review mark is the eye. Do not fill the slot with the
+                // relative time.
                 String::new()
+            } else if show_updated {
+                age
             } else {
-                status_lane_words(lane).unwrap_or_else(|| {
-                    if show_updated {
-                        age
-                    } else {
-                        String::new()
-                    }
-                })
+                String::new()
             };
             // Progress owns the leading spinner. An empty trailing capsule
             // would only repeat it, so the badge stays away unless the row
@@ -1606,7 +1579,7 @@ pub(crate) fn render_side_row(
                 .max_w(px(110.))
                 .truncate()
                 .text_size(TextSize::XSmall.px(&theme))
-                .text_color(slot_ink)
+                .text_color(meta_ink)
                 .child(tail_label);
             let status_details = (pinned || archived || show_badge).then(|| {
                 div()
@@ -3813,26 +3786,6 @@ mod tests {
         );
         assert_eq!(status_lane(Some(SessionStatus::Idle), None), Idle);
         assert_eq!(status_lane(None, None), Unknown);
-    }
-
-    /// Labeled attention states get words. An unread finished turn is the eye
-    /// alone, and quiet states leave room for the age.
-    #[test]
-    fn attention_states_get_words() {
-        assert!(status_lane_words(StatusLane::Blocked(BlockReason::Approval)).is_some());
-        assert!(status_lane_words(StatusLane::Blocked(BlockReason::Input)).is_some());
-        assert!(status_lane_words(StatusLane::Failed).is_some());
-        assert!(status_lane_words(StatusLane::UnreadFailed).is_some());
-        for quiet in [
-            StatusLane::Progress,
-            StatusLane::UnreadDone,
-            StatusLane::Done,
-            StatusLane::Stopped,
-            StatusLane::Idle,
-            StatusLane::Unknown,
-        ] {
-            assert_eq!(status_lane_words(quiet), None);
-        }
     }
 
     #[test]
