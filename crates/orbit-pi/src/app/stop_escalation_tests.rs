@@ -67,7 +67,7 @@ fn app_with_silent_pi(cx: &mut gpui::TestAppContext) -> (Entity<OrbitApp>, Silen
 /// The pid of the active process — the handle that tells one pi from its
 /// replacement.
 fn active_pid(app: &mut OrbitApp) -> Option<u32> {
-    app.client.as_mut().map(PiClient::child_pid)
+    app.client.as_ref().map(PiClient::child_pid)
 }
 
 /// A stop with a run behind it is timestamped; a stop on an idle composer is

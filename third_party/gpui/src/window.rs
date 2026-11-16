@@ -752,6 +752,8 @@ impl Frame {
         self.deferred_draws.clear();
         self.tab_stops.clear();
         self.focus = None;
+        #[cfg(any(test, feature = "test-support"))]
+        self.debug_bounds.clear();
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         {
@@ -1372,6 +1374,26 @@ impl Window {
             self.refreshing = true;
             self.invalidator.set_dirty(true);
         }
+    }
+
+    /// Whether [`Self::refresh`] has marked this window to be drawn again.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn is_dirty(&self) -> bool {
+        self.invalidator.is_dirty()
+    }
+
+    /// Run closures queued by [`Self::on_next_frame`].
+    ///
+    /// The test platform never asks the window for a frame, so a redraw
+    /// scheduled during prepaint stays queued until a test drains it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn flush_next_frame(&mut self, cx: &mut App) -> bool {
+        let callbacks = self.next_frame_callbacks.take();
+        let scheduled = !callbacks.is_empty();
+        for callback in callbacks {
+            callback(self, cx);
+        }
+        scheduled
     }
 
     /// Close this window.

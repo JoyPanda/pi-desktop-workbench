@@ -90,6 +90,7 @@ list(self.list.clone(), move |ix, _window, _cx| {
 // content
 list.reset(element_count);                      // reset to N rows (no scroll change)
 list.splice(old_range, count);                  // replace rows; clears offsets in range
+list.invalidate(range);                         // remeasure, keeping the last height
 list.item_count();                              // usize
 let list = list.measure_all();                 // builder: consumes self, returns Self
 
@@ -107,7 +108,7 @@ list.set_scroll_handler(|event: &ListScrollEvent, window, cx| { … });
 ```
 
 `ListOffset { item_ix: usize, offset_in_item: Pixels }` — the scroll anchor.
-`ListScrollEvent { visible_range: Range<usize>, count: usize, is_scrolled: bool }`.
+`ListScrollEvent { visible_range: Range<usize>, count: usize, is_scrolled: bool, offset_from_bottom: Pixels }`.
 
 ### The scroll handler does NOT fire on programmatic scrolls
 
@@ -139,14 +140,24 @@ list.set_scroll_handler(move |event: &ListScrollEvent, _, cx| {
 });
 ```
 
-While tail-following, `logical_scroll_top()` reads **past the end**, so it is not a
-usable anchor. To anchor the visible top row, move back one viewport first:
+While the anchor is the past-the-end sentinel (`logical_scroll_top().item_ix >= item_count`,
+including the `None` bottom pin), it is not a usable row. Move back one viewport
+first. A reader already inside the tail band has a real `item_ix`; `scroll_by(-viewport)`
+there jumps a full screen.
 
 ```rust
-let viewport = list.viewport_bounds().size.height;
-list.scroll_by(-viewport);
-let anchor = list.logical_scroll_top();   // now a real item
+if list.logical_scroll_top().item_ix >= list.item_count() {
+    let viewport = list.viewport_bounds().size.height;
+    list.scroll_by(-viewport);
+}
+let anchor = list.logical_scroll_top();   // a real item when one exists
 ```
+
+Layout clears that sentinel only when the content below the anchor no longer fills
+the viewport. That is the signal to resume tail following after a shrink. A smaller
+`max_offset`, or a gap that merely fell inside 50px, still has a real anchor and
+must not turn following back on. Read it after layout: a splice to an unmeasured
+row reports height 0 until then.
 
 ### splice() zeroes the anchor — restore it
 
@@ -162,9 +173,12 @@ list.splice(ix..ix + 1, 1);
 list.scroll_to(anchor);
 ```
 
-For **remeasuring the same rows** (streaming growth, expand/collapse), pass an
-identity splice — `splice(range, range.len())` — then restore the anchor. Use the
-same pattern for `reset`.
+For **remeasuring the same rows** (streaming growth, expand/collapse), do not
+identity-`splice`. Splice drops the row to height 0 until the next layout and
+clears the anchor offset, which makes a reader who scrolled up look like they
+are back on the tail. Call `ListState::invalidate` so the summary keeps the
+last height and the offset stays; layout writes the new height when it walks
+the row. Pin to the tail afterward only when the reader is still following.
 
 ### Appending without moving the reader
 

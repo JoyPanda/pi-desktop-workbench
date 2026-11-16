@@ -1,7 +1,8 @@
 //! A list element that can be used to render a large number of differently sized elements
 //! efficiently. Clients of this API need to ensure that elements outside of the scrolled
 //! area do not change their height for this element to function correctly. If your elements
-//! do change height, notify the list element via [`ListState::splice`] or [`ListState::reset`].
+//! do change height, notify the list element via [`ListState::splice`],
+//! [`ListState::invalidate`], or [`ListState::reset`].
 //! In order to minimize re-renders, this element's state is stored intrusively
 //! on your own views, so that your code can coordinate directly with the list element's cached state.
 //!
@@ -165,6 +166,14 @@ enum ListItem {
         size: Size<Pixels>,
         focus_handle: Option<FocusHandle>,
     },
+    /// Measured before, but the content has changed. The summary keeps `size`
+    /// so scroll extents do not collapse before the next layout; layout treats
+    /// the row as unmeasured and writes a fresh [`Self::Measured`] when it
+    /// walks the row.
+    Stale {
+        size: Size<Pixels>,
+        focus_handle: Option<FocusHandle>,
+    },
 }
 
 impl ListItem {
@@ -178,19 +187,35 @@ impl ListItem {
 
     fn focus_handle(&self) -> Option<FocusHandle> {
         match self {
-            ListItem::Unmeasured { focus_handle } | ListItem::Measured { focus_handle, .. } => {
-                focus_handle.clone()
-            }
+            ListItem::Unmeasured { focus_handle }
+            | ListItem::Measured { focus_handle, .. }
+            | ListItem::Stale { focus_handle, .. } => focus_handle.clone(),
         }
     }
 
     fn contains_focused(&self, window: &Window, cx: &App) -> bool {
         match self {
-            ListItem::Unmeasured { focus_handle } | ListItem::Measured { focus_handle, .. } => {
-                focus_handle
-                    .as_ref()
-                    .is_some_and(|handle| handle.contains_focused(window, cx))
+            ListItem::Unmeasured { focus_handle }
+            | ListItem::Measured { focus_handle, .. }
+            | ListItem::Stale { focus_handle, .. } => focus_handle
+                .as_ref()
+                .is_some_and(|handle| handle.contains_focused(window, cx)),
+        }
+    }
+
+    /// Keep the last height and force the next layout that reaches this row
+    /// to measure it again. Rows that have never been measured stay unmeasured.
+    fn mark_stale(&self) -> Self {
+        match self {
+            ListItem::Measured { size, focus_handle } | ListItem::Stale { size, focus_handle } => {
+                ListItem::Stale {
+                    size: *size,
+                    focus_handle: focus_handle.clone(),
+                }
             }
+            ListItem::Unmeasured { focus_handle } => ListItem::Unmeasured {
+                focus_handle: focus_handle.clone(),
+            },
         }
     }
 }
@@ -308,6 +333,45 @@ impl ListState {
                 *item_ix = *item_ix - (old_range.end - old_range.start) + spliced_count;
             }
         }
+    }
+
+    /// Mark `range` to be measured again, keeping each row's last height.
+    ///
+    /// [`Self::splice`] replaces rows with unmeasured items of height 0 and, when
+    /// the scroll anchor falls in `range`, clears its intra-row offset. A row
+    /// that is only growing (streaming text, an opened card) needs the opposite:
+    /// wheel and scrollbar input that arrives before the next layout must still
+    /// see the previous height, and the reader's place inside the row must stay.
+    /// Layout writes the new height when it walks the row. Rows it does not reach
+    /// keep the height they had.
+    pub fn invalidate(&self, range: Range<usize>) {
+        let state = &mut *self.0.borrow_mut();
+        let count = state.items.summary().count;
+        if range.start >= range.end || range.end > count {
+            return;
+        }
+
+        // The cursor borrows the tree. Drop it before the tree is replaced.
+        let rebuilt = {
+            let mut cursor = state.items.cursor::<Count>(());
+            let mut rebuilt = cursor.slice(&Count(range.start), Bias::Right);
+            let mut kept = Vec::with_capacity(range.end - range.start);
+            while cursor.start().0 < range.end {
+                let Some(item) = cursor.item() else {
+                    break;
+                };
+                kept.push(item.mark_stale());
+                let at = cursor.start().0;
+                cursor.next();
+                if cursor.start().0 == at {
+                    break;
+                }
+            }
+            rebuilt.extend(kept, ());
+            rebuilt.append(cursor.suffix(), ());
+            rebuilt
+        };
+        state.items = rebuilt;
     }
 
     /// Set a handler that will be called when the list is scrolled.
@@ -910,6 +974,7 @@ impl std::fmt::Debug for ListItem {
         match self {
             Self::Unmeasured { .. } => write!(f, "Unrendered"),
             Self::Measured { size, .. } => f.debug_struct("Rendered").field("size", size).finish(),
+            Self::Stale { size, .. } => f.debug_struct("Stale").field("size", size).finish(),
         }
     }
 }
@@ -1132,6 +1197,17 @@ impl sum_tree::Item for ListItem {
                 count: 1,
                 rendered_count: 1,
                 unrendered_count: 0,
+                height: size.height,
+                has_focus_handles: focus_handle.is_some(),
+            },
+            // Height stays so a remeasure cannot collapse the scroll extent
+            // before layout. `unrendered_count` marks the row as due for a
+            // fresh measure; `size()` is still `None`, so layout does not
+            // reuse the cached dimensions.
+            ListItem::Stale { size, focus_handle } => ListItemSummary {
+                count: 1,
+                rendered_count: 0,
+                unrendered_count: 1,
                 height: size.height,
                 has_focus_handles: focus_handle.is_some(),
             },

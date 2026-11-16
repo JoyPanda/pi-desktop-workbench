@@ -1,9 +1,15 @@
 //! Conversation scroller — an original, plain-GPUI implementation built on
 //! [`gpui::ListState`] (no component library).
 //!
-//! Provides tail following, append/prepend/splice, item remeasure,
-//! scroll-to-row, and a jump-to-latest control when the reader leaves the
-//! live edge.
+//! Tail following matches the agent transcript. While the reader is within
+//! [`TAIL_SLACK`] of the live edge, new output keeps that edge against the
+//! viewport. A user scroll — wheel, scrollbar, or the residual from a nested
+//! card — that leaves the band detaches immediately. Further output does not
+//! move the reader and does not turn following back on, including when the
+//! new text leaves them inside the band. Following resumes when they scroll
+//! back into the band, jump to the latest row, or the transcript resets. Layout
+//! also resumes it when a shrink no longer fills the viewport and the list
+//! drops its anchor; a gap that merely falls inside the band does not.
 //!
 //! GPUI 0.2.2 has no `FollowMode::Tail`; [`ListAlignment::Bottom`] plus a
 //! past-the-end `scroll_to` is the equivalent: the last row's bottom stays
@@ -28,10 +34,10 @@ const SCROLLBAR_HIT_WIDTH: f32 = 10.;
 const SCROLLBAR_EDGE: f32 = 0.5;
 /// Extra pixels above and below the thumb that still start a drag.
 const SCROLLBAR_THUMB_SLOP: f32 = 4.;
-/// The reader is still on the live edge when the tail is inside this band.
-/// Streaming growth does not release the pin here; only a scroll that leaves
-/// the band does. Coming back inside locks on again. Same width Cursor uses
-/// for the composer (`itg`, 50px).
+/// The reader is on the live edge when the tail is inside this band. A user
+/// scroll that stays inside keeps following; one that leaves detaches. Coming
+/// back inside locks on again. Streaming growth never crosses this line by
+/// itself. Same width Cursor uses for the composer (`itg`, 50px).
 const TAIL_SLACK: f32 = 50.;
 /// Leftmost ink of `icons/arrow-down.svg` in its 24px viewBox. The arrowhead
 /// starts at x=6, and the round cap adds half of the 1.5px stroke.
@@ -51,9 +57,9 @@ pub struct MessageScrollerState {
     /// New content arrived while the reader was away from the live edge —
     /// the jump-to-latest control says so until they return.
     unread: Rc<Cell<bool>>,
-    /// The transcript has overflowed. A streaming remeasure reports height 0
-    /// for one frame; the jump control stays up through that blip instead of
-    /// flickering off.
+    /// The transcript has overflowed. A streaming remeasure keeps the previous
+    /// height, but a layout that has not run yet can still report no overflow;
+    /// the jump control stays up through that blip instead of flickering off.
     overflowing: Rc<Cell<bool>>,
     /// Live thumb drag. Window-level move and release listeners read it, so a
     /// drag that leaves the strip — or a frame where the strip is gone — still
@@ -157,22 +163,31 @@ impl MessageScrollerState {
             self.overflowing.set(true);
             return true;
         }
-        // A remeasure marks the live row unmeasured, so its height reads as 0
-        // until the next layout. Keep the control visible across that frame.
+        // Keep the control up when the list reports no overflow yet. A layout
+        // that has not measured the live row, or a one-frame gap after a
+        // splice, would otherwise flicker the jump control off.
         self.overflowing.get()
     }
 
-    /// Lock or release tail-following from the current pixel distance.
+    /// Resume following when layout has pinned the reader to the live edge.
     ///
-    /// A max of about 0 is ignored: that is either a transcript that fits, or
-    /// the unmeasured frame of a splice, and neither should flip the pin.
+    /// Bottom alignment clears the anchor only when the content below it no
+    /// longer fills the viewport. A shorter extent, or a gap that merely fell
+    /// inside the slack, leaves the anchor on a real row. Turning following
+    /// back on there would scroll the next chunk to the end.
     fn sync_tail_follow(&self) {
-        sync_tail_follow(
-            &self.list,
-            &self.following_tail,
-            &self.unread,
-            &self.overflowing,
-        );
+        if self.following_tail.get() {
+            return;
+        }
+        // `None` (and a past-the-end `scroll_to`) both read as `item_ix ==
+        // count`. A real row means the reader was not clamped.
+        if self.list.logical_scroll_top().item_ix < self.item_count() {
+            return;
+        }
+        self.following_tail.set(true);
+        self.unread.set(false);
+        self.overflowing.set(false);
+        self.note_visible_start(self.item_count());
     }
 
     /// True when the transcript holds more content than the viewport shows
@@ -220,37 +235,32 @@ impl MessageScrollerState {
     }
 
     /// Mark rows in `range` for remeasurement (streaming growth).
+    ///
+    /// The last measured height stays in the scroll extent until layout, so a
+    /// wheel event in that window still has somewhere to go. The reader's
+    /// offset inside the row is left alone. While following, the tail is
+    /// pinned after the invalidation.
     pub fn remeasure_items(&self, range: Range<usize>) -> bool {
         if !self.valid_range(&range) || range.start == range.end {
             return false;
         }
-        // These are the same rows, not replacements. GPUI's splice clears
-        // the intra-row offset when the anchor lies in the invalidated range;
-        // streaming a tall answer must not move the reader on every delta.
-        let anchor = (!self.is_following_tail()).then(|| self.list.logical_scroll_top());
-        let count = range.end - range.start;
-        self.list.splice(range, count);
-        if let Some(anchor) = anchor {
-            self.list.scroll_to(anchor);
-        } else {
-            self.stick_if_following();
-        }
+        self.list.invalidate(range);
+        self.stick_if_following();
         true
     }
 
     /// Remeasure one row whose height changed from an expand/collapse, keeping
-    /// the transcript exactly where the reader left it.
+    /// the transcript where the reader left it.
     ///
     /// While tail-following, a plain remeasure re-pins the list to the bottom
-    /// and yanks the growing row out of view. Freeze the live edge into an
-    /// explicit item anchor first (which also leaves tail-following, so the
-    /// view stops chasing the bottom).
+    /// and yanks the growing row out of view. Leave tail-following first. The
+    /// past-the-end anchor has no row to freeze, so step back one viewport;
+    /// a reader already inside the slack already has a real row, and moving
+    /// them would jump a full screen.
     ///
-    /// Either way the anchor is re-applied after the splice: gpui's `splice`
-    /// zeroes the offset when the changed row *is* the anchor, which otherwise
-    /// snaps that row's top to the viewport top (the "it jumps when I open a
-    /// card in the message I'm reading" case). Restoring the captured pair
-    /// leaves the row under the reader fixed and lets the card open in place.
+    /// The row is invalidated in place: its last height and the reader's
+    /// offset stay until layout measures the new one, so opening a card in
+    /// the message on screen does not snap that row to the viewport top.
     pub fn remeasure_toggle(&self, ix: usize) -> bool {
         if ix >= self.item_count() {
             return false;
@@ -258,37 +268,27 @@ impl MessageScrollerState {
         // Only freeze an anchor when there is content to scroll. A transcript
         // shorter than the viewport is bottom-pinned; materializing an anchor
         // there would snap the whole run to the top.
-        let anchor = if self.is_following_tail() {
-            if self.is_scrollable() {
-                // `logical_scroll_top` reads as past-the-end while following;
-                // move back one viewport to turn the visible top item into the
-                // anchor.
+        if self.is_following_tail() && self.is_scrollable() {
+            // The past-the-end anchor has no row to freeze. Step back one
+            // viewport so the row at the top of the screen becomes it. A
+            // reader already inside the slack has a real row; moving them
+            // would jump a full screen.
+            if self.list.logical_scroll_top().item_ix >= self.item_count() {
                 let viewport = self.list.viewport_bounds().size.height;
                 self.list.scroll_by(-viewport);
-                let anchor = self.list.logical_scroll_top();
-                if anchor.item_ix < self.item_count() {
-                    self.following_tail.set(false);
-                    // Programmatic scrolls skip the scroll handler; keep the
-                    // rail's "reader is here" hint on the frozen top row.
-                    self.visible_start.set(anchor.item_ix);
-                    Some(anchor)
-                } else {
-                    None
-                }
-            } else {
-                None
             }
-        } else {
-            // Already anchored by the reader's own scroll.
-            Some(self.list.logical_scroll_top())
-        };
-
-        self.list.splice(ix..ix + 1, 1);
-        if let Some(anchor) = anchor {
-            self.list.scroll_to(anchor);
-        } else {
-            self.stick_if_following();
+            let anchor = self.list.logical_scroll_top();
+            if anchor.item_ix < self.item_count() {
+                self.following_tail.set(false);
+                // Programmatic scrolls skip the scroll handler; keep the
+                // rail's "reader is here" hint on the frozen top row.
+                self.visible_start.set(anchor.item_ix);
+            }
         }
+        self.list.invalidate(ix..ix + 1);
+        // A run that still fits, or a freeze that did not land on a row,
+        // stays pinned. Detached readers are left on the anchor they have.
+        self.stick_if_following();
         true
     }
 
@@ -334,17 +334,15 @@ impl MessageScrollerState {
         // range before applying a chained wheel delta; otherwise small upward
         // gestures over a Thought card get clamped straight back to the tail.
         let max = self.list.max_offset_for_scrollbar().height;
+        // Nothing to scroll. An upward flick must not snap a reader who just
+        // left the tail back onto it — `target == max` below means "at the
+        // live edge", and a zero extent is that edge for both directions.
+        if distance < px(0.) && max <= px(SCROLLBAR_EDGE) {
+            return;
+        }
         let current = (-self.list.scroll_px_offset_for_scrollbar().y).clamp(px(0.), max);
         let target = (current + distance).clamp(px(0.), max);
-        if target == max {
-            self.scroll_to_end();
-        } else {
-            self.list
-                .set_offset_from_scrollbar(gpui::point(px(0.), -target));
-            // Programmatic scrolling does not invoke the list's scroll handler.
-            self.note_visible_start(self.list.logical_scroll_top().item_ix);
-            self.sync_tail_follow();
-        }
+        self.apply_scrollbar_offset(target);
     }
 
     /// Move the list to `target` pixels down from the top. Within
@@ -359,7 +357,14 @@ impl MessageScrollerState {
         } else {
             self.list.set_offset_from_scrollbar(point(px(0.), -target));
             self.note_visible_start(self.list.logical_scroll_top().item_ix);
-            self.sync_tail_follow();
+            // The gesture's own gap, not a second read of the list. A remeasure
+            // that has not been laid out yet must not be what decides the pin.
+            note_tail_distance(
+                f32::from(max - target),
+                &self.following_tail,
+                &self.unread,
+                &self.overflowing,
+            );
         }
     }
 
@@ -452,18 +457,6 @@ impl MessageScrollerState {
     }
 }
 
-/// Distance from the tail, in pixels. `None` when the list cannot scroll or
-/// its rows have not been measured yet — callers must not treat that as
-/// "at the bottom" or a splice will relatch the reader mid-stream.
-fn tail_distance(list: &ListState) -> Option<f32> {
-    let max = f32::from(list.max_offset_for_scrollbar().height);
-    if max <= SCROLLBAR_EDGE {
-        return None;
-    }
-    let scrolled = (-f32::from(list.scroll_px_offset_for_scrollbar().y)).clamp(0., max);
-    Some((max - scrolled).max(0.))
-}
-
 fn within_tail_slack(distance: f32) -> bool {
     distance <= TAIL_SLACK
 }
@@ -485,20 +478,6 @@ fn note_tail_distance(
     }
 }
 
-/// Lock or release from the list's measured offset. A list that cannot scroll,
-/// or whose rows are still unmeasured, is left alone.
-fn sync_tail_follow(
-    list: &ListState,
-    following_tail: &Cell<bool>,
-    unread: &Cell<bool>,
-    overflowing: &Cell<bool>,
-) {
-    let Some(distance) = tail_distance(list) else {
-        return;
-    };
-    note_tail_distance(distance, following_tail, unread, overflowing);
-}
-
 /// Right inset of the "New" label. The arrow's ink sits `ARROW_INK_LEFT`
 /// into the icon box, so the gap from the pill's left edge to the stroke is
 /// the frame padding plus that inset. The label has no matching inset; this
@@ -515,9 +494,10 @@ pub fn render_scroller(
     theme: Theme,
     list: impl IntoElement,
 ) -> impl IntoElement {
-    // A shrink can carry the reader back into the slack without a scroll
-    // event. Re-read the distance before deciding whether the pill is up.
-    state.sync_tail_follow();
+    // Checked after the list lays out. A splice that swaps a measured row
+    // for an unmeasured one drops the extent until that layout; reading it
+    // here would treat the gap as a clamp and pin the reader again.
+    let after_layout = state.clone();
     let scrolled_up = state.is_scrolled_up();
     div()
         .id(ElementId::Name("message-scroller".into()))
@@ -535,6 +515,27 @@ pub fn render_scroller(
                 .h_full()
                 .min_h_0()
                 .child(list),
+        )
+        .child(
+            // Runs after the list's prepaint, so the height just measured is
+            // visible. Resuming follow has to wait for the next frame: this
+            // canvas runs while the window is already drawing, and refresh
+            // is ignored until that finishes. The jump control was built for
+            // this frame and leaves on the one just scheduled. No hitbox.
+            canvas(
+                move |_, window, _| {
+                    let was_following = after_layout.is_following_tail();
+                    after_layout.sync_tail_follow();
+                    if !was_following && after_layout.is_following_tail() {
+                        window.on_next_frame(|window, _| window.refresh());
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size(px(0.)),
         )
         .when(scrolled_up, |shell| {
             shell.child(render_jump_button(state, theme))
@@ -570,6 +571,7 @@ fn render_jump_button(state: MessageScrollerState, theme: Theme) -> impl IntoEle
                 .elevation_2(&theme)
                 .rounded_full()
                 .tip(tr!("message_scroller.jump_to_latest"))
+                .debug_selector(|| "message-scroller-jump".to_string())
                 .bg(theme.surface_secondary)
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.surface_elevated))
@@ -724,7 +726,7 @@ mod tests {
             _: &mut gpui::Context<Self>,
         ) -> impl gpui::IntoElement {
             let heights = self.heights.clone();
-            gpui::list(self.state.list_state(), move |ix, _, _| {
+            let list = gpui::list(self.state.list_state(), move |ix, _, _| {
                 let height = heights.borrow().get(&ix).copied().unwrap_or(40.);
                 gpui::div()
                     .id(gpui::ElementId::NamedInteger("probe-row".into(), ix as u64))
@@ -734,7 +736,10 @@ mod tests {
                     .child(format!("row {ix}"))
                     .into_any_element()
             })
-            .size_full()
+            .size_full();
+            // The production shell is what re-reads the tail after layout.
+            // Drawing the list alone never hit that path.
+            super::render_scroller(self.state.clone(), crate::theme::Theme::dark(), list)
         }
     }
 
@@ -1063,6 +1068,283 @@ mod tests {
         assert!(state.is_following_tail());
         assert!(!state.has_unread());
         assert_eq!(cx.debug_bounds("probe-row-2").unwrap().bottom(), px(400.));
+    }
+
+    /// History taller than the viewport, with every row measured before the
+    /// caller scrolls.
+    ///
+    /// A single bottom-aligned paint only walks the viewport plus
+    /// [`LIST_OVERDRAW`]. A live row taller than that leaves the rows above
+    /// it at height 0, so `scroll_by` clamps and assertions about rows above
+    /// the fold read a list that was never laid out.
+    fn tall_probe(
+        cx: &mut gpui::VisualTestContext,
+        rows: usize,
+        live: usize,
+        live_height: f32,
+    ) -> (MessageScrollerState, RowHeights, gpui::Entity<TranscriptProbe>) {
+        let state = MessageScrollerState::new(rows);
+        // First layout measures every row, then later frames stay on the
+        // visible walk. Dropping the returned handle keeps the flag on the
+        // shared list.
+        drop(state.list_state().measure_all());
+        let heights: RowHeights =
+            Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+        heights.borrow_mut().insert(live, live_height);
+        let probe = cx.update(|_, cx| {
+            cx.new(|_| TranscriptProbe {
+                state: state.clone(),
+                heights: heights.clone(),
+            })
+        });
+        draw_probe(cx, &probe);
+        let content = (rows - 1) as f32 * 40. + live_height;
+        let max = f32::from(state.list_state().max_offset_for_scrollbar().height);
+        let expected = (content - 400.).max(0.);
+        assert!(
+            (max - expected).abs() < 1.,
+            "rows above the fold must be measured; max {max}, expected {expected}"
+        );
+        (state, heights, probe)
+    }
+
+    #[gpui::test]
+    fn streaming_growth_keeps_a_reader_inside_the_live_row(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        // Twelve measured rows of 40px already overflow a 400px viewport.
+        // The live row is the one the reader is inside.
+        let (state, heights, probe) = tall_probe(cx, 13, 12, 900.);
+        assert!(state.is_following_tail());
+
+        state.scroll_by(px(-80.));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        let top = cx.debug_bounds("probe-row-12").unwrap().top();
+
+        for height in [1100., 1400., 1800.] {
+            let max_before = state.list_state().max_offset_for_scrollbar().height;
+            heights.borrow_mut().insert(12, height);
+            assert!(state.remeasure_items(12..13));
+            assert_eq!(
+                state.list_state().max_offset_for_scrollbar().height,
+                max_before,
+                "invalidate keeps the last measured height until layout"
+            );
+            state.note_activity();
+            draw_probe(cx, &probe);
+            assert!(!state.is_following_tail());
+            assert!(state.has_unread());
+            assert_eq!(cx.debug_bounds("probe-row-12").unwrap().top(), top);
+        }
+
+        state.scroll_to_end();
+        draw_probe(cx, &probe);
+        assert!(state.is_following_tail());
+        assert!(!state.has_unread());
+        assert_eq!(cx.debug_bounds("probe-row-12").unwrap().bottom(), px(400.));
+    }
+
+    #[gpui::test]
+    fn streaming_growth_just_below_the_fold_does_not_relock(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        // Twenty rows of 40px, then a 500px live row. Scrolling up by the
+        // live row plus 30px parks its top 30px under the viewport bottom —
+        // the spot where a height of 0 used to look like "within 50px".
+        let (state, heights, probe) = tall_probe(cx, 21, 20, 500.);
+        state.scroll_by(px(-(500. + 30.)));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        // The live row's top sits under the fold, so a painted history row is
+        // the one whose position must survive the next chunk.
+        assert!(cx.debug_bounds("probe-row-20").is_none());
+        let top = cx.debug_bounds("probe-row-9").unwrap().top();
+
+        let max_before = state.list_state().max_offset_for_scrollbar().height;
+        heights.borrow_mut().insert(20, 1200.);
+        assert!(state.remeasure_items(20..21));
+        assert_eq!(
+            state.list_state().max_offset_for_scrollbar().height,
+            max_before
+        );
+        state.note_activity();
+        draw_probe(cx, &probe);
+
+        assert!(!state.is_following_tail());
+        assert!(state.has_unread());
+        assert_eq!(cx.debug_bounds("probe-row-9").unwrap().top(), top);
+    }
+
+    #[gpui::test]
+    fn a_shrink_that_clamps_the_reader_into_the_band_follows_again(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let cx = cx.add_empty_window();
+        let (state, heights, probe) = tall_probe(cx, 13, 12, 900.);
+        // Far enough that the viewport top is a history row. The shrink then
+        // leaves less than a viewport below that anchor, which is the clamp.
+        state.scroll_by(px(-600.));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        assert!(state.first_visible_index() < 12);
+
+        heights.borrow_mut().insert(12, 100.);
+        assert!(state.remeasure_items(12..13));
+        state.note_activity();
+        assert!(state.has_unread());
+        draw_probe(cx, &probe);
+
+        assert!(state.is_following_tail());
+        assert!(!state.has_unread());
+        assert_eq!(state.first_visible_index(), 12);
+        // This frame already built the jump control. Layout asked for another
+        // frame to take it down; drawing again by hand would hide it even if
+        // that request had been dropped.
+        assert!(cx.debug_bounds("message-scroller-jump").is_some());
+        let redraw_scheduled = cx.update(|window, cx| {
+            let scheduled = window.flush_next_frame(cx);
+            scheduled && window.is_dirty()
+        });
+        assert!(
+            redraw_scheduled,
+            "a clamp must schedule a redraw for the next frame"
+        );
+        draw_probe(cx, &probe);
+        assert!(cx.debug_bounds("message-scroller-jump").is_none());
+    }
+
+    /// The live row is the only one measured, so a shrink that pulls the
+    /// anchor upward also measures the history above it and the extent grows.
+    /// Layout still drops the anchor. That is a clamp, and following resumes.
+    #[gpui::test]
+    fn a_shrink_clamps_even_when_newly_measured_history_grows_the_extent(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = MessageScrollerState::new(13);
+        let heights: RowHeights =
+            Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+        heights.borrow_mut().insert(12, 900.);
+        let cx = cx.add_empty_window();
+        let probe = cx.update(|_, cx| {
+            cx.new(|_| TranscriptProbe {
+                state: state.clone(),
+                heights: heights.clone(),
+            })
+        });
+        draw_probe(cx, &probe);
+        let max = f32::from(state.list_state().max_offset_for_scrollbar().height);
+        assert!(
+            (max - 500.).abs() < 1.,
+            "rows above the live row stay unmeasured; max {max}"
+        );
+
+        state.scroll_by(px(-60.));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        let max = f32::from(state.list_state().max_offset_for_scrollbar().height);
+        assert!((max - 500.).abs() < 1., "the scroll must not measure history; max {max}");
+
+        heights.borrow_mut().insert(12, 100.);
+        assert!(state.remeasure_items(12..13));
+        state.note_activity();
+        assert!(state.has_unread());
+        draw_probe(cx, &probe);
+
+        assert!(state.is_following_tail());
+        assert!(!state.has_unread());
+    }
+
+    #[gpui::test]
+    fn a_shrink_that_leaves_the_reader_outside_the_band_stays_detached(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let cx = cx.add_empty_window();
+        let (state, heights, probe) = tall_probe(cx, 13, 12, 900.);
+        state.scroll_by(px(-300.));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        let top = cx.debug_bounds("probe-row-12").unwrap().top();
+
+        heights.borrow_mut().insert(12, 820.);
+        assert!(state.remeasure_items(12..13));
+        state.note_activity();
+        draw_probe(cx, &probe);
+
+        assert!(!state.is_following_tail());
+        assert!(state.has_unread());
+        assert_eq!(cx.debug_bounds("probe-row-12").unwrap().top(), top);
+    }
+
+    /// Sixty-five pixels up, then the live row loses twenty. The reader is
+    /// inside the slack afterwards and still has a real anchor, so the next
+    /// chunk must not pin them.
+    #[gpui::test]
+    fn a_small_shrink_inside_the_band_stays_detached(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let (state, heights, probe) = tall_probe(cx, 13, 12, 900.);
+        state.scroll_by(px(-65.));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        let top = cx.debug_bounds("probe-row-12").unwrap().top();
+
+        heights.borrow_mut().insert(12, 880.);
+        assert!(state.remeasure_items(12..13));
+        state.note_activity();
+        draw_probe(cx, &probe);
+
+        assert!(!state.is_following_tail());
+        assert!(state.has_unread());
+        assert_eq!(cx.debug_bounds("probe-row-12").unwrap().top(), top);
+    }
+
+    /// Replacing the tail row drops its height to 0 until the next layout.
+    /// A reader seventy pixels up must stay detached through that frame.
+    #[gpui::test]
+    fn replacing_the_live_row_while_detached_does_not_relock(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        let (state, _, probe) = tall_probe(cx, 13, 12, 48.);
+        state.scroll_by(px(-70.));
+        draw_probe(cx, &probe);
+        assert!(!state.is_following_tail());
+        state.note_activity();
+        let top = cx.debug_bounds("probe-row-2").unwrap().top();
+
+        assert!(state.splice(12..13, 1));
+        state.note_activity();
+        draw_probe(cx, &probe);
+
+        assert!(!state.is_following_tail());
+        assert!(state.has_unread());
+        assert_eq!(cx.debug_bounds("probe-row-2").unwrap().top(), top);
+    }
+
+    /// Following is still on a few pixels off the tail, and the anchor is
+    /// already a real row. Opening a card must not step back a viewport.
+    #[gpui::test]
+    fn remeasure_toggle_inside_the_slack_stays_put(cx: &mut gpui::TestAppContext) {
+        let state = MessageScrollerState::new(3);
+        let heights: RowHeights =
+            Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+        heights.borrow_mut().insert(2, 1200.);
+        let cx = cx.add_empty_window();
+        let probe = cx.update(|_, cx| {
+            cx.new(|_| TranscriptProbe {
+                state: state.clone(),
+                heights: heights.clone(),
+            })
+        });
+        draw_probe(cx, &probe);
+
+        state.scroll_by(px(-20.));
+        draw_probe(cx, &probe);
+        assert!(state.is_following_tail());
+        let top = cx.debug_bounds("probe-row-2").unwrap().top();
+
+        heights.borrow_mut().insert(2, 1400.);
+        assert!(state.remeasure_toggle(2));
+        draw_probe(cx, &probe);
+
+        assert!(!state.is_following_tail());
+        assert_eq!(cx.debug_bounds("probe-row-2").unwrap().top(), top);
     }
 
     #[test]
