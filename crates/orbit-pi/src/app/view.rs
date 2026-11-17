@@ -245,7 +245,7 @@ impl Render for OrbitApp {
         // Model / thinking choices are fixed for the duration of a turn. A
         // picker left open when a run begins is dropped so its list cannot
         // still change the model mid-turn; the chips render disabled.
-        if self.is_running() {
+        if self.is_running() || self.spawn_pending() {
             self.close_model_selector(window, cx);
         }
         let theme = *theme::get(cx);
@@ -2251,8 +2251,9 @@ impl OrbitApp {
     /// windows keep Send reachable.
     pub(super) fn model_chip(&self, compact: bool, cx: &Context<Self>) -> impl IntoElement + use<> {
         let theme = *theme::get(cx);
-        // A run in flight dims the chip and swallows clicks until it settles.
-        let disabled = self.is_running();
+        // A run in flight, or a process still starting, dims the chip and
+        // swallows clicks until it settles.
+        let disabled = self.is_running() || self.spawn_pending();
         let open = !disabled && self.picker_is_open(PickerKind::Model);
         div()
             .flex()
@@ -2320,8 +2321,9 @@ impl OrbitApp {
             return None;
         }
         let theme = *theme::get(cx);
-        // A run in flight dims the chip and swallows clicks until it settles.
-        let disabled = self.is_running();
+        // A run in flight, or a process still starting, dims the chip and
+        // swallows clicks until it settles.
+        let disabled = self.is_running() || self.spawn_pending();
         let open = !disabled && self.picker_is_open(PickerKind::Thinking);
         Some(
             div()

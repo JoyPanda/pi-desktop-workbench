@@ -103,6 +103,23 @@ impl BundledExtensions {
         apply_default: bool,
         env: &[(String, String)],
     ) -> anyhow::Result<PiClient> {
+        let args = if apply_default {
+            SessionDefault::load().cli_args()
+        } else {
+            Vec::new()
+        };
+        self.spawn_with_startup_args(workspace, &args, env)
+    }
+
+    /// [`spawn`](Self::spawn) with the startup flags already chosen. A draft
+    /// that picked its own model passes that model's args; every other new
+    /// process passes the session default (or nothing, for a resume).
+    pub(crate) fn spawn_with_startup_args(
+        &self,
+        workspace: &Path,
+        args: &[String],
+        env: &[(String, String)],
+    ) -> anyhow::Result<PiClient> {
         // A `pi update` can restore the pristine RPC bundle while Orbit is
         // running; re-check before every spawn so a session switch or Runtime
         // restart still gets custom UI, quota, and auth. The unchanged fast
@@ -120,11 +137,6 @@ impl BundledExtensions {
                 patches_started.elapsed()
             );
         }
-        let args = if apply_default {
-            SessionDefault::load().cli_args()
-        } else {
-            Vec::new()
-        };
         let env_refs: Vec<(&str, &str)> = env
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -135,7 +147,7 @@ impl BundledExtensions {
             None,
             &extensions,
             &env_refs,
-            &args,
+            args,
         )
     }
 

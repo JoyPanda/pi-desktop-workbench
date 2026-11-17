@@ -57,3 +57,37 @@ fn manual_model_selection_disarms_the_default(cx: &mut gpui::TestAppContext) {
         });
     });
 }
+
+/// A process that was started on a composer-chosen model must not have the
+/// configured default pushed over it when `new_session` succeeds.
+#[gpui::test]
+fn a_pinned_new_session_does_not_arm_the_default(cx: &mut gpui::TestAppContext) {
+    use crate::theme::{Theme, ThemeKey};
+
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+    let cx = cx.add_empty_window();
+    let app = cx.update(|_, cx| cx.new(OrbitApp::new));
+
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.startup_model_pinned = true;
+            app.default_model_armed = true;
+            let mut refresh_sessions = false;
+            let data = serde_json::json!({});
+            app.on_response(
+                "new_session",
+                true,
+                Some(&data),
+                None,
+                "test-command",
+                &mut refresh_sessions,
+                cx,
+            );
+            assert!(!app.startup_model_pinned);
+            assert!(
+                !app.default_model_armed,
+                "the argv model stands; the birth push stays off"
+            );
+        });
+    });
+}

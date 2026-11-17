@@ -176,12 +176,18 @@ impl OrbitApp {
             error: None,
         };
         self.client = Some(client);
+        // The birth push belongs to the process that armed it. This one has
+        // not accepted `new_session` yet; a resumed process must not inherit it.
+        self.default_model_armed = false;
         // A new process starts a new session stream: entry ids from the old
         // process mean nothing here.
         self.reset_quota_entries();
         // Nothing is in flight in a process that just started, so a stop left
         // pending on the previous one must not escalate against this one.
         self.abort_sent_at = None;
+        // A pin belonged to the process being replaced. The caller sets a new
+        // one only after this process has accepted `new_session`.
+        self.startup_model_pinned = false;
     }
 
     /// Give up the spawn still on its way, if any. Any process the app already
@@ -190,6 +196,10 @@ impl OrbitApp {
     /// started instead of adopting it over the current view.
     pub(super) fn invalidate_pending_spawn(&mut self) {
         self.pending_spawn = None;
+        // A cancelled spawn never reaches `new_session`. `adopt_client` also
+        // comes through here, before the NewSession arm raises the pin for
+        // the process it just took.
+        self.startup_model_pinned = false;
     }
 
     /// End a replacement: name reports may paint again, and a click that
@@ -235,6 +245,19 @@ impl OrbitApp {
         // `mcp.json` without the config holding a credential), and the folder.
         let extensions = self.extensions.clone();
         let env = self.mcp.secret_env();
+        // The open draft's model, when the reader picked one; otherwise the
+        // session default. Both become the child's `--provider` / `--model`
+        // / `--thinking`, which is what the first turn actually runs on.
+        // The pin is not raised here: a spawn that is cancelled before it
+        // lands must not suppress the next session's default.
+        let chosen = self.current_draft_model();
+        // Recorded now: by the time the process lands the row may already be
+        // a sent session, and `current_draft_model` would no longer mean
+        // "this child's argv was a composer choice".
+        let pinned_model = chosen.is_some();
+        let startup_args = chosen
+            .unwrap_or_else(|| self.session_default.clone())
+            .cli_args();
         #[cfg(test)]
         let test_bin = self.spawn_bin.clone();
         #[cfg(not(test))]
@@ -248,6 +271,8 @@ impl OrbitApp {
             cwd,
             mcp_stamp,
             then,
+            startup_args,
+            pinned_model,
         };
         self.pending_spawn = Some(ticket.clone());
         let ticket_for_spawn = ticket.clone();
@@ -262,7 +287,11 @@ impl OrbitApp {
                             &ticket_for_spawn.cwd,
                             None,
                         ),
-                        None => extensions.spawn(&ticket_for_spawn.cwd, true, &env),
+                        None => extensions.spawn_with_startup_args(
+                            &ticket_for_spawn.cwd,
+                            &ticket_for_spawn.startup_args,
+                            &env,
+                        ),
                     };
                     if crate::bundled_extensions::spawn_timing_enabled() {
                         eprintln!(
@@ -310,8 +339,10 @@ impl OrbitApp {
                 self.mcp_stamp = ticket.mcp_stamp;
                 match ticket.then {
                     SpawnThen::Prompt => {
-                        // The message that started this process is already on
-                        // screen; hand it over now, and let its id drive the
+                        // Argv already selected the model, and this path does
+                        // not send `new_session`. `adopt_client` cleared the
+                        // pin. The message that started this process is already
+                        // on screen; hand it over now, and let its id drive the
                         // reply bookkeeping the way a live send does.
                         if let Some(pending) = self.pending_prompt.take() {
                             match self.send_tracked(pending.body, &pending.label) {
@@ -329,13 +360,22 @@ impl OrbitApp {
                                 None => self.unwind_pending_prompt(cx),
                             }
                         }
+                        // The process is up either way. Catalog refresh does
+                        // not fill the model chips or the session id, so ask
+                        // pi what it started on before those probes queue.
+                        self.send(CommandBody::GetState, "get_state");
                     }
                     SpawnThen::NewSession => {
                         // The session command goes out first: the catalog,
                         // auth, and quota probes queue behind it (see
-                        // [`Self::adopt_client`]).
+                        // [`Self::adopt_client`]). Pin only while that command
+                        // is actually queued, and only when the argv was a
+                        // composer choice — a failed send must not suppress
+                        // the next birth's default.
                         self.replacement_in_flight =
                             self.send_tracked(CommandBody::NewSession, "new_session");
+                        self.startup_model_pinned =
+                            self.replacement_in_flight.is_some() && ticket.pinned_model;
                         self.set_status(tr!("session.new_session"));
                     }
                 }
@@ -343,6 +383,7 @@ impl OrbitApp {
                 self.probe_auth();
             }
             Err(err) => {
+                self.startup_model_pinned = false;
                 // Nothing is adopted, so only what this ticket owed is undone:
                 // a waiting message goes back into the composer, and the banner
                 // explains why nothing sent. Tagged with the command the spawn
@@ -395,6 +436,8 @@ impl OrbitApp {
         // The commands went with the process they were sent to.
         self.replacement_in_flight = None;
         self.pending_switch = None;
+        self.startup_model_pinned = false;
+        self.default_model_armed = false;
         // Extension widgets belonged to the departing process.
         self.extension_widgets.clear();
         self.subagents = crate::subagent_status::SubagentBoard::default();
@@ -485,7 +528,9 @@ impl OrbitApp {
     /// (it is requested right after `get_state`); the `default_model_pushed`
     /// record keeps that from resending `set_model`.
     pub(super) fn apply_default_model(&mut self, cx: &mut Context<Self>) {
-        if !self.default_model_armed {
+        // A draft already chose its model: the process was started with that
+        // argv, and pushing the configured default here would replace it.
+        if self.startup_model_pinned || !self.default_model_armed {
             return;
         }
         let Some(session) = self.session_id.clone() else {
@@ -579,6 +624,17 @@ impl OrbitApp {
     pub(super) fn set_default_model(&mut self, slot: crate::session_defaults::SessionDefault) {
         self.session_default = slot;
         self.session_default.persist();
+        // Only a page with no session of its own is showing this default.
+        // A stopped conversation, and a process that is still starting, keep
+        // the model they already have.
+        if self.transcript.is_empty() && self.current_session_path.is_none() {
+            self.paint_unsent_model();
+        }
+        if let Some((PickerKind::Thinking, _)) = &self.model_selector {
+            if !self.can_choose_thinking() {
+                self.model_selector = None;
+            }
+        }
     }
 
     /// Poll the active process for new quota-bridge session entries, at most
@@ -771,7 +827,27 @@ impl OrbitApp {
             .clone()
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
-        match self.extensions.spawn(&cwd, true, &self.mcp.secret_env()) {
+        // An unsent draft may already name its model. A promoted row is a
+        // real session: its file, not the pre-send choice, is what a restart
+        // must come back to.
+        let chosen = self
+            .draft_awaits_first_process()
+            .then(|| self.current_draft_model())
+            .flatten();
+        if chosen.is_some() {
+            self.default_model_armed = false;
+            self.startup_model_pinned = false;
+        }
+        let secret_env = self.mcp.secret_env();
+        let spawned = match &chosen {
+            Some(choice) => {
+                let args = choice.cli_args();
+                self.extensions
+                    .spawn_with_startup_args(&cwd, &args, &secret_env)
+            }
+            None => self.extensions.spawn(&cwd, true, &secret_env),
+        };
+        match spawned {
             Ok(client) => {
                 self.adopt_client(client);
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
@@ -1051,6 +1127,18 @@ pub(super) struct SpawnTicket {
     cwd: PathBuf,
     mcp_stamp: u64,
     then: SpawnThen,
+    /// `--provider` / `--model` / `--thinking` the child is started with.
+    startup_args: Vec<String>,
+    /// `startup_args` came from the open draft, not the session default.
+    pinned_model: bool,
+}
+
+impl SpawnTicket {
+    /// The startup flags this child was given.
+    #[cfg(test)]
+    pub(super) fn startup_args(&self) -> &[String] {
+        &self.startup_args
+    }
 }
 
 /// What a spawned process is for, once it is up.

@@ -233,6 +233,10 @@ struct ParkedSession {
     /// The draft was empty when the user left. On rekey, drop the process
     /// and delete the header-only file instead of parking it for resume.
     discard: bool,
+    /// The process was started from a composer-chosen model and its
+    /// `new_session` has not answered yet. Restored on resume so that reply
+    /// does not push the configured default over the argv model.
+    startup_model_pinned: bool,
 }
 
 /// A new task the sidebar is showing. `path` is a placeholder until pi
@@ -250,6 +254,10 @@ struct ListedDraft {
     /// First user message, kept so the row still has a title after the
     /// transcript moves to a parked process.
     sent_title: Option<String>,
+    /// Model and thinking level chosen before a pi process exists. `None`
+    /// means the session default. It stays on the row when the reader leaves
+    /// and comes back, and it is what the first message's process starts on.
+    model: Option<crate::session_defaults::SessionDefault>,
 }
 
 /// Blocking input belongs to its session, not the window displaying it.
@@ -1093,6 +1101,10 @@ pub struct OrbitApp {
     /// so the catalog refreshes that follow a session birth don't resend the
     /// same `set_model`.
     default_model_pushed: DefaultModelPushed,
+    /// The process just spawned was given a composer-chosen model on its
+    /// argv. The session-birth default push must not replace that choice;
+    /// cleared once the birth has been told, or the view moves on.
+    startup_model_pinned: bool,
     /// Whether the composer's workflow-mode picker popover is open.
     workflow_menu_open: bool,
     /// Highlighted row in the workflow-mode picker.
@@ -2301,6 +2313,7 @@ impl OrbitApp {
             session_default: crate::session_defaults::SessionDefault::load(),
             default_model_armed: false,
             default_model_pushed: DefaultModelPushed::default(),
+            startup_model_pinned: false,
             workflow_menu_open: false,
             workflow_menu_highlight: 0,
             workflow_menu_focus: cx.focus_handle(),

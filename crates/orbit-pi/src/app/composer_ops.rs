@@ -195,6 +195,7 @@ impl OrbitApp {
             composer: Some(draft),
             promoted: false,
             sent_title: None,
+            model: None,
         });
         self.current_draft_id = Some(id);
     }
@@ -1195,6 +1196,17 @@ impl OrbitApp {
         // A manual choice supersedes the session-birth default push. The push
         // itself sends `SetModel` directly so it doesn't disarm itself.
         self.default_model_armed = false;
+        // A new task has no process yet. Remember the choice on the row and
+        // show it; the first message starts pi with these args.
+        if self.model_choice_is_local() {
+            self.stage_draft_model(id, provider, cx);
+            return;
+        }
+        // A process that has not taken a message yet can still be restarted
+        // from the row. Remember the choice there as well as telling pi.
+        if self.live_unsent_draft() {
+            self.stage_draft_model(id.clone(), provider.clone(), cx);
+        }
         self.send(
             CommandBody::SetModel {
                 model_id: id,
@@ -1208,11 +1220,204 @@ impl OrbitApp {
     pub(super) fn set_thinking_level(&mut self, level: String, cx: &mut Context<Self>) {
         // A manual level choice likewise supersedes the pending default.
         self.default_model_armed = false;
+        if self.model_choice_is_local() {
+            self.stage_draft_thinking(level, cx);
+            return;
+        }
+        if self.live_unsent_draft() {
+            self.stage_draft_thinking(level.clone(), cx);
+        }
         self.send(
             CommandBody::SetThinkingLevel { level },
             "set_thinking_level",
         );
         cx.notify();
+    }
+
+    /// The composer can change model and thinking before pi exists. Sending
+    /// would only report that nothing is running. A draft that already has a
+    /// user message is a real session, even while its process is still down.
+    fn model_choice_is_local(&self) -> bool {
+        self.client.is_none() && !self.spawn_pending() && self.draft_awaits_first_process()
+    }
+
+    /// The open row has not been sent yet, and a process is already up.
+    fn live_unsent_draft(&self) -> bool {
+        self.client.is_some() && self.draft_awaits_first_process()
+    }
+
+    /// The open view is a listed draft that has not been promoted and has no
+    /// user message. A sent draft that merely lost its process is not this.
+    pub(super) fn draft_awaits_first_process(&self) -> bool {
+        self.transcript.is_empty()
+            && self.current_draft_id.is_some_and(|id| {
+                self.listed_drafts
+                    .iter()
+                    .any(|draft| draft.id == id && !draft.promoted)
+            })
+    }
+
+    /// The model stored on the open draft, when it actually names one.
+    pub(super) fn current_draft_model(&self) -> Option<crate::session_defaults::SessionDefault> {
+        let id = self.current_draft_id?;
+        self.listed_drafts
+            .iter()
+            .find(|draft| draft.id == id)
+            .and_then(|draft| draft.model.clone())
+            .filter(|model| !model.is_unset())
+    }
+
+    /// Remember a model picked on a draft. A thinking level already chosen
+    /// (or the session default's) rides along when the new model supports it.
+    fn stage_draft_model(&mut self, id: String, provider: String, cx: &mut Context<Self>) {
+        if id.is_empty() {
+            return;
+        }
+        let provider = (!provider.is_empty()).then_some(provider);
+        let supported = self
+            .available_models
+            .iter()
+            .find(|model| {
+                model.id == id && provider.as_deref().is_none_or(|name| model.provider == name)
+            })
+            .map(|model| model.thinking_levels.clone());
+        let thinking = self
+            .current_draft_model()
+            .unwrap_or_else(|| self.session_default.clone())
+            .thinking
+            .filter(|level| {
+                !level.is_empty()
+                    && supported.as_ref().is_none_or(|levels| {
+                        levels.is_empty()
+                            || (levels.len() > 1
+                                && levels.iter().any(|candidate| candidate == level))
+                    })
+            });
+        self.store_draft_model(
+            crate::session_defaults::SessionDefault {
+                provider,
+                model_id: Some(id),
+                thinking,
+            },
+            cx,
+        );
+    }
+
+    /// Remember a thinking level picked on a draft. The model is the one
+    /// already chosen, or the session default the chip is showing. A level
+    /// with no model, or one the catalog entry does not offer, is not stored:
+    /// it would keep an empty row and start pi with no `--model`.
+    fn stage_draft_thinking(&mut self, level: String, cx: &mut Context<Self>) {
+        let mut choice = self
+            .current_draft_model()
+            .unwrap_or_else(|| self.session_default.clone());
+        if choice.model_id.as_deref().is_none_or(str::is_empty) {
+            if self.model_id.is_empty() {
+                return;
+            }
+            choice.model_id = Some(self.model_id.clone());
+            if !self.model_provider.is_empty() {
+                choice.provider = Some(self.model_provider.clone());
+            }
+        }
+        if !self.thinking_level_fits(&choice, &level) {
+            return;
+        }
+        choice.thinking = Some(level);
+        self.store_draft_model(choice, cx);
+    }
+
+    /// Whether `level` can ride on `choice`. An unknown catalog entry is
+    /// allowed and left for pi to clamp. A known entry with no real choice,
+    /// or a level it does not list, is refused.
+    fn thinking_level_fits(
+        &self,
+        choice: &crate::session_defaults::SessionDefault,
+        level: &str,
+    ) -> bool {
+        if level.is_empty() {
+            return false;
+        }
+        let Some(id) = choice.model_id.as_deref().filter(|id| !id.is_empty()) else {
+            return false;
+        };
+        let provider = choice
+            .provider
+            .as_deref()
+            .filter(|provider| !provider.is_empty());
+        let Some(entry) = self.available_models.iter().find(|model| {
+            model.id == id && provider.is_none_or(|provider| model.provider == provider)
+        }) else {
+            return true;
+        };
+        entry.thinking_levels.len() > 1
+            && entry.thinking_levels.iter().any(|candidate| candidate == level)
+    }
+
+    /// Write the choice onto the open row and onto the chips.
+    fn store_draft_model(
+        &mut self,
+        choice: crate::session_defaults::SessionDefault,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_model_choice_to_chips(&choice);
+        if let Some(id) = self.current_draft_id {
+            if let Some(draft) = self.listed_drafts.iter_mut().find(|draft| draft.id == id) {
+                draft.model = Some(choice);
+            }
+        }
+        self.sync_model_selector(cx);
+        cx.notify();
+    }
+
+    /// Show the model a draft will start on. With no explicit choice that is
+    /// the session default, so the chip matches the process the first message
+    /// will launch. A live process is the authority and is left alone.
+    pub(super) fn paint_unsent_model(&mut self) {
+        if self.client.is_some() || self.spawn_pending() {
+            return;
+        }
+        let choice = self
+            .current_draft_model()
+            .unwrap_or_else(|| self.session_default.clone());
+        self.apply_model_choice_to_chips(&choice);
+    }
+
+    /// Point the composer chips at `choice`. An unset model clears them, so a
+    /// new task does not keep advertising the session that was just left.
+    fn apply_model_choice_to_chips(&mut self, choice: &crate::session_defaults::SessionDefault) {
+        let Some(id) = choice.model_id.as_deref().filter(|id| !id.is_empty()) else {
+            self.model_id.clear();
+            self.model_provider.clear();
+            self.model_label = "…".into();
+            self.thinking_label = "…".into();
+            self.available_thinking_levels.clear();
+            return;
+        };
+        let provider = choice
+            .provider
+            .as_deref()
+            .filter(|provider| !provider.is_empty());
+        let entry = self.available_models.iter().find(|model| {
+            model.id == id && provider.is_none_or(|provider| model.provider == provider)
+        });
+        let levels = entry
+            .map(|model| model.thinking_levels.clone())
+            .unwrap_or_default();
+        self.model_provider = entry
+            .map(|model| model.provider.clone())
+            .or_else(|| choice.provider.clone())
+            .unwrap_or_default();
+        self.model_label = entry
+            .map(|model| model.name.clone())
+            .unwrap_or_else(|| id.to_string());
+        self.model_id = id.to_string();
+        self.thinking_label = choice
+            .thinking
+            .clone()
+            .filter(|level| levels.is_empty() || levels.iter().any(|candidate| candidate == level))
+            .unwrap_or_else(|| "…".into());
+        self.available_thinking_levels = levels;
     }
 
     // ── access mode (the guard extension's policy) ──────────────────────

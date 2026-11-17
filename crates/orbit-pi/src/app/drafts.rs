@@ -2,8 +2,9 @@
 //!
 //! Clicking New inserts a row immediately and starts nothing; the first user
 //! message is what starts a pi process. Leaving the row drops it when the
-//! composer is still empty, and keeps it when the composer has text or an
-//! attachment. The first user message promotes the row into an ordinary
+//! composer is still empty and no model was chosen, and keeps it when the
+//! composer has text or an attachment, or the reader picked a model before
+//! pi exists. The first user message promotes the row into an ordinary
 //! session. The fate rule is pure so it can be tested without a pi process;
 //! the one impure helper here is the diagnostic switch below.
 
@@ -20,12 +21,17 @@ pub(crate) enum DraftFate {
     Promote,
 }
 
-/// Settle a listed draft from the two facts that matter at leave time:
-/// whether a user message exists, and whether the saved composer is empty.
-pub(crate) fn settle_listed_draft(has_user_message: bool, composer_empty: bool) -> DraftFate {
+/// Settle a listed draft from the facts that matter at leave time: whether a
+/// user message exists, whether the saved composer is empty, and whether the
+/// reader already chose a model for the process that does not exist yet.
+pub(crate) fn settle_listed_draft(
+    has_user_message: bool,
+    composer_empty: bool,
+    has_model_choice: bool,
+) -> DraftFate {
     if has_user_message {
         DraftFate::Promote
-    } else if composer_empty {
+    } else if composer_empty && !has_model_choice {
         DraftFate::Discard
     } else {
         DraftFate::Keep
@@ -40,8 +46,14 @@ pub(crate) fn reuse_blank_draft(
     promoted: bool,
     has_user_message: bool,
     composer_empty: bool,
+    has_model_choice: bool,
 ) -> bool {
-    same_workspace && is_current_draft && !promoted && !has_user_message && composer_empty
+    same_workspace
+        && is_current_draft
+        && !promoted
+        && !has_user_message
+        && composer_empty
+        && !has_model_choice
 }
 
 /// Whether to trace when a New Task row is removed or clipped from the
@@ -64,26 +76,32 @@ mod tests {
 
     #[test]
     fn an_empty_draft_is_discarded() {
-        assert_eq!(settle_listed_draft(false, true), DraftFate::Discard);
+        assert_eq!(settle_listed_draft(false, true, false), DraftFate::Discard);
     }
 
     #[test]
     fn a_draft_with_composer_content_is_kept() {
-        assert_eq!(settle_listed_draft(false, false), DraftFate::Keep);
+        assert_eq!(settle_listed_draft(false, false, false), DraftFate::Keep);
+    }
+
+    #[test]
+    fn a_model_choice_keeps_an_otherwise_empty_draft() {
+        assert_eq!(settle_listed_draft(false, true, true), DraftFate::Keep);
     }
 
     #[test]
     fn a_sent_message_promotes_even_when_the_composer_is_empty() {
-        assert_eq!(settle_listed_draft(true, true), DraftFate::Promote);
-        assert_eq!(settle_listed_draft(true, false), DraftFate::Promote);
+        assert_eq!(settle_listed_draft(true, true, false), DraftFate::Promote);
+        assert_eq!(settle_listed_draft(true, false, true), DraftFate::Promote);
     }
 
     #[test]
     fn only_the_same_workspace_blank_draft_is_reused() {
-        assert!(reuse_blank_draft(true, true, false, false, true));
-        assert!(!reuse_blank_draft(false, true, false, false, true));
-        assert!(!reuse_blank_draft(true, true, false, false, false));
-        assert!(!reuse_blank_draft(true, true, true, false, true));
-        assert!(!reuse_blank_draft(true, false, false, false, true));
+        assert!(reuse_blank_draft(true, true, false, false, true, false));
+        assert!(!reuse_blank_draft(false, true, false, false, true, false));
+        assert!(!reuse_blank_draft(true, true, false, false, false, false));
+        assert!(!reuse_blank_draft(true, true, true, false, true, false));
+        assert!(!reuse_blank_draft(true, false, false, false, true, false));
+        assert!(!reuse_blank_draft(true, true, false, false, true, true));
     }
 }

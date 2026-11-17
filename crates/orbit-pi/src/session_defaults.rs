@@ -41,7 +41,7 @@ pub(crate) struct SessionDefault {
 impl SessionDefault {
     /// Whether no default is configured.
     pub fn is_unset(&self) -> bool {
-        self.model_id.is_none()
+        self.model_id.as_deref().is_none_or(str::is_empty)
     }
 
     /// The extra `pi` CLI args this default implies at process spawn — empty
@@ -175,6 +175,12 @@ mod tests {
     fn empty_slot_emits_no_args() {
         assert!(SessionDefault::default().cli_args().is_empty());
         assert!(SessionDefault::default().is_unset());
+        let blank = SessionDefault {
+            model_id: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(blank.is_unset());
+        assert!(blank.cli_args().is_empty());
     }
 
     #[test]

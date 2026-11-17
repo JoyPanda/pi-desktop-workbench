@@ -439,3 +439,310 @@ fn a_second_message_while_starting_stays_in_the_composer(cx: &mut gpui::TestAppC
         });
     });
 }
+
+fn catalog_model(id: &str, name: &str, provider: &str) -> ModelEntry {
+    ModelEntry {
+        id: id.into(),
+        name: name.into(),
+        provider: provider.into(),
+        context_window: None,
+        thinking_levels: vec!["off".into(), "low".into(), "high".into()],
+    }
+}
+
+fn no_pi_not_running_toast(app: &OrbitApp) -> bool {
+    app.toasts
+        .items()
+        .iter()
+        .all(|toast| toast.title != tr!("runtime.pi_not_running"))
+}
+
+/// Picking a model on a new task does not need a process. The choice stays on
+/// the row when the reader leaves and comes back, and the first message
+/// starts pi on that model rather than the configured default.
+#[gpui::test]
+fn a_model_chosen_before_pi_starts_is_kept_and_used(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("draft-model");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_default = crate::session_defaults::SessionDefault {
+                provider: Some("openai".into()),
+                model_id: Some("gpt-default".into()),
+                thinking: Some("low".into()),
+            };
+            app.available_models = vec![
+                catalog_model("gpt-default", "GPT Default", "openai"),
+                catalog_model("claude-chosen", "Chosen", "anthropic"),
+            ];
+            app.model_id = "stale-from-the-last-session".into();
+            app.model_label = "Stale".into();
+            app.model_provider = "other".into();
+
+            app.on_new_session(&crate::NewSession, window, cx);
+
+            assert_eq!(app.model_id, "gpt-default");
+            assert_eq!(app.model_label, "GPT Default");
+            assert_eq!(app.thinking_label, "low");
+            assert!(app.client.is_none());
+
+            app.open_picker(crate::model_selector::PickerKind::Model, window, cx);
+            assert!(
+                no_pi_not_running_toast(app),
+                "opening the picker must not ask a process that does not exist"
+            );
+            app.close_model_selector(window, cx);
+
+            app.set_model("claude-chosen".into(), "anthropic".into(), cx);
+            app.set_thinking_level("high".into(), cx);
+            assert_eq!(app.model_id, "claude-chosen");
+            assert_eq!(app.model_provider, "anthropic");
+            assert_eq!(app.model_label, "Chosen");
+            assert_eq!(app.thinking_label, "high");
+            assert!(no_pi_not_running_toast(app));
+            let draft_id = app.current_draft_id.expect("the new task row");
+            assert_eq!(
+                app.listed_drafts[0]
+                    .model
+                    .as_ref()
+                    .and_then(|model| model.model_id.as_deref()),
+                Some("claude-chosen")
+            );
+
+            // Leave for another workspace's task and come back. The row is
+            // kept even with an empty composer, and the chips show the choice.
+            let other = std::env::temp_dir().join(format!(
+                "orbit-draft-model-other-{}",
+                std::process::id()
+            ));
+            app.on_new_session_in_workspace(other, window, cx);
+            assert_eq!(app.listed_drafts.len(), 2, "the choice keeps the row");
+            assert_eq!(app.model_id, "gpt-default", "the other task shows the default");
+            let pos = app
+                .listed_drafts
+                .iter()
+                .position(|draft| draft.id == draft_id)
+                .expect("the first row is still listed");
+            let info = app.session_info_from_draft(&app.listed_drafts[pos]);
+            app.switch_to_session(info, false, cx);
+            assert_eq!(app.current_draft_id, Some(draft_id));
+            assert_eq!(app.model_id, "claude-chosen");
+            assert_eq!(app.model_label, "Chosen");
+            assert_eq!(app.thinking_label, "high");
+            assert!(app.client.is_none(), "coming back still starts nothing");
+
+            app.input
+                .update(cx, |input, cx| input.set_text("use the chosen model", cx));
+            let handle = app.input.read(cx).focus_handle(cx);
+            window.focus(&handle);
+            app.on_submit(&crate::Submit, window, cx);
+
+            let ticket = app.pending_spawn.clone().expect("the send started pi");
+            let expected = crate::session_defaults::SessionDefault {
+                provider: Some("anthropic".into()),
+                model_id: Some("claude-chosen".into()),
+                thinking: Some("high".into()),
+            };
+            assert_eq!(ticket.startup_args(), expected.cli_args());
+            assert!(
+                !app.startup_model_pinned,
+                "a spawn that has not landed must not pin the next session"
+            );
+        });
+    });
+
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        app.update(cx, |app, _cx| {
+            assert!(!app.startup_model_pinned);
+            assert!(!app.default_model_armed);
+            app.drop_client();
+        });
+    });
+}
+
+/// With no composer choice, the first message still starts on the default.
+#[gpui::test]
+fn the_first_send_uses_the_default_model_when_none_was_chosen(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("default-model");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_default = crate::session_defaults::SessionDefault {
+                provider: Some("openai".into()),
+                model_id: Some("gpt-default".into()),
+                thinking: Some("low".into()),
+            };
+            app.on_new_session(&crate::NewSession, window, cx);
+            app.input
+                .update(cx, |input, cx| input.set_text("plain", cx));
+            let handle = app.input.read(cx).focus_handle(cx);
+            window.focus(&handle);
+            app.on_submit(&crate::Submit, window, cx);
+
+            let ticket = app.pending_spawn.clone().expect("a ticket");
+            assert_eq!(ticket.startup_args(), app.session_default.cli_args());
+            assert!(!app.startup_model_pinned);
+        });
+    });
+
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        app.update(cx, |app, _cx| {
+            app.drop_client();
+        });
+    });
+}
+
+/// Stopping a process that is still starting drops any pin, so the next
+/// session is allowed to apply its default.
+#[gpui::test]
+fn stopping_a_starting_process_clears_a_model_pin(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("stop-pin");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_default = crate::session_defaults::SessionDefault {
+                provider: Some("openai".into()),
+                model_id: Some("gpt-default".into()),
+                thinking: Some("low".into()),
+            };
+            app.available_models = vec![catalog_model("gpt-default", "GPT Default", "openai")];
+            app.on_new_session(&crate::NewSession, window, cx);
+            app.set_model("gpt-default".into(), "openai".into(), cx);
+            app.input
+                .update(cx, |input, cx| input.set_text("hold", cx));
+            let handle = app.input.read(cx).focus_handle(cx);
+            window.focus(&handle);
+            app.on_submit(&crate::Submit, window, cx);
+            assert!(app.spawn_pending());
+            app.startup_model_pinned = true;
+            app.runtime_stop(cx);
+            assert!(!app.spawn_pending());
+            assert!(
+                !app.startup_model_pinned,
+                "cancelling the spawn must not leave the next session pinned"
+            );
+        });
+    });
+}
+
+/// A thinking level with no model is not a draft. New in the same folder
+/// reuses the row.
+#[gpui::test]
+fn thinking_without_a_model_does_not_keep_the_draft(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("thinking-only");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_default = crate::session_defaults::SessionDefault::default();
+            app.on_new_session(&crate::NewSession, window, cx);
+            app.set_thinking_level("high".into(), cx);
+            let id = app.current_draft_id.expect("the blank row");
+            assert!(
+                app.listed_drafts
+                    .iter()
+                    .find(|draft| draft.id == id)
+                    .and_then(|draft| draft.model.as_ref())
+                    .is_none_or(|model| model.is_unset()),
+                "thinking alone must not be stored"
+            );
+            app.on_new_session(&crate::NewSession, window, cx);
+            assert_eq!(app.listed_drafts.len(), 1, "the blank row is reused");
+            assert_eq!(app.current_draft_id, Some(id));
+        });
+    });
+}
+
+/// A model that does not offer the current thinking level drops it, and a
+/// level the catalog rejects is not written onto the row.
+#[gpui::test]
+fn a_model_switch_drops_thinking_the_model_does_not_offer(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("thinking-fit");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_default = crate::session_defaults::SessionDefault {
+                provider: Some("openai".into()),
+                model_id: Some("gpt-default".into()),
+                thinking: Some("high".into()),
+            };
+            let mut limited = catalog_model("limited", "Limited", "anthropic");
+            limited.thinking_levels = vec!["off".into(), "low".into()];
+            app.available_models = vec![
+                catalog_model("gpt-default", "GPT Default", "openai"),
+                limited,
+            ];
+            app.on_new_session(&crate::NewSession, window, cx);
+            assert_eq!(app.thinking_label, "high");
+
+            app.set_model("limited".into(), "anthropic".into(), cx);
+            assert_eq!(app.model_id, "limited");
+            assert_eq!(app.thinking_label, "…");
+            let stored = app.current_draft_model().expect("the chosen model");
+            assert!(stored.thinking.is_none());
+
+            app.set_thinking_level("high".into(), cx);
+            assert!(app.current_draft_model().unwrap().thinking.is_none());
+            app.set_thinking_level("low".into(), cx);
+            assert_eq!(
+                app.current_draft_model().unwrap().thinking.as_deref(),
+                Some("low")
+            );
+        });
+    });
+}
+
+/// New in the same folder keeps a row that already has a model and opens a
+/// fresh draft beside it.
+#[gpui::test]
+fn a_model_choice_is_not_reused_as_a_blank_draft(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("reuse-model");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_default = crate::session_defaults::SessionDefault {
+                provider: Some("openai".into()),
+                model_id: Some("gpt-default".into()),
+                thinking: Some("low".into()),
+            };
+            app.available_models = vec![
+                catalog_model("gpt-default", "GPT Default", "openai"),
+                catalog_model("claude-chosen", "Chosen", "anthropic"),
+            ];
+            app.on_new_session(&crate::NewSession, window, cx);
+            app.set_model("claude-chosen".into(), "anthropic".into(), cx);
+            let first = app.current_draft_id.expect("the chosen row");
+            app.on_new_session(&crate::NewSession, window, cx);
+            assert_eq!(app.listed_drafts.len(), 2);
+            assert_ne!(app.current_draft_id, Some(first));
+            assert_eq!(app.model_id, "gpt-default");
+            assert_eq!(
+                app.listed_drafts
+                    .iter()
+                    .find(|draft| draft.id == first)
+                    .and_then(|draft| draft.model.as_ref())
+                    .and_then(|model| model.model_id.as_deref()),
+                Some("claude-chosen")
+            );
+        });
+    });
+}

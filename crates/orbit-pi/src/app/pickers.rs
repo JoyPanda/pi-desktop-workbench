@@ -156,12 +156,22 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Model and thinking are locked while a run is in flight.
-        if self.is_running() {
+        // Model and thinking are locked while a run is in flight, and while
+        // a process is still starting: there is nothing to send the choice to.
+        if self.is_running() || self.spawn_pending() {
             return;
         }
-        self.refresh_catalogs();
-        self.send(CommandBody::GetState, "get_state");
+        // A model with a single level (or none yet) has nothing to pick.
+        if kind == PickerKind::Thinking && !self.can_choose_thinking() {
+            return;
+        }
+        // A draft has no process to ask. Refreshing would only toast that pi
+        // is not running; the catalog already loaded is what the picker shows,
+        // and the choice is stored on the row until the first message.
+        if self.client.is_some() {
+            self.refresh_catalogs();
+            self.send(CommandBody::GetState, "get_state");
+        }
         // Mutually exclusive with the composer's add menu and the new-task
         // page's workspace picker.
         self.add_menu_open = false;
@@ -269,6 +279,7 @@ impl OrbitApp {
         // Model and thinking choices are fixed for the duration of a turn, so
         // the palette hides those two commands while a run is in flight.
         let running = self.is_running();
+        let model_locked = running || self.spawn_pending();
         let snapshot = PaletteSnapshot {
             sessions: self.sidebar_sessions(),
             active_path: self.sidebar_active_path(),
@@ -284,8 +295,8 @@ impl OrbitApp {
             terminal_visible: self.terminal_panel.read(cx).is_open(),
             terminal_tabs: self.terminal_panel.read(cx).tab_count(),
             project_panel_visible: self.files_docked(cx),
-            can_choose_model: !self.available_models.is_empty() && !running,
-            can_choose_thinking: self.can_choose_thinking() && !running,
+            can_choose_model: !self.available_models.is_empty() && !model_locked,
+            can_choose_thinking: self.can_choose_thinking() && !model_locked,
             mcp_servers: self
                 .mcp
                 .servers()

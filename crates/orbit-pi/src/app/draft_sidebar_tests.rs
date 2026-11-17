@@ -38,6 +38,7 @@ fn blank_draft(id: u64, cwd: &Path) -> ListedDraft {
         composer: None,
         promoted: false,
         sent_title: None,
+        model: None,
     }
 }
 
@@ -295,6 +296,7 @@ fn a_sent_draft_drops_out_when_its_file_is_in_the_scan(cx: &mut gpui::TestAppCon
                 }),
                 promoted: true,
                 sent_title: Some("sent".into()),
+                model: None,
             });
             let other = cwd.join("still-a-draft.jsonl");
             app.sessions
@@ -308,6 +310,7 @@ fn a_sent_draft_drops_out_when_its_file_is_in_the_scan(cx: &mut gpui::TestAppCon
                 composer: None,
                 promoted: false,
                 sent_title: None,
+                model: None,
             });
 
             app.release_promoted_drafts_on_disk();
@@ -467,6 +470,7 @@ fn a_warm_draft_resumes_without_switching_session(cx: &mut gpui::TestAppContext)
                 }),
                 promoted: false,
                 sent_title: None,
+                model: None,
             });
             app.current_draft_id = None;
             let info = app.session_info_from_draft(&app.listed_drafts[0]);

@@ -544,6 +544,9 @@ impl OrbitApp {
     /// leaving it active would let the incoming `adopt_client` overwrite — and
     /// kill — a live run on the next switch (issue #46).
     pub(super) fn park_active_session(&mut self) {
+        // Take the pin before invalidating: that call clears it, and the
+        // parked process may still be waiting on `new_session`.
+        let startup_model_pinned = std::mem::take(&mut self.startup_model_pinned);
         // The parked process is the view's, so the view's pending spawn is
         // moot: a client that arrives after this would be adopted onto a page
         // that has already moved on.
@@ -602,6 +605,7 @@ impl OrbitApp {
             turns: std::mem::take(&mut self.turns),
             draft: self.parking_draft.take(),
             discard: std::mem::take(&mut self.parking_discard),
+            startup_model_pinned,
         };
         match self.current_session_path.take() {
             Some(path) => self.park(path, parked),
@@ -997,6 +1001,7 @@ impl OrbitApp {
             self.close_files(cx);
         }
         self.sidepane.update(cx, |pane, cx| pane.close(cx));
+        self.model_selector = None;
         self.project_panel.update(cx, |panel, cx| panel.close(cx));
         self.terminal_panel.update(cx, |panel, cx| panel.close(cx));
         self.sync_terminal_active(cx);
@@ -1385,6 +1390,7 @@ impl OrbitApp {
             draft.promoted,
             self.transcript.first_user_message().is_some(),
             self.composer_is_blank(cx),
+            draft.model.as_ref().is_some_and(|model| !model.is_unset()),
         )
     }
 
@@ -1409,6 +1415,12 @@ impl OrbitApp {
         self.reset_queue();
         self.workflow_pending = None;
         self.workflow_mode = WorkflowMode::default();
+        // This view's process, when it arrives, is born from argv. A default
+        // push armed for the session just left must not follow it.
+        self.default_model_armed = false;
+        self.startup_model_pinned = false;
+        self.model_selector = None;
+        self.paint_unsent_model();
     }
 
     /// Forget who the open task was: pi's title, an explicit rename, the
@@ -1444,9 +1456,11 @@ impl OrbitApp {
             composer: None,
             promoted: false,
             sent_title: None,
+            model: None,
         });
         self.current_draft_id = Some(id);
         self.current_session_path = None;
+        self.paint_unsent_model();
         self.apply_composer(None, cx);
         self.input.read(cx).focus(window);
         cx.notify();
@@ -1469,6 +1483,10 @@ impl OrbitApp {
             self.invalidate_pending_spawn();
             self.unwind_pending_prompt(cx);
         }
+        // A birth push armed for this view must not follow the next one.
+        // The pin stays until the process is parked or dropped: a parked
+        // `new_session` still has to suppress the default when it answers.
+        self.default_model_armed = false;
         let composer = self.take_composer(cx);
         let has_user = self.transcript.first_user_message().is_some();
         if let Some(id) = self.current_draft_id.take() {
@@ -1482,7 +1500,13 @@ impl OrbitApp {
                         .then(|| draft.path.clone())
                         .filter(|path| !is_draft_placeholder(path))
                 });
-            let fate = crate::app::drafts::settle_listed_draft(has_user, composer.is_none());
+            let has_model = self
+                .listed_drafts
+                .iter()
+                .find(|draft| draft.id == id)
+                .is_some_and(|draft| draft.model.as_ref().is_some_and(|model| !model.is_unset()));
+            let fate =
+                crate::app::drafts::settle_listed_draft(has_user, composer.is_none(), has_model);
             match fate {
                 crate::app::drafts::DraftFate::Discard => {
                     if crate::app::drafts::trace_enabled() {
@@ -1553,6 +1577,7 @@ impl OrbitApp {
                     composer,
                     promoted: false,
                     sent_title: None,
+                    model: None,
                 });
                 return Outgoing::Kept { id, path };
             }
@@ -1728,6 +1753,7 @@ impl OrbitApp {
         if self.current_draft_id == Some(id) {
             return;
         }
+        self.model_selector = None;
         let Some(draft) = self.listed_drafts.iter().find(|draft| draft.id == id) else {
             return;
         };
@@ -1789,6 +1815,11 @@ impl OrbitApp {
             .find(|draft| draft.id == id)
             .map(|draft| draft.cwd.clone())
             .unwrap_or_else(|| self.task_cwd());
+        // Paint while there is still no client: once the parked process is
+        // adopted, the chips belong to it and `paint_unsent_model` no-ops.
+        let startup_model_pinned = parked.startup_model_pinned;
+        self.current_draft_id = Some(id);
+        self.paint_unsent_model();
         let title = self
             .listed_drafts
             .iter()
@@ -1832,8 +1863,16 @@ impl OrbitApp {
         self.session_id = None;
         self.context = None;
         self.session_usage = None;
-        self.current_draft_id = Some(id);
         self.current_session_path = session_path;
+        // `adopt_client` cleared this. Put back a pin whose `new_session`
+        // is still unanswered, so that reply does not push the default.
+        self.startup_model_pinned = startup_model_pinned;
+        // The parked process is the authority for model, thinking, and the
+        // session id. `get_state` does not restore the thinking ladder, which
+        // the paint above may have cleared.
+        self.send(CommandBody::GetState, "get_state");
+        self.refresh_catalogs();
+        self.refresh_context_stats();
         self.add_workspace(cwd.clone(), cx);
         self.set_current_workspace(cwd, cx);
         self.restore_draft_composer(id, cx);
@@ -1848,6 +1887,8 @@ impl OrbitApp {
         self.current_draft_id = Some(id);
         // Showing a draft does not start pi: the row is the user's unsent
         // work, and the process is born with the message that sends it.
+        // The model chosen on this row comes back with it.
+        self.paint_unsent_model();
         self.show_draft_page(&cwd, cx);
         self.restore_draft_composer(id, cx);
         cx.notify();
@@ -1864,6 +1905,7 @@ impl OrbitApp {
     /// settle the outgoing task — the caller did that.
     fn boot_draft_process(&mut self, cwd: &Path, cx: &mut Context<Self>) {
         self.show_draft_page(cwd, cx);
+        self.paint_unsent_model();
         self.spawn_pi_client_later(cwd.to_path_buf(), SpawnThen::NewSession, cx);
     }
 
@@ -2187,6 +2229,7 @@ impl OrbitApp {
         if self.current_session_path.as_ref() == Some(&session.path) && self.client.is_some() {
             return;
         }
+        self.model_selector = None;
         if let Some(id) = session.draft {
             self.open_listed_draft(id, cx);
             return;
@@ -2252,7 +2295,9 @@ impl OrbitApp {
             // Resume a background run. The parked transcript is already up
             // to date (its events drain every tick); anything buffered in
             // the process channel streams in from the next tick on.
+            let startup_model_pinned = parked.startup_model_pinned;
             self.adopt_client(parked.client);
+            self.startup_model_pinned = startup_model_pinned;
             self.transcript = parked.transcript;
             self.turns = parked.turns;
             self.push_turn_records(cx);
@@ -2302,6 +2347,7 @@ impl OrbitApp {
             // restores the pending bar from the drained mirror instead.
             self.queue = parked.queue;
             self.send(CommandBody::GetState, "get_state");
+            self.refresh_catalogs();
             self.refresh_context_stats();
             // A warm process already reported capabilities; a cheap refresh
             // keeps a long-parked session's auth/quota current.

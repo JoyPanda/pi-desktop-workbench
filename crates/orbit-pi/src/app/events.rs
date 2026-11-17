@@ -391,6 +391,10 @@ impl OrbitApp {
                     self.cancel_fork_followup();
                     self.replacement_in_flight = None;
                     self.pending_switch = None;
+                    // `new_session` will not answer. A pin or an armed default
+                    // for that birth must not follow the next process.
+                    self.startup_model_pinned = false;
+                    self.default_model_armed = false;
                     self.pending_session_rename = None;
                     self.session_rename_ready = false;
                     self.busy = false;
@@ -732,6 +736,7 @@ impl OrbitApp {
                     }
                 }
                 Event::ProcessExited => {
+                    parked.startup_model_pinned = false;
                     parked.busy = false;
                     parked.interaction = ParkedInteraction::default();
                     parked.retry_detail = None;
@@ -825,6 +830,11 @@ impl OrbitApp {
                         .map(PathBuf::from);
                     match command.as_str() {
                         "new_session" | "clone" | "fork" => {
+                            // The reply landed while parked, so resume must
+                            // not treat it as still in flight.
+                            if command == "new_session" {
+                                parked.startup_model_pinned = false;
+                            }
                             // A clone or fork inherits the source transcript in
                             // the active view, which clears it on the reply; the
                             // parked one never saw that, so clear it here.
@@ -971,6 +981,9 @@ impl OrbitApp {
             // A failed replacement still ends the wait: pi refused it, so no
             // answer is coming and the gate must not outlive it.
             if matches!(command, "new_session" | "switch_session") {
+                if command == "new_session" {
+                    self.startup_model_pinned = false;
+                }
                 self.end_replacement(cx);
             }
             self.on_command_failure(command, error, cx);
@@ -1368,8 +1381,14 @@ impl OrbitApp {
                 *refresh_sessions = true;
                 // A fresh session is born on the default model; `set_model`
                 // is pushed once `get_state` reports the new id (see
-                // `apply_default_model`).
-                self.default_model_armed = true;
+                // `apply_default_model`). A process started from a draft
+                // that already chose a model keeps that argv instead.
+                if self.startup_model_pinned {
+                    self.startup_model_pinned = false;
+                    self.default_model_armed = false;
+                } else {
+                    self.default_model_armed = true;
+                }
                 self.send(CommandBody::GetState, "get_state");
                 self.refresh_catalogs();
             }

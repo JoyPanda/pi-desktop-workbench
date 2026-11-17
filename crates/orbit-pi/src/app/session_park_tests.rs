@@ -262,6 +262,7 @@ fn shortcut_switch_to_a_warm_session_keeps_the_running_process(cx: &mut gpui::Te
                     retry_detail: None,
                     draft: None,
                     discard: false,
+                    startup_model_pinned: false,
                 },
             );
 
@@ -354,6 +355,7 @@ exec cat >/dev/null
                     retry_detail: None,
                     draft: None,
                     discard: false,
+                    startup_model_pinned: false,
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -516,6 +518,7 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                     retry_detail: None,
                     draft: None,
                     discard: false,
+                    startup_model_pinned: false,
                 },
             );
 
@@ -603,6 +606,7 @@ fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext)
                     retry_detail: None,
                     draft: None,
                     discard: false,
+                    startup_model_pinned: false,
                 },
             );
 
@@ -689,6 +693,7 @@ exec cat >/dev/null
                     retry_detail: None,
                     draft: None,
                     discard: false,
+                    startup_model_pinned: false,
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
