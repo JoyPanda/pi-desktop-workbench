@@ -1281,11 +1281,11 @@ impl OrbitApp {
                 model.id == id && provider.as_deref().is_none_or(|name| model.provider == name)
             })
             .map(|model| model.thinking_levels.clone());
-        let thinking = self
+        let prior = self
             .current_draft_model()
-            .unwrap_or_else(|| self.session_default.clone())
-            .thinking
-            .filter(|level| {
+            .or_else(|| (!self.session_default.is_unset()).then(|| self.session_default.clone()))
+            .unwrap_or_else(|| self.reported_model.clone());
+        let thinking = prior.thinking.filter(|level| {
                 !level.is_empty()
                     && supported.as_ref().is_none_or(|levels| {
                         levels.is_empty()
@@ -1377,10 +1377,76 @@ impl OrbitApp {
         if self.client.is_some() || self.spawn_pending() {
             return;
         }
-        let choice = self
+        let mut choice = self
             .current_draft_model()
             .unwrap_or_else(|| self.session_default.clone());
+        // No draft choice and no configured default: keep the name pi last
+        // reported. Clearing it to "…" hides the model the first message
+        // will start on.
+        let from_report = choice.is_unset() && !self.reported_model.is_unset();
+        if from_report {
+            choice = self.reported_model.clone();
+        }
         self.apply_model_choice_to_chips(&choice);
+        if from_report && self.model_label == self.model_id && !self.reported_model_label.is_empty()
+        {
+            self.model_label = self.reported_model_label.clone();
+        }
+        if from_report
+            && self.available_thinking_levels.is_empty()
+            && !self.reported_thinking_levels.is_empty()
+        {
+            let level = choice.thinking.clone();
+            self.available_thinking_levels = self.reported_thinking_levels.clone();
+            self.thinking_label = level
+                .filter(|level| self.reported_thinking_levels.iter().any(|candidate| candidate == level))
+                .filter(|_| self.reported_thinking_levels.len() > 1)
+                .unwrap_or_else(|| "…".into());
+        }
+    }
+
+    /// Remember pi's startup model from a `get_state` body. Ignored unless
+    /// this process was started with no `--model` and has not switched since.
+    /// Fields come from the payload, not the chips: a reply that omits the
+    /// model must not record a name painted for a draft.
+    pub(super) fn remember_reported_model(&mut self, data: &serde_json::Value) {
+        if !self.startup_model_reportable {
+            return;
+        }
+        let Some(model) = data.get("model").filter(|model| model.is_object()) else {
+            return;
+        };
+        let Some(id) = model
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+        else {
+            return;
+        };
+        let name = model
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| !name.is_empty() && *name != "…")
+            .unwrap_or(id);
+        let thinking = data
+            .get("thinkingLevel")
+            .and_then(serde_json::Value::as_str)
+            .filter(|level| !level.is_empty() && *level != "…")
+            .map(str::to_string);
+        self.reported_model = crate::session_defaults::SessionDefault {
+            provider: model
+                .get("provider")
+                .and_then(serde_json::Value::as_str)
+                .filter(|provider| !provider.is_empty())
+                .map(str::to_string),
+            model_id: Some(id.to_string()),
+            thinking,
+        };
+        self.reported_model_label = name.to_string();
+        self.reported_thinking_levels = crate::app::catalog_thinking_levels(model);
+        if self.model_label.is_empty() || self.model_label == "…" {
+            self.model_label = name.to_string();
+        }
     }
 
     /// Point the composer chips at `choice`. An unset model clears them, so a

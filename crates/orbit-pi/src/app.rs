@@ -1091,6 +1091,20 @@ pub struct OrbitApp {
     /// The model new sessions start on, from
     /// `~/.orbit-pi/session-defaults.json`, loaded at launch.
     session_default: crate::session_defaults::SessionDefault,
+    /// pi's own startup model, learned from a process that was started with
+    /// no `--model` and has not since switched. A new task with no choice
+    /// and no session default shows this name: that is the model an empty
+    /// argv actually boots.
+    reported_model: crate::session_defaults::SessionDefault,
+    /// Display name that went with [`Self::reported_model`].
+    reported_model_label: String,
+    /// Thinking ladder that went with [`Self::reported_model`], used when the
+    /// catalog entry is not loaded yet.
+    reported_thinking_levels: Vec<String>,
+    /// The live process was started with no model flag and has not been
+    /// moved off that startup model. Only its `get_state` may update
+    /// [`Self::reported_model`].
+    startup_model_reportable: bool,
     /// Whether the active session should still be moved onto the default
     /// model. Armed by a `new_session` birth; disarmed once the default has
     /// been pushed (or there is none), by a manual model/thinking choice, or
@@ -1764,6 +1778,8 @@ impl OrbitApp {
             Ok(client) => (Some(client), String::new()),
             Err(err) => (None, tr!("runtime.pi_spawn_failed", error = err)),
         };
+        let startup_model_reportable = client.is_some()
+            && crate::session_defaults::SessionDefault::load().is_unset();
         let mcp_stamp = mcp.fingerprint();
         let runtime = RuntimeStatus {
             started_at: client.as_ref().map(|_| Instant::now()),
@@ -2311,6 +2327,10 @@ impl OrbitApp {
             workflow_mode: WorkflowMode::default(),
             workflow_pending: None,
             session_default: crate::session_defaults::SessionDefault::load(),
+            reported_model: crate::session_defaults::SessionDefault::default(),
+            reported_model_label: String::new(),
+            reported_thinking_levels: Vec::new(),
+            startup_model_reportable,
             default_model_armed: false,
             default_model_pushed: DefaultModelPushed::default(),
             startup_model_pinned: false,

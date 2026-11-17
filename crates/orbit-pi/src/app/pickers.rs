@@ -733,17 +733,35 @@ impl OrbitApp {
 
     /// Push the latest catalog/current-selection snapshot into the open
     /// popup (no-op while it is closed).
+    ///
+    /// Deferred: a model pick calls this from inside the popup's own update.
+    /// Updating that entity again before the callback returns panics and
+    /// takes the process down.
     pub(super) fn sync_model_selector(&mut self, cx: &mut Context<Self>) {
-        if let Some((_, selector)) = &self.model_selector {
-            let models = self.available_models.clone();
-            let levels = self.available_thinking_levels.clone();
-            let model = self.model_label.clone();
-            let model_id = self.model_id.clone();
-            let provider = self.model_provider.clone();
-            let level = self.thinking_label.clone();
-            selector.update(cx, |selector, cx| {
-                selector.set_catalog(models, levels, model, model_id, provider, level, cx)
-            });
-        }
+        let Some((_, selector)) = self.model_selector.clone() else {
+            return;
+        };
+        let this = cx.weak_entity();
+        cx.defer(move |app| {
+            this.update(app, |app, cx| {
+                if app
+                    .model_selector
+                    .as_ref()
+                    .is_none_or(|(_, open)| open != &selector)
+                {
+                    return;
+                }
+                let models = app.available_models.clone();
+                let levels = app.available_thinking_levels.clone();
+                let model = app.model_label.clone();
+                let model_id = app.model_id.clone();
+                let provider = app.model_provider.clone();
+                let level = app.thinking_label.clone();
+                selector.update(cx, |selector, cx| {
+                    selector.set_catalog(models, levels, model, model_id, provider, level, cx)
+                });
+            })
+            .ok();
+        });
     }
 }

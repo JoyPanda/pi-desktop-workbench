@@ -130,7 +130,23 @@ impl OrbitApp {
             return None;
         };
         match client.send(body) {
-            Ok((id, _)) => Some(id),
+            Ok((id, _)) => {
+                // A model or session change means later `get_state` answers
+                // describe this session, not the model an empty argv boots.
+                if matches!(
+                    label,
+                    "set_model"
+                        | "set_thinking_level"
+                        | "cycle_model"
+                        | "cycle_thinking_level"
+                        | "switch_session"
+                        | "fork"
+                        | "clone"
+                ) {
+                    self.startup_model_reportable = false;
+                }
+                Some(id)
+            }
             Err(err) => {
                 // Tagged with `label`: a later success on the same command
                 // clears this banner, so a transient write failure cannot
@@ -179,6 +195,9 @@ impl OrbitApp {
         // The birth push belongs to the process that armed it. This one has
         // not accepted `new_session` yet; a resumed process must not inherit it.
         self.default_model_armed = false;
+        // A resumed or replaced process is not pi's untouched startup model
+        // until the caller says this spawn carried no `--model`.
+        self.startup_model_reportable = false;
         // A new process starts a new session stream: entry ids from the old
         // process mean nothing here.
         self.reset_quota_entries();
@@ -337,6 +356,10 @@ impl OrbitApp {
             Ok(client) => {
                 self.adopt_client(client);
                 self.mcp_stamp = ticket.mcp_stamp;
+                // Empty argv is pi's own startup model. A `--model` flag, or
+                // a later switch, is this session only.
+                self.startup_model_reportable =
+                    !ticket.startup_args.iter().any(|arg| arg == "--model");
                 match ticket.then {
                     SpawnThen::Prompt => {
                         // Argv already selected the model, and this path does
@@ -438,6 +461,7 @@ impl OrbitApp {
         self.pending_switch = None;
         self.startup_model_pinned = false;
         self.default_model_armed = false;
+        self.startup_model_reportable = false;
         // Extension widgets belonged to the departing process.
         self.extension_widgets.clear();
         self.subagents = crate::subagent_status::SubagentBoard::default();
@@ -850,6 +874,8 @@ impl OrbitApp {
         match spawned {
             Ok(client) => {
                 self.adopt_client(client);
+                self.startup_model_reportable =
+                    chosen.is_none() && self.session_default.is_unset();
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
                 self.send(CommandBody::GetState, "get_state");
                 self.refresh_catalogs();

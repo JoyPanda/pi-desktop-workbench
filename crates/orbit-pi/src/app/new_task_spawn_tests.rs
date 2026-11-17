@@ -746,3 +746,50 @@ fn a_model_choice_is_not_reused_as_a_blank_draft(cx: &mut gpui::TestAppContext) 
         });
     });
 }
+
+/// With no session default, a new task keeps the model name pi last reported
+/// instead of replacing the chip with a placeholder.
+#[gpui::test]
+fn a_new_task_keeps_the_model_pi_last_reported(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("reported-model");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.session_default = crate::session_defaults::SessionDefault::default();
+            app.available_models = vec![catalog_model("claude-chosen", "Chosen", "anthropic")];
+            app.model_id = "stale".into();
+            app.model_label = "Stale".into();
+            app.remember_reported_model(&serde_json::json!({
+                "model": {
+                    "id": "claude-chosen",
+                    "name": "Chosen",
+                    "provider": "anthropic",
+                    "reasoning": true
+                },
+                "thinkingLevel": "low"
+            }));
+            assert_eq!(app.model_label, "Stale", "a switched session is not the startup model");
+
+            app.startup_model_reportable = true;
+            app.remember_reported_model(&serde_json::json!({
+                "model": {
+                    "id": "claude-chosen",
+                    "name": "Chosen",
+                    "provider": "anthropic",
+                    "reasoning": true
+                },
+                "thinkingLevel": "low"
+            }));
+
+            app.on_new_session(&crate::NewSession, window, cx);
+
+            assert_eq!(app.model_id, "claude-chosen");
+            assert_eq!(app.model_label, "Chosen");
+            assert_eq!(app.thinking_label, "low");
+            assert!(app.current_draft_model().is_none());
+        });
+    });
+}

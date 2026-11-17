@@ -1161,6 +1161,7 @@ impl OrbitApp {
                 {
                     self.thinking_label = level.to_string();
                 }
+                self.remember_reported_model(data);
                 if let Some(file) = data.get("sessionFile").and_then(Value::as_str) {
                     self.adopt_session_file(PathBuf::from(file));
                 }
