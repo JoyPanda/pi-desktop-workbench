@@ -5554,7 +5554,7 @@ impl GitPanel {
                     .gap(DynamicSpacing::Base08.px(&theme))
                     .child(
                         div()
-                            .text_size(TextSize::Large.px(&theme))
+                            .text_size(TextSize::Title.px(&theme))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .whitespace_normal()
@@ -5854,7 +5854,7 @@ impl GitPanel {
                     .gap(DynamicSpacing::Base12.px(&theme))
                     .child(
                         div()
-                            .text_size(TextSize::Large.px(&theme))
+                            .text_size(TextSize::Title.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_primary)
                             .child(tr!("git_panel.new_issue_title")),
@@ -6231,7 +6231,7 @@ impl GitPanel {
                         .gap(DynamicSpacing::Base06.px(&theme))
                         .child(
                             div()
-                                .text_size(TextSize::Large.px(&theme))
+                                .text_size(TextSize::Title.px(&theme))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_primary)
                                 .whitespace_normal()
@@ -6814,7 +6814,7 @@ impl GitPanel {
                     .gap(DynamicSpacing::Base12.px(&theme))
                     .child(
                         div()
-                            .text_size(TextSize::Large.px(&theme))
+                            .text_size(TextSize::Title.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_primary)
                             .child(tr!("git_panel.new_pull_title")),
@@ -9155,7 +9155,8 @@ fn is_github_handle(candidate: &str) -> bool {
 
 /// A tiny initials chip — the avatar fallback. The tint is a stable function
 /// of the author's email so the same person keeps their color across sessions;
-/// saturation stays low so identity doesn't read as confetti.
+/// saturation stays low so identity doesn't read as confetti. The 7px
+/// initials are chip-fit type, not a step on the reading scale.
 fn monogram_chip(name: &str, email: &str, theme: Theme) -> AnyElement {
     let (saturation, lightness) = match theme.mode {
         ThemeMode::Dark => (0.40, 0.34),

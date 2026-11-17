@@ -1840,7 +1840,7 @@ impl OrbitApp {
                     .pb(modal::header_padding_bottom(&theme))
                     .child(
                         div()
-                            .text_size(TextSize::Large.px(&theme))
+                            .text_size(TextSize::Title.px(&theme))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_primary)
                             .child(title),

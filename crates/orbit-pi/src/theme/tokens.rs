@@ -247,20 +247,23 @@ impl DynamicSpacing {
 
 // ── Typography (`ui/src/styles/typography.rs`, `theme/src/buffer_line_height.rs`)
 
-/// Semantic UI text sizes — Zed's `TextSize` (its `LabelSize` shares the
-/// scale).
+/// Semantic UI text sizes. The four reading steps are Cursor's
+/// `--cursor-font-size-*` tokens, authored at the 14px UI font setting.
+/// `Title` sits above that ramp for page and dialog headlines.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TextSize {
-    /// 14px — regular UI text.
+    /// 13px / 18px — `--cursor-font-size-base`, regular UI text.
     #[default]
     Default,
-    /// 16px.
+    /// 14px / 22px — `--cursor-font-size-lg`.
     Large,
-    /// 12px.
+    /// 16px / 22px — page and dialog titles.
+    Title,
+    /// 12px / 16px — `--cursor-font-size-sm`.
     Small,
-    /// 10px.
+    /// 11px / 14px — `--cursor-font-size-xs`.
     XSmall,
-    /// The UI font size setting itself (Orbit's default is 14px; Zed's, 16px).
+    /// The UI font size setting itself (Orbit's default is 14px).
     Ui,
     /// The Editor font size setting.
     Editor,
@@ -269,25 +272,33 @@ pub enum TextSize {
 impl TextSize {
     pub fn px(self, theme: &Theme) -> Pixels {
         match self {
-            Self::Large => theme.ui_px(16.),
-            Self::Default => theme.ui_px(14.),
+            Self::Title => theme.ui_px(16.),
+            Self::Large => theme.ui_px(14.),
+            Self::Default => theme.ui_px(13.),
             Self::Small => theme.ui_px(12.),
-            Self::XSmall => {
-                if theme.chrome == Chrome::Flat {
-                    theme.ui_px(11.)
-                } else {
-                    theme.ui_px(10.)
-                }
-            }
+            Self::XSmall => theme.ui_px(11.),
             Self::Ui => px(theme.ui.ui_font_size),
             Self::Editor => px(theme.ui.editor_font_size),
+        }
+    }
+
+    /// The line height that belongs to this step.
+    pub fn line_height(self, theme: &Theme) -> Pixels {
+        match self {
+            Self::Title | Self::Large => theme.ui_px(22.),
+            Self::Default => theme.ui_px(18.),
+            Self::Small => theme.ui_px(16.),
+            Self::XSmall => theme.ui_px(14.),
+            // lg line (22) against the 14px UI setting, and the code line
+            // (20) against the 13px editor setting.
+            Self::Ui => px(theme.ui.ui_font_size * (22. / 14.)),
+            Self::Editor => px(theme.ui.editor_font_size * (20. / 13.)),
         }
     }
 }
 
 /// Headline sizes on a Major Second scale — Zed's `HeadlineSize`.
-/// Reserved by the modal metrics ([`modal::HEADLINE`]); no surface paints a
-/// page headline through it yet.
+/// Dialog titles paint [`TextSize::Title`] through [`modal::HEADLINE`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HeadlineSize {
     /// ~14px.
@@ -660,7 +671,7 @@ pub mod picker {
     pub const SECONDARY_TEXT: TextSize = TextSize::Small;
 
     /// A one-line row: one Comfortable line of Default text plus `Sparse`
-    /// padding — 31px at the default size.
+    /// padding — 29px at the default size.
     pub fn entry_height(theme: &Theme) -> Pixels {
         ROW_SPACING.row_height(BufferLineHeight::Comfortable.resolve(TEXT.px(theme)), theme)
     }
@@ -741,7 +752,7 @@ pub mod context_menu {
     }
 
     /// One entry: a Comfortable line of Default text in a dense list item —
-    /// 23px at the default size.
+    /// 21px at the default size.
     pub fn entry_height(theme: &Theme) -> Pixels {
         ListItemSpacing::Dense.row_height(LINE_HEIGHT.resolve(TEXT.px(theme)), theme)
     }
@@ -875,8 +886,8 @@ pub mod modal {
         DynamicSpacing::Base08.px(theme)
     }
 
-    /// The header's headline (drawn muted in Zed).
-    pub const HEADLINE: HeadlineSize = HeadlineSize::Small;
+    /// The header's headline.
+    pub const HEADLINE: TextSize = TextSize::Title;
 
     /// Between sections.
     pub fn body_gap(theme: &Theme) -> Pixels {
@@ -1304,10 +1315,12 @@ mod tests {
         for (spacing, px) in DynamicSpacing::ALL.into_iter().zip(expected) {
             assert!(close(spacing.px(&theme), px), "{spacing:?}");
         }
-        assert!(close(TextSize::Large.px(&theme), 16.));
-        assert!(close(TextSize::Default.px(&theme), 14.));
+        assert!(close(TextSize::Title.px(&theme), 16.));
+        assert!(close(TextSize::Large.px(&theme), 14.));
+        assert!(close(TextSize::Default.px(&theme), 13.));
         assert!(close(TextSize::Small.px(&theme), 12.));
-        assert!(close(TextSize::XSmall.px(&theme), 10.));
+        assert!(close(TextSize::XSmall.px(&theme), 11.));
+        assert!(close(TextSize::Default.line_height(&theme), 18.));
         assert!(close(ButtonSize::Default.height(&theme), 22.));
         assert!(close(ButtonSize::Medium.height(&theme), 28.));
         assert!(close(Radius::Small.px(&theme), 4.));
@@ -1351,7 +1364,7 @@ mod tests {
         let theme = theme_with(16., 100);
         let scale = 16. / 14.;
         assert!(close(DynamicSpacing::Base08.px(&theme), 8. * scale));
-        assert!(close(TextSize::Default.px(&theme), 14. * scale));
+        assert!(close(TextSize::Default.px(&theme), 13. * scale));
         assert!(close(IconSize::Small.px(&theme), 14. * scale));
         assert!(close(theme.rems(1.), 16. * scale));
         // Fixed-px tokens do not move.
@@ -1419,7 +1432,7 @@ mod tests {
     fn classic_geometry_keeps_the_existing_scale() {
         let theme = default_theme();
         assert!(close(Radius::Large.px(&theme), 8.));
-        assert!(close(TextSize::XSmall.px(&theme), 10.));
+        assert!(close(TextSize::XSmall.px(&theme), 11.));
         assert_eq!(button_shadow(&theme).len(), 2);
     }
 
@@ -1455,8 +1468,8 @@ mod tests {
     #[test]
     fn menu_entries_are_one_comfortable_line_tall() {
         let theme = default_theme();
-        // 14px × 1.618 = 22.65, rounded by GPUI to 23.
-        assert!(close(context_menu::entry_height(&theme), 23.));
+        // 13px × 1.618 = 21.03, rounded by GPUI to 21.
+        assert!(close(context_menu::entry_height(&theme), 21.));
         let line = px(20.);
         assert_eq!(ListItemSpacing::Dense.row_height(line, &theme), px(20.));
         assert_eq!(

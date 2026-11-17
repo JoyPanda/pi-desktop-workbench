@@ -400,7 +400,7 @@ pub(super) fn text_cell(column: &Column, text: String, color: Hsla, theme: Theme
         &text,
         column.width,
         CELL_PADDING * 2.,
-        theme.ui_px(13.).into(),
+        TextSize::Default.px(&theme).into(),
         0.52,
     );
     if column.numeric {

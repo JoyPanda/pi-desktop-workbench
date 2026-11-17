@@ -24,7 +24,7 @@ use crate::theme::{self, Theme, ThemeMode};
 use crate::transcript_view::highlight_runs;
 
 /// Review diff row metrics, shared by every surface that paints rows.
-pub const DIFF_TEXT_SIZE: f32 = 12.5;
+pub const DIFF_TEXT_SIZE: f32 = 13.;
 /// File headers are one fixed row.
 pub const REVIEW_FILE_HEADER_HEIGHT: f32 = 36.;
 /// A grouped list's section divider is one fixed row — tall enough to seat a
@@ -197,7 +197,7 @@ pub fn render_hunk_header(content: &str, theme: Theme, wrap: bool, gutter_w: Pix
         .flex()
         .font_family(theme::code_font_family())
         .text_size(theme.code_px(DIFF_TEXT_SIZE))
-        .line_height(theme.code_px(16.))
+        .line_height(theme.code_px(18.))
         .text_color(theme.text_muted)
         .child(
             div()
@@ -231,7 +231,7 @@ pub fn render_meta(content: &str, theme: Theme, wrap: bool, gutter_w: Pixels) ->
         .flex()
         .font_family(theme::code_font_family())
         .text_size(theme.code_px(DIFF_TEXT_SIZE))
-        .line_height(theme.code_px(16.))
+        .line_height(theme.code_px(18.))
         .text_color(theme.text_muted)
         .child(div().w(gutter_w).min_h(px(REVIEW_HUNK_HEIGHT)).flex_none())
         .child(
@@ -272,8 +272,8 @@ pub fn code_cell_width(window: &Window, theme: &Theme) -> Pixels {
         .unwrap_or(px(DIFF_TEXT_SIZE * 0.6))
 }
 
-fn diff_row_height() -> f32 {
-    (DIFF_TEXT_SIZE * 1.5).round()
+fn diff_row_height(theme: &Theme) -> Pixels {
+    theme.code_px(18.)
 }
 
 /// One context/addition/deletion row: a single line-number gutter (the new
@@ -288,7 +288,7 @@ pub fn render_code_row(
     gutter_w: Pixels,
     text: &DiffTextState,
 ) -> AnyElement {
-    let row_height = diff_row_height();
+    let row_height = diff_row_height(&theme);
     let (body_bg, gutter_bg, edge, number_color) = match line.kind {
         LineKind::Addition => (
             Some(theme.success.opacity(body_wash(theme))),
@@ -310,16 +310,16 @@ pub fn render_code_row(
     div()
         .w_full()
         .min_w_0()
-        .min_h(px(row_height))
+        .min_h(row_height)
         .flex()
         .font_family(theme::code_font_family())
         .text_size(theme.code_px(DIFF_TEXT_SIZE))
-        .line_height(theme.code_px(16.))
+        .line_height(theme.code_px(18.))
         .when_some(edge, |row, edge| row.border_l_2().border_color(edge))
         .child(
             div()
                 .w(gutter_w)
-                .min_h(px(row_height))
+                .min_h(row_height)
                 .flex_none()
                 .pr(px(9.))
                 .flex()
@@ -332,7 +332,7 @@ pub fn render_code_row(
         )
         .child(
             div()
-                .min_h(px(row_height))
+                .min_h(row_height)
                 .min_w_0()
                 .flex_1()
                 .pl(DynamicSpacing::Base12.px(&theme))
@@ -401,16 +401,16 @@ pub fn render_split_row(
     text_scroll: Pixels,
     text: &DiffTextState,
 ) -> AnyElement {
-    let row_height = diff_row_height();
+    let row_height = diff_row_height(&theme);
     div()
         .w_full()
         .min_w_0()
         .overflow_hidden()
-        .min_h(px(row_height))
+        .min_h(row_height)
         .flex()
         .font_family(theme::code_font_family())
         .text_size(theme.code_px(DIFF_TEXT_SIZE))
-        .line_height(theme.code_px(16.))
+        .line_height(theme.code_px(18.))
         .child(split_half(
             left,
             DiffSide::Old,
@@ -440,7 +440,7 @@ fn split_half(
     side: DiffSide,
     theme: Theme,
     wrap: bool,
-    row_height: f32,
+    row_height: Pixels,
     gutter_w: Pixels,
     text_scroll: Pixels,
     text: &DiffTextState,
@@ -452,7 +452,7 @@ fn split_half(
         .min_w_0()
         .max_w(gpui::relative(0.5))
         .overflow_hidden()
-        .min_h(px(row_height))
+        .min_h(row_height)
         .debug_selector(move || match side {
             DiffSide::Old => "diff-split-old".to_string(),
             DiffSide::New => "diff-split-new".to_string(),
@@ -485,7 +485,7 @@ fn split_half(
     // the clip. Wrapped text stays a direct child: an extra box would size
     // to the unwrapped line and the words would never wrap.
     let body = div()
-        .min_h(px(row_height))
+        .min_h(row_height)
         .min_w_0()
         .flex_1()
         .px(DynamicSpacing::Base12.px(&theme))
@@ -502,7 +502,7 @@ fn split_half(
         .child(
             div()
                 .w(gutter_w)
-                .min_h(px(row_height))
+                .min_h(row_height)
                 .flex_none()
                 .pr(px(9.))
                 .flex()

@@ -7,8 +7,8 @@ use crate::theme::tokens::{
 /// The slot an "open in" app icon draws in: 18px at the default UI scale.
 ///
 /// Larger than the 14px [`context_menu::ICON`] a glyph entry uses. App artwork
-/// keeps a ~12% transparent margin and sits in a 31px picker row, so a
-/// glyph-sized slot read as "tiny" next to the 14px label; 18px leaves ~16px of
+/// keeps a ~12% transparent margin and sits in a 29px picker row, so a
+/// glyph-sized slot read as "tiny" next to the 13px label; 18px leaves ~16px of
 /// visible mark. `platform` rasterizes each icon at 2× this slot so a Retina
 /// window blits it 1:1.
 const APP_ICON: IconSize = IconSize::Custom(18. / BASE_REM_PX);

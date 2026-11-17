@@ -354,7 +354,7 @@ impl OrbitApp {
                     .gap_0p5()
                     .child(
                         div()
-                            .text_size(theme.ui_px(17.))
+                            .text_size(theme.heading_px(3).0)
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_primary)
                             .truncate()

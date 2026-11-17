@@ -1157,7 +1157,7 @@ impl FileViewer {
             .min_w_0()
             .overflow_hidden()
             .font_family(theme::code_font_family())
-            .text_size(theme.code_px(12.5))
+            .text_size(theme.code_px(13.))
             .line_height(theme.code_px(18.))
             .child(list)
             .into_any_element()
@@ -1181,7 +1181,10 @@ impl FileViewer {
             .and_then(|tokens| tokens.get(index))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let gutter_width = content.lines.len().to_string().len().max(3) as f32 * 7.0 + 16.0;
+        let digits = content.lines.len().to_string().len().max(3) as f32;
+        // One monospace cell is about 8px at the 13px editor size; both the
+        // cell and the inset scale with the editor font.
+        let gutter_width = theme.code_px(8.) * digits + theme.code_px(16.);
         div()
             .w_full()
             .min_w_0()
@@ -1189,7 +1192,7 @@ impl FileViewer {
             .items_start()
             .child(
                 div()
-                    .w(px(gutter_width))
+                    .w(gutter_width)
                     .flex_none()
                     .pr(px(9.))
                     .flex()
@@ -1373,7 +1376,7 @@ fn editor_body(theme: Theme, tab: &Tab) -> AnyElement {
         .min_w_0()
         .overflow_hidden()
         .font_family(theme::code_font_family())
-        .text_size(theme.code_px(12.5))
+        .text_size(theme.code_px(13.))
         .line_height(theme.code_px(18.))
         .child(tab.editor.clone())
         .into_any_element()

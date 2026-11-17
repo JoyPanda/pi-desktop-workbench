@@ -378,10 +378,10 @@ fn context_menu_shell_lays_out_on_zeds_metrics(cx: &mut gpui::TestAppContext) {
         viewport.width - px(8.),
         "menu {menu:?} in {viewport:?}"
     );
-    // Entries: one Comfortable line of 14px text (23px), inset Base04 inside
+    // Entries: one Comfortable line of 13px text (21px), inset Base04 inside
     // a 1px hairline, below `List`'s Base04 top padding.
-    assert_eq!(a.size.height, px(23.));
-    assert_eq!(b.size.height, px(23.));
+    assert_eq!(a.size.height, px(21.));
+    assert_eq!(b.size.height, px(21.));
     assert_eq!(a.top() - menu.top(), px(5.));
     assert_eq!(a.left() - menu.left(), px(5.));
     assert_eq!(menu.right() - a.right(), px(5.));

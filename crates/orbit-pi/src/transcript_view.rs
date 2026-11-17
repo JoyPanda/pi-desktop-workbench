@@ -136,9 +136,8 @@ const CODE_PREVIEW_LINES: usize = 24;
 const CODE_COPY_SECTION: u8 = 2;
 const CODE_COPY_BUTTON: ButtonSize = ButtonSize::Medium;
 /// Inline edit diff — an edit/write tool's `oldText`/`newText` shown as a
-/// compact diff. Row height and text size track the Review pane's diff.
-const EDIT_DIFF_TEXT_SIZE: f32 = 12.5;
-const EDIT_DIFF_ROW_HEIGHT: f32 = 19.0;
+/// compact diff. Text size tracks the editor font; the row is one code line.
+const EDIT_DIFF_TEXT_SIZE: f32 = 13.;
 /// Copy feedback for an inline edit diff; section `3` never collides with
 /// Arguments (`0`) / Output (`1`) / code block (`2`).
 const EDIT_DIFF_COPY_SECTION: u8 = 3;
@@ -4185,7 +4184,7 @@ fn render_activity_card(
                     row.child(chip)
                 })
                 .when(has_diff, |row| {
-                    row.child(render_line_delta(added, removed, theme, 12.5))
+                    row.child(render_line_delta(added, removed, theme))
                 })
                 .when(pulse, |row| {
                     row.child(crate::app::spinner(
@@ -5080,7 +5079,7 @@ fn render_edit_diff_row(
     div()
         .w_full()
         .min_w_0()
-        .min_h(px(EDIT_DIFF_ROW_HEIGHT))
+        .min_h(theme.code_px(18.))
         .flex()
         .font_family(theme::code_font_family())
         .text_size(theme.code_px(EDIT_DIFF_TEXT_SIZE))
@@ -5688,8 +5687,8 @@ fn render_working_indicator(
         Some(activity) => format!("{activity} · {timing}"),
         None => timing,
     };
-    let label_size = theme.ui_px(13.5);
-    let label_line = theme.ui_px(18.);
+    let label_size = TextSize::Default.px(&theme);
+    let label_line = TextSize::Default.line_height(&theme);
     // The live label carries the sidebar's running-session shimmer — the same
     // accent band sweeping across the ink. Reduce-motion keeps the accent
     // signal without the perpetual sweep.
@@ -5945,14 +5944,14 @@ fn tool_command(tool: &ToolCall) -> Option<String> {
         .map(str::to_string)
 }
 
-fn render_line_delta(added: u64, removed: u64, theme: Theme, size: f32) -> impl IntoElement {
+fn render_line_delta(added: u64, removed: u64, theme: Theme) -> impl IntoElement {
     div()
         .flex()
         .flex_none()
         .items_center()
         .gap(DynamicSpacing::Base06.px(&theme))
-        .text_size(theme.ui_px(size))
-        .line_height(theme.ui_px(size + 3.))
+        .text_size(TextSize::Small.px(&theme))
+        .line_height(TextSize::Small.line_height(&theme))
         .child(
             div()
                 .flex_none()
@@ -5968,8 +5967,11 @@ fn render_line_delta(added: u64, removed: u64, theme: Theme, size: f32) -> impl 
 }
 
 // ── Markdown ────────────────────────────────────────────────────────────────
-// Markdown styling: 14px/22px body, 0.9rem rhythm between blocks,
-// h1/h2/h3 at 20/18/16px semibold, `ml-5` lists with hanging indents,
+// Markdown styling: 14px/24px body. Cursor's conversation line is 22, but
+// GPUI paints inline-code backgrounds on the whole line box, so 14/22 lets a
+// wrapped line's wash paint through the line above (see `paragraph_text`).
+// Headings follow the agent-transcript ems at a 1.42 line height:
+// h1/h2/h3/h4 at 20/28, 18/26, 17/24, 14/20. `ml-5` lists with hanging indents,
 // `border-l-2` blockquotes, mono inline-code chips, rounded pre blocks,
 // and clickable underlined links.
 
@@ -8134,8 +8136,8 @@ mod tests {
         let code_line = f32::from(theme.code_block_line_px());
         assert!((code_line - 20. * 16. / 13.).abs() < 0.05, "{code_line}");
         let (h1, h1_line) = theme.heading_px(1);
-        assert_eq!(h1, gpui::px(18.));
-        assert_eq!(h1_line, gpui::px(26.));
+        assert_eq!(h1, gpui::px(20.));
+        assert_eq!(h1_line, gpui::px(28.));
     }
 
     #[test]

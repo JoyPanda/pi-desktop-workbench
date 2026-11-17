@@ -56,6 +56,7 @@ pub(crate) fn queue_row(kind: &str, text: &str, follow: bool, theme: Theme) -> A
                 .whitespace_nowrap()
                 .pt(px(1.))
                 .text_size(TextSize::XSmall.px(&theme))
+                .line_height(TextSize::XSmall.line_height(&theme))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(if follow {
                     theme.text_muted
@@ -328,7 +329,7 @@ pub(crate) fn picker_search_frame<E: Styled>(el: E, theme: &Theme) -> E {
 
 /// One picker row, Zed's inset `ListItem` at `Sparse` spacing: Base04
 /// outside, Base06 inside, 4px above and below, 6px corners, and at least
-/// one Comfortable line of Default text (31px). A row with a secondary line
+/// one Comfortable line of Default text (29px). A row with a secondary line
 /// grows to fit it (see `picker::two_line_entry_height`). Callers add the id,
 /// colors, hover, selection, and click handling.
 pub(crate) fn picker_entry<E: Styled>(el: E, theme: &Theme) -> E {
@@ -1116,6 +1117,8 @@ mod ink_shift_tests {
 
 /// Extension text badge (`MD`, `TSX`, `HTML`, …) — the no-Nerd-Font
 /// fallback for [`file_glyph`], tinted with the language's brand color.
+/// The 7.5px label is chip-fit type: it has to sit inside a 17px tile, so
+/// it is not a step on the reading scale.
 pub(crate) fn file_badge(path: &str, theme: Theme) -> AnyElement {
     let (label, dark_hex, light_hex) = mentions::file_type_badge(path);
     let color: Hsla = gpui::rgb(if theme.mode == ThemeMode::Dark {
@@ -1174,7 +1177,7 @@ pub(crate) fn runtime_path(theme: Theme, text: String) -> AnyElement {
         .min_w_0()
         .truncate()
         .font_family(theme::code_font_family())
-        .text_size(theme.code_px(11.5))
+        .text_size(theme.code_px(11.))
         .text_color(theme.text_secondary)
         .child(text)
         .into_any_element()

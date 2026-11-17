@@ -913,7 +913,7 @@ impl OrbitApp {
             })
             .child(
                 div()
-                    .text_size(TextSize::Large.px(&theme))
+                    .text_size(TextSize::Title.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
                     .line_height(BufferLineHeight::Standard.relative())
                     .text_color(theme.text_primary)
@@ -1723,7 +1723,7 @@ impl OrbitApp {
                 div()
                     .truncate()
                     .font_family(theme::code_font_family())
-                    .text_size(theme.code_px(10.5))
+                    .text_size(theme.code_px(11.))
                     .text_color(meta_ink)
                     .child(model.id.clone()),
             )
@@ -1980,7 +1980,7 @@ impl OrbitApp {
                             .child(
                                 div()
                                     .font_family(theme::code_font_family())
-                                    .text_size(theme.code_px(10.5))
+                                    .text_size(theme.code_px(11.))
                                     .text_color(theme.text_muted)
                                     .truncate()
                                     .child(source),
@@ -1994,7 +1994,7 @@ impl OrbitApp {
                     div()
                         .pl(DynamicSpacing::Base40.px(&theme))
                         .font_family(theme::code_font_family())
-                        .text_size(theme.code_px(10.5))
+                        .text_size(theme.code_px(11.))
                         .text_color(theme.text_muted)
                         .truncate()
                         .child(package.install_path.to_string_lossy().into_owned()),
@@ -2852,7 +2852,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .font_family(theme::code_font_family())
-                            .text_size(theme.code_px(10.5))
+                            .text_size(theme.code_px(11.))
                             .text_color(theme.text_muted)
                             .truncate()
                             .child(device.verification_uri.clone()),
@@ -2865,7 +2865,7 @@ impl OrbitApp {
                     div()
                         .truncate()
                         .font_family(theme::code_font_family())
-                        .text_size(theme.code_px(10.5))
+                        .text_size(theme.code_px(11.))
                         .text_color(theme.text_muted)
                         .child(url.clone()),
                 );
@@ -3238,7 +3238,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .font_family(theme::code_font_family())
-                            .text_size(theme.code_px(10.5))
+                            .text_size(theme.code_px(11.))
                             .text_color(theme.text_muted)
                             .truncate()
                             .child(view.id.clone()),
@@ -3353,7 +3353,7 @@ impl OrbitApp {
         let base_url = div()
             .truncate()
             .font_family(theme::code_font_family())
-            .text_size(theme.code_px(10.5))
+            .text_size(theme.code_px(11.))
             .text_color(theme.text_muted)
             .child(endpoint);
 
@@ -5117,7 +5117,7 @@ impl OrbitApp {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .font_family(theme::code_font_family())
-                        .text_size(theme.code_px(11.5))
+                        .text_size(theme.code_px(11.))
                         .text_color(theme.code_text)
                         .child(line.clone()),
                 );
@@ -6352,7 +6352,7 @@ impl OrbitApp {
             .child(
                 div()
                     .font_family(theme::ui_font_family())
-                    .text_size(TextSize::Large.px(&theme))
+                    .text_size(TextSize::Title.px(&theme))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_primary)
                     .child(tr!("settings.new_task")),
@@ -6372,7 +6372,7 @@ impl OrbitApp {
                 .items_center()
                 .gap(DynamicSpacing::Base06.px(&theme))
                 .font_family(theme::code_font_family())
-                .text_size(theme.term_px(12.5))
+                .text_size(theme.term_px(13.))
                 .child(div().text_color(theme.success).child("$"))
                 .child(div().text_color(theme.code_text).child(command.to_string()));
             if cursor {
@@ -6415,7 +6415,7 @@ impl OrbitApp {
                         div()
                             .ml_1p5()
                             .font_family(theme::code_font_family())
-                            .text_size(theme.term_px(10.5))
+                            .text_size(theme.term_px(11.))
                             .text_color(theme.text_muted)
                             .child(tr!("settings.terminal_prompt")),
                     ),
@@ -6433,7 +6433,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .font_family(theme::code_font_family())
-                            .text_size(theme.term_px(12.5))
+                            .text_size(theme.term_px(13.))
                             .text_color(theme.text_secondary)
                             .child(tr!("settings.preview_prompt")),
                     )

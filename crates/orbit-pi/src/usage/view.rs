@@ -1059,7 +1059,7 @@ impl UsagePage {
             .child(empty_state_glyph(theme, icon_path))
             .child(
                 div()
-                    .text_size(TextSize::Large.px(&theme))
+                    .text_size(TextSize::Title.px(&theme))
                     .line_height(theme.ui_px(20.))
                     .font_weight(FontWeight::MEDIUM)
                     .child(title.to_string()),
@@ -3720,7 +3720,7 @@ fn card(
                         .gap(DynamicSpacing::Base08.px(&theme))
                         .child(
                             div()
-                                .text_size(TextSize::Large.px(&theme))
+                                .text_size(TextSize::Title.px(&theme))
                                 .line_height(theme.ui_px(20.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_primary)

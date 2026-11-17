@@ -2154,7 +2154,7 @@ pub(crate) fn workspace_menu_popup(
         workspace_appearance_picker(menu, mark, this.clone(), theme)
     } else {
         // The action rows wear the branch selector's picker metrics — the
-        // same Base04 inset, Base06 inner padding, 31px row, and Base01 row
+        // same Base04 inset, Base06 inner padding, 29px row, and Base01 row
         // gap — so the workspace menu and the branch/sort popovers read as
         // one family.
         div()

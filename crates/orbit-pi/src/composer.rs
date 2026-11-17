@@ -1842,7 +1842,8 @@ impl Element for TextElement {
         let font_size = style.font_size.to_pixels(window.rem_size());
         let wrap_width = (wrap && bounds.size.width > px(0.)).then_some(bounds.size.width);
         let gutter_width = if gutter {
-            px(content.split('\n').count().to_string().len().max(3) as f32 * 7.0 + 16.0)
+            let digits = content.split('\n').count().to_string().len().max(3) as f32;
+            theme.code_px(8.) * digits + theme.code_px(16.)
         } else {
             px(0.)
         };

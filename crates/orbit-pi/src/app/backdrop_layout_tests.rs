@@ -364,7 +364,7 @@ fn provider_name_column_has_a_real_width(cx: &mut gpui::TestAppContext) {
                                     div()
                                         .id("provider-id")
                                         .debug_selector(|| "provider-id".to_string())
-                                        .text_size(theme.code_px(10.5))
+                                        .text_size(theme.code_px(11.))
                                         .truncate()
                                         .child("amazon-bedrock"),
                                 ),
@@ -374,7 +374,7 @@ fn provider_name_column_has_a_real_width(cx: &mut gpui::TestAppContext) {
                     div()
                         .id("provider-endpoint")
                         .debug_selector(|| "provider-endpoint".to_string())
-                        .text_size(theme.code_px(10.5))
+                        .text_size(theme.code_px(11.))
                         .truncate()
                         .child("https://api.example.com/v1 · openai-completions"),
                 )
@@ -566,7 +566,7 @@ fn provider_grid_columns_fit_inside_the_content_column(cx: &mut gpui::TestAppCon
                     .child(
                         div()
                             .font_family(theme::code_font_family())
-                            .text_size(theme.code_px(10.5))
+                            .text_size(theme.code_px(11.))
                             .truncate()
                             .child("https://api.example.com/v1 · openai-completions plus a long trailing note"),
                     )

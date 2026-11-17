@@ -2841,13 +2841,15 @@ impl OrbitApp {
                                                 theme.accent_text,
                                             )),
                                     )
-                                    .child(
+                                    .child({
+                                        let (size, line) = theme.heading_px(1);
                                         div()
-                                            .text_size(theme.ui_px(22.))
+                                            .text_size(size)
+                                            .line_height(line)
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(theme.text_primary)
-                                            .child(tr!("view.set_up_orbit")),
-                                    )
+                                            .child(tr!("view.set_up_orbit"))
+                                    })
                                     .child(
                                         div()
                                             .max_w(px(420.))
