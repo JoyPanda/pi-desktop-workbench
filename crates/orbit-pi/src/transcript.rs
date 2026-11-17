@@ -1273,9 +1273,25 @@ impl Transcript {
             // its last assistant row wait for the next prompt.
             self.held_notices = waiting;
         }
+        // Drop the pending-reply or changed-files slot while the old message
+        // list is still in place, so the list length below is a message count.
+        // Comparing against the slot still attached mismatches by one and
+        // either rebuilds the list or keeps a stale row.
+        self.retire_pending_row();
+        self.set_tail_row(false);
         *self.messages.borrow_mut() = parsed;
         self.invalidate_user_turns();
-        self.scroller.reset(count);
+        // A second snapshot of the same rows (disk preview, then pi's
+        // `get_messages`) must not rebuild the list. `reset` drops every
+        // measured height, so the next frame paints a collapsed column and
+        // then jumps back to the tail.
+        if self.scroller.item_count() == count {
+            if count > 0 {
+                self.scroller.remeasure_items(0..count);
+            }
+        } else {
+            self.scroller.reset(count);
+        }
         self.streaming.set(None);
         self.seed_text.set(false);
         self.seed_thinking.set(false);
@@ -1305,8 +1321,6 @@ impl Transcript {
         // stay on screen.
         self.review_card_start = None;
         self.review_card_files.clear();
-        self.awaiting_reply.set(false);
-        self.set_tail_row(false);
     }
 
     /// Bytes of tool arguments and results kept on the transcript. Strings

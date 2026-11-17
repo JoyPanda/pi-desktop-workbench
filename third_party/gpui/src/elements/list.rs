@@ -11,7 +11,7 @@
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges, Element, EntityId,
     FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style, StyleRefinement, Styled,
+    Overflow, Pixels, Point, ScrollWheelEvent, Size, Style, StyleRefinement, Styled,
     Window, point, px, size,
 };
 use collections::VecDeque;
@@ -570,26 +570,31 @@ impl StateInner {
         let padding = self.last_padding.unwrap_or_default();
         let scroll_max =
             (self.items.summary().height + padding.top + padding.bottom - height).max(px(0.));
-        let new_scroll_top = (self.scroll_top(scroll_top) - delta.y)
-            .max(px(0.))
-            .min(scroll_max);
+        // A bottom-aligned tail has no anchor, so `scroll_top` reports the
+        // content end — one viewport past the real maximum. Clamp before
+        // applying the wheel or a normal notch never leaves the tail.
+        let base = self.scroll_top(scroll_top).min(scroll_max).max(px(0.));
+        let new_scroll_top = (base - delta.y).max(px(0.)).min(scroll_max);
 
+        let (start, ..) =
+            self.items
+                .find::<ListItemSummary, _>((), &Height(new_scroll_top), Bias::Right);
+        let new_logical_scroll_top = ListOffset {
+            item_ix: start.count,
+            offset_in_item: new_scroll_top - start.height,
+        };
+        // The tail stays unanchored, but the event reports the row that is
+        // actually at the top of the viewport. The incoming offset is the
+        // past-the-end sentinel while pinned, and reporting that would mark
+        // one row past the last item as visible.
         if self.alignment == ListAlignment::Bottom && new_scroll_top == scroll_max {
             self.logical_scroll_top = None;
         } else {
-            let (start, ..) =
-                self.items
-                    .find::<ListItemSummary, _>((), &Height(new_scroll_top), Bias::Right);
-            let item_ix = start.count;
-            let offset_in_item = new_scroll_top - start.height;
-            self.logical_scroll_top = Some(ListOffset {
-                item_ix,
-                offset_in_item,
-            });
+            self.logical_scroll_top = Some(new_logical_scroll_top);
         }
 
         if self.scroll_handler.is_some() {
-            let visible_range = self.visible_range(height, scroll_top);
+            let visible_range = self.visible_range(height, &new_logical_scroll_top);
             self.scroll_handler.as_mut().unwrap()(
                 &ListScrollEvent {
                     visible_range,
@@ -1144,14 +1149,19 @@ impl Element for List {
         });
 
         let list_state = self.state.clone();
-        let height = bounds.size.height;
-        let scroll_top = prepaint.layout.scroll_top;
         let hitbox_id = prepaint.hitbox.id;
-        let mut accumulated_scroll_delta = ScrollDelta::default();
+        // Apply only this event's delta to the live offset. The listener is
+        // reused across frames, and folding every delta back onto the scroll
+        // position captured at the first paint replays the whole gesture and
+        // yanks a reader who has since returned to the tail.
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && hitbox_id.should_handle_scroll(window) {
-                accumulated_scroll_delta = accumulated_scroll_delta.coalesce(event.delta);
-                let pixel_delta = accumulated_scroll_delta.pixel_delta(px(20.));
+                let pixel_delta = event.delta.pixel_delta(px(20.));
+                let scroll_top = list_state.logical_scroll_top();
+                let height = list_state.viewport_bounds().size.height;
+                if height <= px(0.) {
+                    return;
+                }
                 list_state.0.borrow_mut().scroll(
                     &scroll_top,
                     height,
