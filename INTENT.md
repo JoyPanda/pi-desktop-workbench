@@ -619,9 +619,16 @@ Expand thinking — Settings → Behavior, stored in
 While a step is still reasoning and the reader has not chosen, its card is
 open. When that step ends the card collapses to one line; an explicit open or
 close survives the end of the step. Turning the setting off keeps streaming
-thoughts on that one line until the reader opens one. Thinking cards stay in
-step order, beside the tool groups they split, and are never folded into
-Worked for. Worked for hides only tools that happened before the first answer.
+thoughts on that one line until the reader opens one. The latest assistant
+row — including one that has just finished, until the next user request —
+keeps those cards in step order and does not draw Worked for. A steer inside
+the turn still in progress does not fold that row either. An earlier row,
+one a later user message has closed, draws Worked for when tools ran before
+its first prose. That line hides those tools and the thoughts that belong to
+them. The first prose, the thought on that step, and any later tools stay
+outside. A row that only thought, with no such tools, does not draw Worked
+for. With no elapsed time the line still reads Worked. Opening the fold lasts
+for this loaded transcript; a reload clears it.
 
 The sessions sidebar reads as three levels, not one: the "Projects" section
 label in muted 12px, a project group header in the accent's hue at body-ink

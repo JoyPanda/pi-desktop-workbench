@@ -1099,6 +1099,10 @@ pub struct Transcript {
     /// renders every frame; this keeps that O(message-count) pass off the
     /// hot path.
     user_turns: Rc<RefCell<(usize, Rc<Vec<usize>>)>>,
+    /// User-row index that opened the turn still in progress. `None` when
+    /// the app's turn clock is closed. Kept here so a new prompt can remeasure
+    /// the assistant rows it just folded without the view owning the clock.
+    open_turn_start: Cell<Option<usize>>,
 }
 
 impl Transcript {
@@ -1149,6 +1153,72 @@ impl Transcript {
             review_card_files: Vec::new(),
             awaiting_reply: Rc::new(Cell::new(false)),
             user_turns: Rc::new(RefCell::new((0, Rc::new(Vec::new())))),
+            open_turn_start: Cell::new(None),
+        }
+    }
+
+    /// Remember which user row opened the turn still in progress.
+    ///
+    /// `None` when the clock is closed. Rows that a steer had been keeping
+    /// visible fold once the turn finishes, so those rows are remeasured.
+    /// Inserting the steer itself does not change that classification.
+    pub(crate) fn set_open_turn_start(&mut self, start: Option<usize>) {
+        let previous = self.open_turn_start.replace(start);
+        if previous == start {
+            return;
+        }
+        self.remeasure_open_turn_flip(previous, start);
+    }
+
+    /// Assistant rows whose "inside the open turn" status flipped.
+    fn remeasure_open_turn_flip(&self, previous: Option<usize>, next: Option<usize>) {
+        let messages = self.messages.borrow();
+        let rows = messages
+            .iter()
+            .enumerate()
+            .filter(|(ix, message)| {
+                if !message.is_assistant() {
+                    return false;
+                }
+                let later_user = messages[*ix + 1..].iter().any(|message| message.user);
+                if !later_user {
+                    return false;
+                }
+                let was_inside = previous.is_some_and(|start| *ix >= start);
+                let now_inside = next.is_some_and(|start| *ix >= start);
+                was_inside != now_inside
+            })
+            .map(|(ix, _)| ix)
+            .collect::<Vec<_>>();
+        drop(messages);
+        self.remeasure_rows(&rows);
+    }
+
+    /// Assistant rows that gained their first later user message and are not
+    /// inside the turn still in progress. Already-folded rows are left alone.
+    fn remeasure_newly_earlier(&self, user_ix: usize) {
+        let start = self.open_turn_start.get();
+        let messages = self.messages.borrow();
+        let rows = (0..user_ix)
+            .filter(|&ix| {
+                let Some(message) = messages.get(ix) else {
+                    return false;
+                };
+                if !message.is_assistant() || start.is_some_and(|start| ix >= start) {
+                    return false;
+                }
+                !messages[ix + 1..user_ix]
+                    .iter()
+                    .any(|message| message.user)
+            })
+            .collect::<Vec<_>>();
+        drop(messages);
+        self.remeasure_rows(&rows);
+    }
+
+    fn remeasure_rows(&self, rows: &[usize]) {
+        for ix in rows {
+            self.remeasure_row(*ix);
         }
     }
 
@@ -1494,11 +1564,13 @@ impl Transcript {
                 != Some(true)
             {
                 messages.push(message);
+                let user_ix = messages.len() - 1;
                 self.streaming.set(None);
                 self.stream_started.set(None);
                 self.reset_generation();
                 drop(messages);
                 self.insert_row();
+                self.remeasure_newly_earlier(user_ix);
                 return true;
             }
             return false;
@@ -1846,8 +1918,10 @@ impl Transcript {
                 return false;
             }
             messages.push(final_message);
+            let user_ix = messages.len() - 1;
             drop(messages);
             self.insert_row();
+            self.remeasure_newly_earlier(user_ix);
             return true;
         }
         if let Some(ix) = self.streaming.get() {
@@ -2723,8 +2797,10 @@ impl Transcript {
             error: None,
             aborted: false,
         });
+        let user_ix = messages.len() - 1;
         drop(messages);
         self.insert_row();
+        self.remeasure_newly_earlier(user_ix);
         true
     }
 
@@ -2924,6 +3000,7 @@ impl Transcript {
                 fork_session,
                 search_hits: search_hits.map(|hits| Rc::new(RefCell::new(hits))),
                 search_active: search_active.map(|ix| Rc::new(Cell::new(Some(ix)))),
+                open_turn_start: self.open_turn_start.get(),
             },
             cx,
         )

@@ -29,9 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Reasoning stays in the transcript.** A thinking step streams open, then
   collapses to one line that can be opened again. Turning Settings →
   Behavior → Expand thinking off keeps streaming thoughts on that one line.
-  The cards stay in step order and are not hidden inside Worked for.
-  Scrolling up inside a card leaves it there instead of jumping back to the
-  newest line.
+  The latest assistant row keeps those cards in step order and does not draw
+  Worked for, including just after it finishes and while a steer is still
+  part of that turn. Once a later prompt has closed the row, the thoughts and
+  tools from before its first prose fold into Worked for. The prose and the
+  thought on that step stay outside. With no elapsed time the line still
+  reads Worked. Scrolling up inside a card leaves it there instead of jumping
+  back to the newest line.
 
 ### Changed
 

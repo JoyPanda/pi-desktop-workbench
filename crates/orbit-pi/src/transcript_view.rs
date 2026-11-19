@@ -3,10 +3,12 @@
 //! Rows are plain GPUI flex trees (no component library): a user turn's text
 //! fills the same reading column as assistant prose, assistant turns are
 //! Start-aligned prose. A
-//! ghost copy/timestamp footer reveals on row hover. Settled: thinking
-//! headers stay in step order, **Worked for** hides only pre-answer tools,
-//! then the answer. Live: an open thinking card (unless the reader turned
-//! that off) and activity cards stay in sequence with the text.
+//! ghost copy/timestamp footer reveals on row hover. The latest assistant
+//! row keeps thinking headers and tool groups in step order and never draws
+//! **Worked for**. An earlier row — one a later user message has closed, and
+//! that is not still inside the open turn — folds the work before its first
+//! prose behind **Worked for**, thoughts included. The first prose, the
+//! thought on that step, and everything after stay outside the fold.
 //!
 //! Timestamps render on the footer when pi provides one (snapshot
 //! `timestamp` fields, or a wall-clock stamp taken at `message_end`).
@@ -274,6 +276,11 @@ pub(crate) struct TranscriptView {
     /// User-turn row indices, cached in `Transcript` and shared here so the
     /// rail's O(message-count) pass does not run every frame.
     pub user_turns: Rc<Vec<usize>>,
+    /// Message index of the user row that opened the turn still in progress.
+    /// `None` when no turn is open: the run has settled, or a reloaded
+    /// session whose clock cannot tell a steer from a new request. Rows at
+    /// or after this index stay unfolded while that turn is open.
+    pub open_turn_start: Option<usize>,
 }
 
 // ── text selection ─────────────────────────────────────────────────────────
@@ -1478,6 +1485,9 @@ struct RowPaint {
     /// Open a thinking step while it is still reasoning.
     expand_thinking: bool,
     live: bool,
+    /// This assistant row is behind a later user message and is not part of
+    /// the turn still in progress. Pre-prose work folds behind Worked for.
+    earlier: bool,
     live_elapsed: Option<Duration>,
     /// Live output rate for the streaming row (`None` until meaningful).
     live_tps: Option<f64>,
@@ -1564,6 +1574,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
     // list changes); only `active_turn` depends on the live scroll position
     // and is recomputed per frame.
     let user_turns = view.user_turns.clone();
+    let open_turn_start = view.open_turn_start;
     let active_turn = {
         let messages = messages.borrow();
         // While the reader sits at the live edge the indicator tracks the
@@ -1650,6 +1661,10 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
             None
         };
         let fold_open = expanded_turns.borrow().contains(&ix);
+        let earlier = {
+            let borrowed = messages.borrow();
+            assistant_row_is_earlier(ix, live, &borrowed, open_turn_start)
+        };
         let copied_now = copied
             .borrow()
             .get(&ix)
@@ -1766,6 +1781,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                 agent_calls,
                 expand_thinking,
                 live,
+                earlier,
                 live_elapsed,
                 live_tps,
                 fold_open,
@@ -2249,6 +2265,10 @@ fn render_row(paint: RowPaint, cx: &gpui::App) -> AnyElement {
             "transcript-row".into(),
             paint.ix as u64,
         ))
+        .debug_selector({
+            let ix = paint.ix;
+            move || format!("transcript-row-{ix}")
+        })
         .w_full()
         .flex()
         .justify_center()
@@ -2713,14 +2733,30 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
         .items_start()
         .gap(DynamicSpacing::Base08.px(&theme));
 
-    // Thinking cards stay in step order and are never folded into Worked for.
-    // Tool groups split on a thought or on answer text. Pre-answer tool groups
-    // hide behind one Worked for line once the turn settles.
+    // The latest row keeps every thought and tool group in step order.
+    // An earlier row with tools before its first prose draws one Worked for
+    // line, then hides that region — thoughts and tools together. The first
+    // prose, the thought on that step, and later tools stay outside.
+    let spoken = first_spoken_step(&message.steps).unwrap_or(message.steps.len());
+    let fold_work = paint.earlier && has_pre_answer_tools(&message.steps);
+    if fold_work {
+        content = content.child(render_turn_fold(
+            ix,
+            paint.fold_open,
+            message.elapsed,
+            theme,
+            paint.expanded_turns.clone(),
+            paint.scroller.clone(),
+        ));
+    }
     let mut covered_until = 0usize;
-    let mut fold_placed = false;
-    let hide_pre_answer_tools = !paint.live && has_pre_answer_tools(&message.steps);
 
     for (step_ix, step) in message.steps.iter().enumerate() {
+        // Skip before the tool-group branch so a hidden step does not move
+        // `covered_until`. A turn that never speaks treats every step as work.
+        if fold_work && !paint.fold_open && step_ix < spoken {
+            continue;
+        }
         if !step.thinking.is_empty() {
             let duration = step_thinking_duration(&message.steps, step_ix);
             let thinking_live =
@@ -2743,43 +2779,28 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
         if !step.tools.is_empty() && step_ix >= covered_until {
             let group_end = tool_group_end(&message.steps, step_ix);
             covered_until = group_end;
-            let before_answer = group_is_before_answer(&message.steps, group_end);
-            if hide_pre_answer_tools && before_answer && !fold_placed {
-                content = content.child(render_turn_fold(
-                    ix,
-                    paint.fold_open,
-                    message.elapsed,
-                    theme,
-                    paint.expanded_turns.clone(),
-                    paint.scroller.clone(),
-                ));
-                fold_placed = true;
-            }
-            let hide = hide_pre_answer_tools && before_answer && !paint.fold_open;
-            if !hide {
-                let group_live = activity_group_is_live(paint.live, group_end, &message.steps);
-                let open = paint
-                    .expanded_activities
-                    .borrow()
-                    .get(&(ix, step_ix))
-                    .copied()
-                    .unwrap_or_else(|| paint.agent_calls.open_by_default(group_live));
-                content = content.child(render_activity_group(
-                    ix,
-                    step_ix..group_end,
-                    &message.steps,
-                    open,
-                    group_live,
-                    theme,
-                    paint.nerd.as_ref(),
-                    paint.agent_calls,
-                    paint.expanded_activities.clone(),
-                    paint.expanded_tools.clone(),
-                    paint.copied_sections.clone(),
-                    paint.expanded_sections.clone(),
-                    paint.scroller.clone(),
-                ));
-            }
+            let group_live = activity_group_is_live(paint.live, group_end, &message.steps);
+            let open = paint
+                .expanded_activities
+                .borrow()
+                .get(&(ix, step_ix))
+                .copied()
+                .unwrap_or_else(|| paint.agent_calls.open_by_default(group_live));
+            content = content.child(render_activity_group(
+                ix,
+                step_ix..group_end,
+                &message.steps,
+                open,
+                group_live,
+                theme,
+                paint.nerd.as_ref(),
+                paint.agent_calls,
+                paint.expanded_activities.clone(),
+                paint.expanded_tools.clone(),
+                paint.copied_sections.clone(),
+                paint.expanded_sections.clone(),
+                paint.scroller.clone(),
+            ));
         }
 
         if !step.text.is_empty() {
@@ -3146,6 +3167,7 @@ fn first_spoken_step(steps: &[Step]) -> Option<usize> {
 
 /// A tool group sits before the first answer when it ends at or before that
 /// step. A turn that never speaks treats every tool group as pre-answer.
+#[cfg(test)]
 fn group_is_before_answer(steps: &[Step], group_end: usize) -> bool {
     match first_spoken_step(steps) {
         Some(answer) => group_end <= answer,
@@ -3153,7 +3175,28 @@ fn group_is_before_answer(steps: &[Step], group_end: usize) -> bool {
     }
 }
 
-/// Pre-answer tools are what the Worked-for fold hides. Thinking does not
+/// An assistant row folds its pre-prose work when a later user message has
+/// closed it and it is not part of the turn still in progress.
+///
+/// A streaming row never folds. While a turn is open, rows at or after
+/// `open_turn_start` stay visible, so a steer inside that turn does not hide
+/// the work the reader is watching. `None` means the clock is closed: every
+/// user row is a boundary, which is also how a reloaded session reads.
+fn assistant_row_is_earlier(
+    ix: usize,
+    live: bool,
+    messages: &[ChatMessage],
+    open_turn_start: Option<usize>,
+) -> bool {
+    if live || open_turn_start.is_some_and(|start| ix >= start) {
+        return false;
+    }
+    messages
+        .get(ix + 1..)
+        .is_some_and(|rest| rest.iter().any(|message| message.user))
+}
+
+/// Pre-prose tools are what the Worked-for fold hides. Thinking does not
 /// count, and tools on the step that first speaks do not either.
 fn has_pre_answer_tools(steps: &[Step]) -> bool {
     let end = first_spoken_step(steps).unwrap_or(steps.len());
@@ -5644,6 +5687,7 @@ fn working_activity_label(step: &Step) -> Option<String> {
 /// "Stopped" in the meta color. Sits where the working indicator was.
 fn render_stopped_marker(theme: Theme) -> impl IntoElement {
     div()
+        .debug_selector(|| "stopped-marker".to_string())
         .h(px(22.))
         .flex()
         .items_center()
@@ -9856,6 +9900,102 @@ mod tests {
         assert!(!thinking_is_live(false, true, &thinking));
     }
 
+    fn user_row(text: &str) -> ChatMessage {
+        ChatMessage {
+            user: true,
+            summary: None,
+            steps: vec![Step {
+                text: text.into(),
+                ..Step::default()
+            }],
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        }
+    }
+
+    fn assistant_row() -> ChatMessage {
+        ChatMessage {
+            user: false,
+            summary: None,
+            steps: vec![Step::default()],
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        }
+    }
+
+    #[test]
+    fn assistant_row_is_earlier_only_after_a_later_user_outside_the_open_turn() {
+        let notice = || ChatMessage {
+            user: false,
+            summary: Some(SummaryRow {
+                branch: false,
+                summary: "note".into(),
+                tokens_before: None,
+                notice: Some("plan".into()),
+            }),
+            steps: Vec::new(),
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        };
+        let messages = vec![assistant_row(), notice(), user_row("next")];
+        // A notice is not a user message, so it does not close the row.
+        assert!(!assistant_row_is_earlier(
+            0,
+            false,
+            &[assistant_row(), notice()],
+            None
+        ));
+        assert!(assistant_row_is_earlier(0, false, &messages, None));
+        // A compaction summary is not a user message either.
+        let compaction = ChatMessage {
+            user: false,
+            summary: Some(SummaryRow {
+                branch: false,
+                summary: "compacted".into(),
+                tokens_before: Some(1_000),
+                notice: None,
+            }),
+            steps: Vec::new(),
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        };
+        assert!(!assistant_row_is_earlier(
+            0,
+            false,
+            &[assistant_row(), compaction],
+            None
+        ));
+        // The streaming row stays open even when a later user message exists.
+        assert!(!assistant_row_is_earlier(0, true, &messages, None));
+        // No later message: the latest row.
+        assert!(!assistant_row_is_earlier(0, false, &[assistant_row()], None));
+        // A steer inside the open turn (start 0) does not fold the assistant
+        // row that the steer split off.
+        let steered = vec![
+            user_row("prompt"),
+            assistant_row(),
+            user_row("steer"),
+            assistant_row(),
+        ];
+        assert!(!assistant_row_is_earlier(1, false, &steered, Some(0)));
+        // Once that turn is closed, the user row is a fold boundary.
+        assert!(assistant_row_is_earlier(1, false, &steered, None));
+        // The assistant after the steer is the latest row.
+        assert!(!assistant_row_is_earlier(3, false, &steered, None));
+    }
+
     #[test]
     fn activity_group_live_follows_the_newest_step() {
         let work = |thinking: &str| Step {
@@ -10281,6 +10421,7 @@ mod tests {
             fork_session: None,
             search_hits: None,
             search_active: None,
+            open_turn_start: None,
         }
     }
 
@@ -11371,24 +11512,15 @@ mod tests {
                 ..Step::default()
             },
         ];
+        // The settled row is still the latest one: no later user message, so
+        // the tools stay in the timeline and Worked for is not drawn.
         paint(cx, true, false);
-        let thought0 = cx.debug_bounds("thought-card-0-0").expect("first thought");
-        let group0 = cx.debug_bounds("activity-group-0-0").expect("first tools");
-        let thought1 = cx.debug_bounds("thought-card-0-1").expect("second thought");
-        let group1 = cx.debug_bounds("activity-group-0-1").expect("second tools");
-        let fold = cx.debug_bounds("turn-fold-0").expect("worked-for fold");
-        assert!(thought0.top() < fold.top());
-        assert!(fold.top() < group0.top());
-        assert!(group0.top() < thought1.top());
-        assert!(thought1.top() < group1.top());
-        let thought2 = cx
-            .debug_bounds("thought-card-0-2")
-            .expect("thought on the answer step");
-        let answer = cx.debug_bounds("assistant-step-0-2").expect("answer text");
-        assert!(group1.top() < thought2.top());
-        assert!(thought2.top() < answer.top());
-        assert!(cx.debug_bounds("tool-card-0-0").is_some());
-        assert!(cx.debug_bounds("tool-card-0-1").is_some());
+        assert!(
+            cx.debug_bounds("turn-fold-0").is_none(),
+            "the latest assistant row does not draw Worked for"
+        );
+        assert!(cx.debug_bounds("thought-card-0-0").is_some());
+        assert!(cx.debug_bounds("activity-group-0-0").is_some());
         let copies = state
             .borrow()
             .blocks
@@ -11400,12 +11532,48 @@ mod tests {
             "a settled thought is one card, not a second copy"
         );
 
+        messages.borrow_mut().push(ChatMessage {
+            user: true,
+            summary: None,
+            steps: vec![Step {
+                text: "a later request".into(),
+                ..Step::default()
+            }],
+            images: Vec::new(),
+            elapsed: None,
+            finished_at: None,
+            error: None,
+            aborted: false,
+        });
+        paint(cx, true, false);
+        let fold = cx.debug_bounds("turn-fold-0").expect("worked-for fold");
+        let thought0 = cx.debug_bounds("thought-card-0-0").expect("first thought");
+        let group0 = cx.debug_bounds("activity-group-0-0").expect("first tools");
+        let thought1 = cx.debug_bounds("thought-card-0-1").expect("second thought");
+        let group1 = cx.debug_bounds("activity-group-0-1").expect("second tools");
+        let thought2 = cx
+            .debug_bounds("thought-card-0-2")
+            .expect("thought on the first prose step");
+        let answer = cx.debug_bounds("assistant-step-0-2").expect("answer text");
+        assert!(fold.top() < thought0.top());
+        assert!(thought0.top() < group0.top());
+        assert!(group0.top() < thought1.top());
+        assert!(thought1.top() < group1.top());
+        assert!(group1.top() < thought2.top());
+        assert!(thought2.top() < answer.top());
+
         paint(cx, false, false);
-        assert!(cx.debug_bounds("thought-card-0-0").is_some());
-        assert!(cx.debug_bounds("thought-card-0-1").is_some());
         assert!(cx.debug_bounds("turn-fold-0").is_some());
+        assert!(
+            cx.debug_bounds("thought-card-0-0").is_none(),
+            "a pre-prose thought hides with the tools"
+        );
+        assert!(cx.debug_bounds("thought-card-0-1").is_none());
         assert!(cx.debug_bounds("activity-group-0-0").is_none());
         assert!(cx.debug_bounds("tool-card-0-0").is_none());
+        assert!(cx.debug_bounds("thought-card-0-2").is_some());
+        assert!(cx.debug_bounds("assistant-step-0-2").is_some());
+        messages.borrow_mut().pop();
 
         messages.borrow_mut()[0].steps = vec![
             Step {
@@ -11426,6 +11594,418 @@ mod tests {
             .filter(|block| block.text.contains("streaming thought unique"))
             .count();
         assert_eq!(streaming_copies, 1, "an open thought is not painted twice");
+    }
+
+    #[gpui::test]
+    fn earlier_rows_fold_pre_prose_work_and_keep_the_rest(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let tool = |name: &str| ToolCall {
+            name: name.into(),
+            summary: name.into(),
+            path: None,
+            added: 0,
+            removed: 0,
+            id: None,
+            args: None,
+            output: None,
+            failed: false,
+            facts: Default::default(),
+        };
+        let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(Vec::new()));
+        let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+        let paint = |cx: &mut gpui::VisualTestContext, open: bool| {
+            let scroller = MessageScrollerState::new(messages.borrow().len().max(1));
+            let view = cx.update(|_, cx| {
+                cx.new(|_| SelectTestView {
+                    messages: messages.clone(),
+                    state: state.clone(),
+                    scroller,
+                    main_width: px(900.),
+                    open_work: open,
+                    live: false,
+                })
+            });
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(1200.)),
+                |_, _| view.clone(),
+            );
+        };
+
+        messages.borrow_mut().push(ChatMessage {
+            user: false,
+            summary: None,
+            steps: vec![
+                Step {
+                    thinking: "unspoken".into(),
+                    tools: vec![tool("bash")],
+                    ..Step::default()
+                },
+            ],
+            images: Vec::new(),
+            elapsed: Some(Duration::from_secs(2)),
+            finished_at: None,
+            error: None,
+            aborted: true,
+        });
+        messages.borrow_mut().push(user_row("later"));
+        paint(cx, false);
+        assert!(cx.debug_bounds("turn-fold-0").is_some());
+        assert!(cx.debug_bounds("thought-card-0-0").is_none());
+        assert!(cx.debug_bounds("activity-group-0-0").is_none());
+        assert!(
+            cx.debug_bounds("stopped-marker").is_some(),
+            "Stopped stays outside the fold"
+        );
+        paint(cx, true);
+        assert!(cx.debug_bounds("thought-card-0-0").is_some());
+        assert!(cx.debug_bounds("activity-group-0-0").is_some());
+        assert!(cx.debug_bounds("stopped-marker").is_some());
+
+        messages.borrow_mut().clear();
+        messages.borrow_mut().push(ChatMessage {
+            user: false,
+            summary: None,
+            steps: vec![
+                Step {
+                    tools: vec![tool("bash")],
+                    ..Step::default()
+                },
+                Step {
+                    text: "Found it, checking the next file.".into(),
+                    ..Step::default()
+                },
+                Step {
+                    tools: vec![tool("read")],
+                    ..Step::default()
+                },
+                Step {
+                    text: "the answer".into(),
+                    ..Step::default()
+                },
+            ],
+            images: Vec::new(),
+            elapsed: Some(Duration::from_secs(4)),
+            finished_at: None,
+            error: None,
+            aborted: false,
+        });
+        messages.borrow_mut().push(user_row("later"));
+        paint(cx, false);
+        assert!(cx.debug_bounds("activity-group-0-0").is_none());
+        assert!(
+            cx.debug_bounds("activity-group-0-2").is_some(),
+            "work after the first prose stays outside the fold"
+        );
+        assert!(cx.debug_bounds("assistant-step-0-1").is_some());
+    }
+
+    #[gpui::test]
+    fn an_explicitly_opened_thought_stays_open_under_the_fold(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let messages: Rc<RefCell<Vec<ChatMessage>>> = Rc::new(RefCell::new(vec![
+            ChatMessage {
+                user: false,
+                summary: None,
+                steps: vec![
+                    Step {
+                        thinking: "kept open".into(),
+                        tools: vec![ToolCall {
+                            name: "bash".into(),
+                            summary: "bash".into(),
+                            path: None,
+                            added: 0,
+                            removed: 0,
+                            id: None,
+                            args: None,
+                            output: None,
+                            failed: false,
+                            facts: Default::default(),
+                        }],
+                        ..Step::default()
+                    },
+                    Step {
+                        text: "the answer".into(),
+                        ..Step::default()
+                    },
+                ],
+                images: Vec::new(),
+                elapsed: Some(Duration::from_secs(1)),
+                finished_at: None,
+                error: None,
+                aborted: false,
+            },
+            user_row("later"),
+        ]));
+        let state: TextSelectionState = Rc::new(RefCell::new(TextSelection::new()));
+        let thoughts: CollapsedThoughts = Rc::new(RefCell::new(HashMap::from([((0, 0), true)])));
+        let expanded_turns = Rc::new(RefCell::new(HashSet::new()));
+
+        struct OpenThoughtView {
+            messages: Rc<RefCell<Vec<ChatMessage>>>,
+            state: TextSelectionState,
+            thoughts: CollapsedThoughts,
+            expanded_turns: Rc<RefCell<HashSet<usize>>>,
+            open: bool,
+        }
+        impl gpui::Render for OpenThoughtView {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                let mut view = test_view(
+                    self.state.clone(),
+                    self.messages.clone(),
+                    MessageScrollerState::new(2),
+                );
+                view.collapsed_thoughts = self.thoughts.clone();
+                view.expanded_turns = self.expanded_turns.clone();
+                if self.open {
+                    view.expanded_turns.borrow_mut().insert(0);
+                }
+                render_transcript(view, cx)
+            }
+        }
+        let paint = |cx: &mut gpui::VisualTestContext, open: bool| {
+            let view = cx.update(|_, cx| {
+                cx.new(|_| OpenThoughtView {
+                    messages: messages.clone(),
+                    state: state.clone(),
+                    thoughts: thoughts.clone(),
+                    expanded_turns: expanded_turns.clone(),
+                    open,
+                })
+            });
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(1200.)),
+                |_, _| view.clone(),
+            );
+        };
+        paint(cx, false);
+        assert!(
+            cx.debug_bounds("thought-card-0-0").is_none(),
+            "the closed fold hides a thought the reader had opened"
+        );
+        paint(cx, true);
+        assert!(cx.debug_bounds("thought-card-0-0").is_some());
+        let copies = state
+            .borrow()
+            .blocks
+            .iter()
+            .filter(|block| block.text.contains("kept open"))
+            .count();
+        assert_eq!(copies, 1, "opening the fold shows the thought body again");
+    }
+
+    #[gpui::test]
+    fn a_new_prompt_shrinks_the_previous_assistant_row(cx: &mut gpui::TestAppContext) {
+        use crate::transcript::Transcript;
+
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let mut transcript = Transcript::new();
+        transcript.load_from(&serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "go"},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "first thought"},
+                    {"type": "toolCall", "name": "bash", "arguments": {"command": "echo one"}}
+                ]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "second thought"},
+                    {"type": "toolCall", "name": "read", "arguments": {"path": "src/a.rs"}}
+                ]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "closing thought"},
+                    {"type": "text", "text": "the answer is ready"}
+                ]}
+            ]
+        }));
+        struct HeightView {
+            transcript: Transcript,
+        }
+        impl gpui::Render for HeightView {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                self.transcript.render(
+                    None,
+                    px(800.),
+                    px(900.),
+                    crate::agent_call_display::AgentCallDisplay::Expanded,
+                    true,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    cx,
+                )
+            }
+        }
+        let view = cx.update(|_, cx| cx.new(|_| HeightView { transcript }));
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            let view = view.clone();
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(1400.)),
+                |_, _| view.clone(),
+            );
+        };
+        paint(cx);
+        paint(cx);
+        let before = cx
+            .debug_bounds("transcript-row-1")
+            .expect("latest assistant row")
+            .size
+            .height;
+        assert!(cx.debug_bounds("turn-fold-1").is_none());
+        assert!(cx.debug_bounds("activity-group-1-0").is_some());
+        cx.update(|_, cx| {
+            view.update(cx, |view, _| {
+                assert!(view.transcript.append_user_message("next", Vec::new()));
+            });
+        });
+        paint(cx);
+        paint(cx);
+        let after = cx
+            .debug_bounds("transcript-row-1")
+            .expect("folded assistant row")
+            .size
+            .height;
+        assert!(
+            after < before,
+            "the previous row shrinks once the next prompt lands, {after:?} vs {before:?}"
+        );
+        let fold = cx.debug_bounds("turn-fold-1").expect("worked for");
+        let previous = cx.debug_bounds("transcript-row-0").expect("first prompt");
+        assert!(
+            fold.top() - previous.bottom() < px(80.),
+            "the fold sits with the row, not below a stale gap"
+        );
+        let next = cx.debug_bounds("transcript-row-2").expect("new prompt");
+        let folded = cx.debug_bounds("transcript-row-1").expect("folded row");
+        assert!(
+            next.top() - folded.bottom() <= px(1.),
+            "the next prompt follows the folded row"
+        );
+    }
+
+    #[gpui::test]
+    fn a_steer_keeps_the_open_turn_unfolded_until_the_turn_finishes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::transcript::Transcript;
+
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| cx.set_global(theme::Theme::for_id(theme::ThemeKey::ORBIT)));
+        let mut transcript = Transcript::new();
+        transcript.load_from(&serde_json::json!({
+            "messages": [
+                {"role": "user", "content": "go"},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "first thought"},
+                    {"type": "toolCall", "name": "bash", "arguments": {"command": "echo one"}}
+                ]},
+                {"role": "assistant", "content": [
+                    {"type": "thinking", "thinking": "closing thought"},
+                    {"type": "text", "text": "the answer is ready"}
+                ]}
+            ]
+        }));
+        // The prompt at index 0 opened this turn. The steer below must not
+        // fold the assistant row while the turn is still open.
+        transcript.set_open_turn_start(Some(0));
+        struct HeightView {
+            transcript: Transcript,
+        }
+        impl gpui::Render for HeightView {
+            fn render(&mut self, _: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+                self.transcript.render(
+                    None,
+                    px(800.),
+                    px(900.),
+                    crate::agent_call_display::AgentCallDisplay::Expanded,
+                    true,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    cx,
+                )
+            }
+        }
+        let view = cx.update(|_, cx| cx.new(|_| HeightView { transcript }));
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            let view = view.clone();
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(1400.)),
+                |_, _| view.clone(),
+            );
+        };
+        paint(cx);
+        paint(cx);
+        let open_height = cx
+            .debug_bounds("transcript-row-1")
+            .expect("assistant row inside the open turn")
+            .size
+            .height;
+        assert!(cx.debug_bounds("turn-fold-1").is_none());
+        assert!(cx.debug_bounds("activity-group-1-0").is_some());
+        cx.update(|_, cx| {
+            view.update(cx, |view, _| {
+                assert!(view.transcript.append_user_message("steer", Vec::new()));
+            });
+        });
+        paint(cx);
+        paint(cx);
+        let steered_height = cx
+            .debug_bounds("transcript-row-1")
+            .expect("assistant row after the steer")
+            .size
+            .height;
+        // The assistant row stops being last, so it loses the last-row
+        // padding. The tools stay; that is the whole height change.
+        let theme = theme::Theme::for_id(theme::ThemeKey::ORBIT);
+        let last_row_pad = DynamicSpacing::Base24.px(&theme) - DynamicSpacing::Base08.px(&theme);
+        assert_eq!(
+            open_height - steered_height,
+            last_row_pad,
+            "a steer only drops the last-row padding"
+        );
+        assert!(
+            cx.debug_bounds("turn-fold-1").is_none(),
+            "a steer does not fold the work being watched"
+        );
+        assert!(cx.debug_bounds("activity-group-1-0").is_some());
+        cx.update(|_, cx| {
+            view.update(cx, |view, _| {
+                view.transcript.set_open_turn_start(None);
+            });
+        });
+        paint(cx);
+        paint(cx);
+        let finished_height = cx
+            .debug_bounds("transcript-row-1")
+            .expect("assistant row after the turn finishes")
+            .size
+            .height;
+        assert!(
+            finished_height < steered_height,
+            "finishing the turn remeasures the row the steer had kept open, {finished_height:?} vs {steered_height:?}"
+        );
+        assert!(
+            cx.debug_bounds("turn-fold-1").is_some(),
+            "the pre-steer row folds once the turn is closed"
+        );
+        assert!(cx.debug_bounds("activity-group-1-0").is_none());
+        assert!(cx.debug_bounds("assistant-step-1-1").is_some());
+        let steer = cx.debug_bounds("transcript-row-2").expect("steer");
+        let folded = cx.debug_bounds("transcript-row-1").expect("folded row");
+        assert!(
+            steer.top() - folded.bottom() <= px(1.),
+            "the steer follows the folded row, with no stale gap"
+        );
     }
 
     #[gpui::test]
@@ -11858,15 +12438,30 @@ mod tests {
                     finished_at: None,
                     error: None,
                     aborted: false,
-                }]));
+                },
+                ChatMessage {
+                    user: true,
+                    summary: None,
+                    steps: vec![Step {
+                        text: "next".into(),
+                        ..Step::default()
+                    }],
+                    images: Vec::new(),
+                    elapsed: None,
+                    finished_at: None,
+                    error: None,
+                    aborted: false,
+                },
+                ]));
+            // The list paints the assistant row. The later user message is
+            // what makes that row earlier, so `fold_open` gates the tools.
             let scroller = MessageScrollerState::new(1);
             (messages, scroller)
         };
 
         // `true` means the activity group painted its body — the only way a
-        // tool card inside it exists at all. `fold_open` opens the settled
-        // turn fold, which is what makes pre-answer work visible once a run
-        // has finished.
+        // tool card inside it exists at all. `fold_open` opens Worked for on
+        // the earlier row, which is what makes the pre-prose tools visible.
         let group_open = |cx: &mut gpui::VisualTestContext,
                           mode: AgentCallDisplay,
                           live: bool,
@@ -11906,6 +12501,10 @@ mod tests {
         assert!(
             group_open(cx, AgentCallDisplay::Expanded, false, true, false),
             "always expanded keeps a settled group open"
+        );
+        assert!(
+            !group_open(cx, AgentCallDisplay::Expanded, false, false, false),
+            "a closed Worked for hides the group even when calls stay expanded"
         );
         assert!(
             !group_open(cx, AgentCallDisplay::Collapsed, true, false, false),

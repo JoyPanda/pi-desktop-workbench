@@ -374,6 +374,7 @@ impl OrbitApp {
         // an extra number for a row that was never stored.
         if opened && !appended {
             self.turns.cancel_begin();
+            self.transcript.set_open_turn_start(self.turns.open_start());
             self.push_turn_records(cx);
         }
         if self.transcript.first_user_message().is_some() {
@@ -450,6 +451,7 @@ impl OrbitApp {
         if !self.turns.begin(index) {
             return false;
         }
+        self.transcript.set_open_turn_start(Some(index));
         self.push_turn_records(cx);
         let Some(session) = self.session_id.clone() else {
             return true;
@@ -476,6 +478,7 @@ impl OrbitApp {
     pub(super) fn finish_turn(&mut self, cx: &mut Context<Self>) {
         let capture = self.turns.open;
         self.turns.finish();
+        self.transcript.set_open_turn_start(None);
         self.push_turn_records(cx);
         // Last Turn already reloaded from the records just pushed. Git
         // sources still need a worktree refresh.
@@ -507,6 +510,7 @@ impl OrbitApp {
     /// Forget the active session's turn clock and clear Last Turn's records.
     pub(super) fn reset_turns(&mut self, cx: &mut Context<Self>) {
         self.turns = crate::turn_review::TurnClock::default();
+        self.transcript.set_open_turn_start(None);
         // The find hits belong to the previous session's transcript.
         self.transcript_search = None;
         self.push_turn_records(cx);
@@ -546,6 +550,7 @@ impl OrbitApp {
     pub(super) fn rebuild_turn_clock(&mut self) {
         let indices = self.transcript.user_message_indices();
         self.turns.rebuild(&indices);
+        self.transcript.set_open_turn_start(self.turns.open_start());
     }
 
     /// Forget the queued-message mirror and any in-flight wire counters —
@@ -4787,6 +4792,99 @@ mod quota_reset_tests {
         assert_eq!(
             quota_reset_hint(past, now),
             format!("resets {}", format_epoch_ms(past))
+        );
+    }
+}
+
+#[cfg(test)]
+mod finish_turn_fold_tests {
+    use super::super::OrbitApp;
+    use gpui::{point, px, AppContext, Context, Entity, Render, Window};
+
+    struct TurnFoldProbe {
+        app: Entity<OrbitApp>,
+    }
+
+    impl Render for TurnFoldProbe {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+            self.app.update(cx, |app, cx| {
+                app.transcript.render(
+                    None,
+                    px(900.),
+                    px(900.),
+                    crate::agent_call_display::AgentCallDisplay::Expanded,
+                    true,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    cx,
+                )
+            })
+        }
+    }
+
+    /// `finish_turn` is what closes the clock. Calling
+    /// `Transcript::set_open_turn_start` directly would stay green if that
+    /// line were removed.
+    #[gpui::test]
+    fn finish_turn_folds_the_row_a_steer_kept_open(cx: &mut gpui::TestAppContext) {
+        use crate::theme::{Theme, ThemeKey};
+
+        cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+        let cx = cx.add_empty_window();
+        let app = cx.update(|_, cx| cx.new(|cx| OrbitApp::new(cx)));
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                assert!(app.begin_turn(cx));
+                app.transcript.load_from(&serde_json::json!({
+                    "messages": [
+                        {"role": "user", "content": "go"},
+                        {"role": "assistant", "content": [
+                            {"type": "thinking", "thinking": "first thought"},
+                            {"type": "toolCall", "name": "bash", "arguments": {"command": "echo one"}}
+                        ]},
+                        {"role": "assistant", "content": [
+                            {"type": "thinking", "thinking": "closing thought"},
+                            {"type": "text", "text": "the answer is ready"}
+                        ]}
+                    ]
+                }));
+                assert!(app.transcript.append_user_message("steer", Vec::new()));
+            });
+        });
+        let paint = |cx: &mut gpui::VisualTestContext| {
+            let app = app.clone();
+            cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(1400.)),
+                |_, cx| cx.new(|_| TurnFoldProbe { app: app.clone() }),
+            );
+        };
+        paint(cx);
+        paint(cx);
+        assert!(
+            cx.debug_bounds("turn-fold-1").is_none(),
+            "a steer leaves the open turn unfolded"
+        );
+        assert!(cx.debug_bounds("activity-group-1-0").is_some());
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| app.finish_turn(cx));
+        });
+        paint(cx);
+        paint(cx);
+        assert!(
+            cx.debug_bounds("turn-fold-1").is_some(),
+            "finish_turn folds the row the steer had kept open"
+        );
+        assert!(cx.debug_bounds("activity-group-1-0").is_none());
+        assert!(cx.debug_bounds("assistant-step-1-1").is_some());
+        let steer = cx.debug_bounds("transcript-row-2").expect("steer");
+        let folded = cx.debug_bounds("transcript-row-1").expect("folded row");
+        assert!(
+            steer.top() - folded.bottom() <= px(1.),
+            "finish_turn remeasures the folded row"
         );
     }
 }

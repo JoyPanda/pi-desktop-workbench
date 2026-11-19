@@ -110,6 +110,16 @@ impl TurnClock {
         self.latest = self.starts.last().map(|(turn, _)| *turn);
     }
 
+    /// Message index of the user row that opened the turn still in progress.
+    /// `None` once the turn has finished, so a reloaded clock (not open)
+    /// treats every user row as a fold boundary.
+    pub(crate) fn open_start(&self) -> Option<usize> {
+        if !self.open {
+            return None;
+        }
+        self.starts.last().map(|(_, index)| *index)
+    }
+
     /// Close the open turn. `latest` stays on the last recorded start, not on
     /// `count`: a checkpoint ref may have raised `count` past any turn the
     /// conversation actually has.
