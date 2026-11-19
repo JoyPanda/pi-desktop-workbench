@@ -519,6 +519,26 @@ impl OrbitApp {
     /// Push each turn's `edit` / `write` calls, and the latest turn number,
     /// to the docked Review pane. Records stay off the Git page; it only
     /// receives the turn number so its stored context does not go stale.
+    /// Drop the side pane's conversation diff before the session context moves.
+    /// `set_turn_context` reloads Last Turn from whatever records are still
+    /// stored, so emptying them first keeps the click frame from painting the
+    /// session being left.
+    fn clear_review_records_for_switch(&mut self, cx: &mut Context<Self>) {
+        self.sidepane.update(cx, |pane, cx| {
+            pane.set_turn_records(crate::turn_review::TurnRecords::default(), cx);
+        });
+    }
+
+    fn note_session_switch(&mut self) {
+        self.session_generation = self.session_generation.wrapping_add(1);
+    }
+
+    /// The full scan waits for the next heartbeat, and only if the reader is
+    /// still on this switch.
+    fn schedule_turn_records(&mut self) {
+        self.pending_turn_records = Some(self.session_generation);
+    }
+
     pub(super) fn push_turn_records(&mut self, cx: &mut Context<Self>) {
         let len = self.transcript.message_count();
         let start = self.turns.ranges(len).last().map(|&(_, start, _)| start);
@@ -711,6 +731,9 @@ impl OrbitApp {
         // that has already moved on.
         self.invalidate_pending_spawn();
         let Some(client) = self.client.take() else {
+            // No process left to apply them. Leaving them would paint the
+            // outgoing session's replies onto whatever is adopted next.
+            self.foreground_events.clear();
             return;
         };
         let busy = self.busy
@@ -739,7 +762,8 @@ impl OrbitApp {
         self.prompt_in_flight = None;
         self.retrying = false;
         self.is_compacting = false;
-        let transcript = std::mem::replace(&mut self.transcript, Transcript::new());
+        let mut transcript = std::mem::replace(&mut self.transcript, Transcript::new());
+        transcript.park_presentation();
         let widgets = std::mem::take(&mut self.extension_widgets);
         let subagents = std::mem::take(&mut self.subagents);
         let subagent_scrolls = std::mem::take(&mut self.subagent_scrolls);
@@ -766,6 +790,8 @@ impl OrbitApp {
             draft: self.parking_draft.take(),
             discard: std::mem::take(&mut self.parking_discard),
             startup_model_pinned,
+            // Events the budget has not applied yet belong to this process.
+            pending: std::mem::take(&mut self.foreground_events),
         };
         match self.current_session_path.take() {
             Some(path) => self.park(path, parked),
@@ -1968,6 +1994,8 @@ impl OrbitApp {
         // Paint while there is still no client: once the parked process is
         // adopted, the chips belong to it and `paint_unsent_model` no-ops.
         let startup_model_pinned = parked.startup_model_pinned;
+        self.note_session_switch();
+        self.clear_review_records_for_switch(cx);
         self.current_draft_id = Some(id);
         self.paint_unsent_model();
         let title = self
@@ -1976,9 +2004,10 @@ impl OrbitApp {
             .find(|draft| draft.id == id)
             .and_then(|draft| draft.sent_title.clone());
         self.adopt_client(parked.client);
+        self.foreground_events = parked.pending;
         self.transcript = parked.transcript;
+        self.transcript.present();
         self.turns = parked.turns;
-        self.push_turn_records(cx);
         self.busy = parked.busy;
         self.execution = parked.execution;
         self.prompt_in_flight = self.execution.prompt_id.clone();
@@ -2026,6 +2055,7 @@ impl OrbitApp {
         self.refresh_context_stats();
         self.add_workspace(cwd.clone(), cx);
         self.set_current_workspace(cwd, cx);
+        self.schedule_turn_records();
         self.restore_draft_composer(id, cx);
         cx.notify();
     }
@@ -2258,11 +2288,15 @@ impl OrbitApp {
             self.cancel_custom_surfaces(cx);
             self.cancel_open_dialog(cx);
             if !draft.bound {
-                if let Some(path) = self
+                // The reply may already have moved into the app queue. The
+                // channel is drained after that queue, so a name still in the
+                // channel is the newer one. Scanning does not apply either.
+                let queued = super::events::newest_session_file(&self.foreground_events);
+                let buffered = self
                     .client
                     .as_mut()
-                    .and_then(|client| Self::session_file_in_buffer(client))
-                {
+                    .and_then(|client| Self::session_file_in_buffer(client));
+                if let Some(path) = buffered.or(queued) {
                     self.delete_header_only_file(&path);
                 }
             }
@@ -2380,11 +2414,17 @@ impl OrbitApp {
         if self.current_session_path.as_ref() == Some(&session.path) && self.client.is_some() {
             return;
         }
-        self.model_selector = None;
+        // A draft click can return without leaving this session: it is already
+        // open, no longer listed, or its promoted file cannot be resolved.
+        // Bumping the generation first would wipe Review and drop the scan
+        // that was supposed to put it back.
         if let Some(id) = session.draft {
             self.open_listed_draft(id, cx);
             return;
         }
+        self.note_session_switch();
+        self.clear_review_records_for_switch(cx);
+        self.model_selector = None;
         self.cancel_fork_followup();
         // Native dialogs and approvals stay pending with their own session.
         self.cancel_custom_surfaces(cx);
@@ -2401,7 +2441,6 @@ impl OrbitApp {
         // either way so the outgoing session cannot leak into the next one;
         // a warm resume puts its own clock back below.
         self.turns = crate::turn_review::TurnClock::default();
-        self.push_turn_records(cx);
         // The queue belongs to the session we just left; the target's state
         // re-establishes it from `get_state`/`queue_update`.
         self.reset_queue();
@@ -2448,10 +2487,11 @@ impl OrbitApp {
             // the process channel streams in from the next tick on.
             let startup_model_pinned = parked.startup_model_pinned;
             self.adopt_client(parked.client);
+            self.foreground_events = parked.pending;
             self.startup_model_pinned = startup_model_pinned;
             self.transcript = parked.transcript;
+            self.transcript.present();
             self.turns = parked.turns;
-            self.push_turn_records(cx);
             self.busy = parked.busy;
             self.execution = parked.execution;
             self.prompt_in_flight = self.execution.prompt_id.clone();
@@ -2577,10 +2617,10 @@ impl OrbitApp {
         // Opening a session keeps its folder in Orbit's own sidebar list.
         self.add_workspace(session.cwd.clone(), cx);
         self.set_current_workspace(session.cwd.clone(), cx);
-        // The warm resume above pushed the card while `current_workspace`
-        // still named the session being left. Push again so absolute tool
-        // paths normalize against the session that is now on screen.
-        self.push_turn_records(cx);
+        // The scan needs the workspace that is now current, so paths normalize
+        // against the session on screen. It runs on the next heartbeat, not
+        // on this click.
+        self.schedule_turn_records();
         self.current_session_path = Some(session.path.clone());
         // The incoming session's own draft (if any) lands in the composer —
         // never the previous session's half-written text.

@@ -137,6 +137,26 @@ struct Style {
 pub(crate) struct MdBlock {
     pub index: u16,
     pub kind: Block,
+    /// Byte range of this block in the source it was parsed from, including
+    /// markers. Nested quote and alert children carry their own ranges, so a
+    /// live veil can split at the last unclosed block instead of mid-token.
+    pub source: std::ops::Range<usize>,
+}
+
+/// Start of the last block in the tree. A quote or alert defers to its last
+/// child, so the split lands on that child's boundary.
+pub(crate) fn unclosed_block_start(blocks: &[MdBlock]) -> Option<usize> {
+    blocks.last().map(last_unclosed_start)
+}
+
+fn last_unclosed_start(block: &MdBlock) -> usize {
+    match &block.kind {
+        Block::Quote(children) | Block::Alert(_, children) => children
+            .last()
+            .map(last_unclosed_start)
+            .unwrap_or(block.source.start),
+        _ => block.source.start,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -227,6 +247,13 @@ struct Walker<'a> {
     events: Vec<(Event<'a>, Range<usize>)>,
     cursor: usize,
     next_index: u16,
+    /// End offset of the event most recently consumed.
+    last_end: usize,
+    /// Source start of the list currently being read. Nested lists save and
+    /// restore it.
+    list_origin: usize,
+    /// Source start of the inline run currently being accumulated.
+    text_origin: Option<usize>,
     /// Source offset through which text is dropped because it belongs to a
     /// bare URL that started in an earlier event. Style start/end events in
     /// that span still update the style stack.
@@ -244,6 +271,9 @@ impl<'a> Walker<'a> {
             events,
             cursor: 0,
             next_index: 0,
+            last_end: 0,
+            list_origin: 0,
+            text_origin: None,
             suppress_until: 0,
             pending_checked: None,
         }
@@ -255,10 +285,11 @@ impl<'a> Walker<'a> {
         index
     }
 
-    fn block(&mut self, kind: Block) -> MdBlock {
+    fn block(&mut self, start: usize, kind: Block) -> MdBlock {
         MdBlock {
             index: self.alloc(),
             kind,
+            source: start..self.last_end.max(start),
         }
     }
 
@@ -274,8 +305,10 @@ impl<'a> Walker<'a> {
     }
 
     fn bump(&mut self) -> Option<Event<'a>> {
+        let range = self.peek_range();
         let event = self.peek()?;
         self.cursor += 1;
+        self.last_end = range.end;
         Some(event)
     }
 
@@ -316,8 +349,9 @@ impl<'a> Walker<'a> {
             Some(Event::Start(Tag::Table(_))) => vec![self.read_table()],
             Some(Event::Start(Tag::HtmlBlock)) => self.read_html(),
             Some(Event::Rule) => {
+                let start = self.peek_range().start;
                 self.bump();
-                vec![self.block(Block::Rule)]
+                vec![self.block(start, Block::Rule)]
             }
             Some(Event::Start(
                 Tag::FootnoteDefinition(_)
@@ -340,17 +374,20 @@ impl<'a> Walker<'a> {
         let mut out = Vec::new();
         for chunk in chunks {
             match chunk {
-                Chunk::Text(text) if !text.is_blank() => {
-                    out.push(self.block(Block::Paragraph(text)))
+                Chunk::Text(text, start) if !text.is_blank() => {
+                    out.push(self.block(start, Block::Paragraph(text)))
                 }
-                Chunk::Image { alt, url } => out.push(self.block(Block::Image { alt, url })),
-                Chunk::Text(_) => {}
+                Chunk::Image { alt, url, start } => {
+                    out.push(self.block(start, Block::Image { alt, url }))
+                }
+                Chunk::Text(_, _) => {}
             }
         }
         out
     }
 
     fn read_heading(&mut self) -> Vec<MdBlock> {
+        let start = self.peek_range().start;
         let level = match self.bump() {
             Some(Event::Start(Tag::Heading { level, .. })) => level,
             _ => return Vec::new(),
@@ -359,11 +396,12 @@ impl<'a> Walker<'a> {
         if text.is_blank() {
             Vec::new()
         } else {
-            vec![self.block(Block::Heading(level as u8, text))]
+            vec![self.block(start, Block::Heading(level as u8, text))]
         }
     }
 
     fn read_code(&mut self) -> MdBlock {
+        let start = self.peek_range().start;
         let language = match self.bump() {
             Some(Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info)))) => {
                 fence_language(&info)
@@ -381,10 +419,11 @@ impl<'a> Walker<'a> {
             self.bump();
         }
         let lines = code_lines(&body);
-        self.block(Block::Code(language, lines))
+        self.block(start, Block::Code(language, lines))
     }
 
     fn read_quote(&mut self, depth: usize) -> Vec<MdBlock> {
+        let source_start = self.peek_range().start;
         let kind = match self.bump() {
             Some(Event::Start(Tag::BlockQuote(kind))) => kind,
             _ => return Vec::new(),
@@ -401,7 +440,11 @@ impl<'a> Walker<'a> {
             Some(kind) => Block::Alert(alert_kind(kind), children),
             None => Block::Quote(children),
         };
-        vec![MdBlock { index, kind }]
+        vec![MdBlock {
+            index,
+            kind,
+            source: source_start..self.last_end.max(source_start),
+        }]
     }
 
     fn bump_quote_end(&mut self) {
@@ -411,6 +454,7 @@ impl<'a> Walker<'a> {
     }
 
     fn read_html(&mut self) -> Vec<MdBlock> {
+        let start = self.peek_range().start;
         self.bump();
         let mut literal = String::new();
         let mut out = Vec::new();
@@ -419,10 +463,10 @@ impl<'a> Walker<'a> {
                 Some(Event::Html(html)) => {
                     let pieces = html_pieces(&html);
                     if images_only(&pieces) {
-                        self.flush_literal(&mut literal, &mut out);
+                        self.flush_literal(&mut literal, &mut out, start);
                         for piece in pieces {
                             if let HtmlPiece::Image { alt, url } = piece {
-                                out.push(self.block(Block::Image { alt, url }));
+                                out.push(self.block(start, Block::Image { alt, url }));
                             }
                         }
                     } else {
@@ -436,20 +480,24 @@ impl<'a> Walker<'a> {
         if matches!(self.peek(), Some(Event::End(TagEnd::HtmlBlock))) {
             self.bump();
         }
-        self.flush_literal(&mut literal, &mut out);
+        self.flush_literal(&mut literal, &mut out, start);
         out
     }
 
-    fn flush_literal(&mut self, literal: &mut String, out: &mut Vec<MdBlock>) {
+    fn flush_literal(&mut self, literal: &mut String, out: &mut Vec<MdBlock>, start: usize) {
         let text = std::mem::take(literal);
         let trimmed = text.trim_end();
         if trimmed.trim().is_empty() {
             return;
         }
-        out.push(self.block(Block::Paragraph(RichText::from_plain(trimmed.to_string()))));
+        out.push(self.block(
+            start,
+            Block::Paragraph(RichText::from_plain(trimmed.to_string())),
+        ));
     }
 
     fn read_table(&mut self) -> MdBlock {
+        let start = self.peek_range().start;
         let aligns = match self.bump() {
             Some(Event::Start(Tag::Table(aligns))) => aligns.into_iter().map(table_align).collect(),
             _ => Vec::new(),
@@ -486,11 +534,14 @@ impl<'a> Walker<'a> {
                 row.push(RichText::default());
             }
         }
-        self.block(Block::Table {
-            header,
-            rows,
-            aligns,
-        })
+        self.block(
+            start,
+            Block::Table {
+                header,
+                rows,
+                aligns,
+            },
+        )
     }
 
     fn read_cells_until(&mut self, end: TagEnd) -> Vec<RichText> {
@@ -515,9 +566,14 @@ impl<'a> Walker<'a> {
 
     fn read_list(&mut self, depth: usize, quote_depth: usize) -> Vec<MdBlock> {
         let depth = depth.min(2);
+        let saved_origin = self.list_origin;
+        self.list_origin = self.peek_range().start;
         let start = match self.bump() {
             Some(Event::Start(Tag::List(start))) => start,
-            _ => return Vec::new(),
+            _ => {
+                self.list_origin = saved_origin;
+                return Vec::new();
+            }
         };
         let ordered = start.is_some();
         let mut number = start.unwrap_or(1);
@@ -621,7 +677,8 @@ impl<'a> Walker<'a> {
                         }
                         if after_break && !extra.is_blank() {
                             self.flush_items(&mut items, &mut out);
-                            out.push(self.block(Block::Paragraph(extra)));
+                            let start = self.text_origin.take().unwrap_or(self.last_end);
+                            out.push(self.block(start, Block::Paragraph(extra)));
                         }
                     }
                 }
@@ -643,7 +700,10 @@ impl<'a> Walker<'a> {
                 );
             } else if !text.is_blank() {
                 self.flush_items(&mut items, &mut out);
-                out.push(self.block(Block::Paragraph(text)));
+                let start = self.text_origin.take().unwrap_or(self.last_end);
+                out.push(self.block(start, Block::Paragraph(text)));
+            } else {
+                self.text_origin = None;
             }
             if matches!(self.peek(), Some(Event::End(TagEnd::Item))) {
                 self.bump();
@@ -653,6 +713,7 @@ impl<'a> Walker<'a> {
             self.bump();
         }
         self.flush_items(&mut items, &mut out);
+        self.list_origin = saved_origin;
         out
     }
 
@@ -678,6 +739,7 @@ impl<'a> Walker<'a> {
         if !image || !self.block_image_at(self.cursor) {
             return false;
         }
+        let start = self.peek_range().start;
         let (alt, url, _) = self.read_image();
         if url.is_empty() {
             text.push_styled(&alt, &Style::default());
@@ -687,7 +749,7 @@ impl<'a> Walker<'a> {
             items, text, checked, depth, ordered, number, accounted, true,
         );
         self.flush_items(items, out);
-        out.push(self.block(Block::Image { alt, url }));
+        out.push(self.block(start, Block::Image { alt, url }));
         *after_break = true;
         true
     }
@@ -707,18 +769,18 @@ impl<'a> Walker<'a> {
     ) {
         for chunk in chunks {
             match chunk {
-                Chunk::Text(rich) if rich.is_blank() => {}
-                Chunk::Text(rich) if !*after_break => text.join_space(rich),
-                Chunk::Text(rich) => {
+                Chunk::Text(rich, _) if rich.is_blank() => {}
+                Chunk::Text(rich, _) if !*after_break => text.join_space(rich),
+                Chunk::Text(rich, start) => {
                     self.flush_items(items, out);
-                    out.push(self.block(Block::Paragraph(rich)));
+                    out.push(self.block(start, Block::Paragraph(rich)));
                 }
-                Chunk::Image { alt, url } => {
+                Chunk::Image { alt, url, start } => {
                     self.close_item(
                         items, text, checked, depth, ordered, number, accounted, true,
                     );
                     self.flush_items(items, out);
-                    out.push(self.block(Block::Image { alt, url }));
+                    out.push(self.block(start, Block::Image { alt, url }));
                     *after_break = true;
                 }
             }
@@ -779,13 +841,17 @@ impl<'a> Walker<'a> {
             *number += 1;
         }
         *accounted = true;
+        // The list block is addressed from `list_origin`. A tight item has
+        // no paragraph event, so its inline origin would otherwise become
+        // the start of the next paragraph.
+        self.text_origin = None;
     }
 
     fn flush_items(&mut self, items: &mut Vec<ListItem>, out: &mut Vec<MdBlock>) {
         if items.is_empty() {
             return;
         }
-        out.push(self.block(Block::List(std::mem::take(items))));
+        out.push(self.block(self.list_origin, Block::List(std::mem::take(items))));
     }
 
     fn apply_checked(&mut self, checked: &mut Option<bool>) {
@@ -836,7 +902,8 @@ impl<'a> Walker<'a> {
             self.bump();
         }
         if !rich.is_blank() {
-            chunks.push(Chunk::Text(rich));
+            let start = self.text_origin.take().unwrap_or(self.last_end);
+            chunks.push(Chunk::Text(rich, start));
         }
         chunks
     }
@@ -852,7 +919,7 @@ impl<'a> Walker<'a> {
                 let chunks = self.read_paragraph();
                 for chunk in chunks {
                     match chunk {
-                        Chunk::Text(text) => rich.join_space(text),
+                        Chunk::Text(text, _) => rich.join_space(text),
                         Chunk::Image { alt, .. } => rich.push_styled(&alt, &Style::default()),
                     }
                 }
@@ -865,6 +932,10 @@ impl<'a> Walker<'a> {
         if matches!(self.peek(), Some(Event::End(tag)) if tag == end) {
             self.bump();
         }
+        // Headings and table cells consume inlines but publish their own
+        // block start. Leaving the origin set makes the next paragraph claim
+        // a byte inside the heading or the first cell.
+        self.text_origin = None;
         rich
     }
 
@@ -875,15 +946,17 @@ impl<'a> Walker<'a> {
         }
         match self.peek() {
             Some(Event::Start(Tag::Image { .. })) => {
+                let start = self.peek_range().start;
                 let (alt, url, _) = self.read_image();
                 self.flush_rich(rich, chunks);
                 if url.is_empty() {
                     rich.push_styled(&alt, &Style::default());
                 } else {
-                    chunks.push(Chunk::Image { alt, url });
+                    chunks.push(Chunk::Image { alt, url, start });
                 }
             }
             Some(Event::InlineHtml(_)) => {
+                let start = self.peek_range().start;
                 let html = match self.bump() {
                     Some(Event::InlineHtml(html)) => html.to_string(),
                     _ => return true,
@@ -891,7 +964,7 @@ impl<'a> Walker<'a> {
                 self.flush_rich(rich, chunks);
                 for piece in html_pieces(&html) {
                     if let HtmlPiece::Image { alt, url } = piece {
-                        chunks.push(Chunk::Image { alt, url });
+                        chunks.push(Chunk::Image { alt, url, start });
                     }
                 }
             }
@@ -908,7 +981,8 @@ impl<'a> Walker<'a> {
             rich.spans.clear();
             return;
         }
-        chunks.push(Chunk::Text(std::mem::take(rich)));
+        let start = self.text_origin.take().unwrap_or(self.last_end);
+        chunks.push(Chunk::Text(std::mem::take(rich), start));
     }
 
     fn next_is_line_image(&self) -> bool {
@@ -1068,6 +1142,9 @@ impl<'a> Walker<'a> {
             return false;
         };
         let range = self.peek_range();
+        if self.text_origin.is_none() {
+            self.text_origin = Some(range.start);
+        }
         match event {
             Event::Start(Tag::Emphasis) => {
                 style.italic = style.italic.saturating_add(1);
@@ -1340,8 +1417,12 @@ impl<'a> Walker<'a> {
 }
 
 enum Chunk {
-    Text(RichText),
-    Image { alt: String, url: String },
+    Text(RichText, usize),
+    Image {
+        alt: String,
+        url: String,
+        start: usize,
+    },
 }
 
 fn is_breaking(event: &Event<'_>) -> bool {
@@ -1614,6 +1695,44 @@ mod tests {
     #[test]
     fn paragraphs_join_soft_breaks_with_a_space() {
         assert_eq!(paragraph("one\ntwo"), "one two");
+    }
+
+    #[test]
+    fn a_tight_list_does_not_lend_its_origin_to_the_next_paragraph() {
+        let text = "- alpha\n- beta\n\nstill going";
+        let blocks = parse_blocks(text);
+        assert!(
+            blocks.iter().any(|block| matches!(block.kind, Block::List(_))),
+            "expected a list"
+        );
+        let para = blocks
+            .iter()
+            .find(|block| matches!(block.kind, Block::Paragraph(_)))
+            .expect("paragraph");
+        let slice = &text[para.source.clone()];
+        assert!(slice.contains("still"), "paragraph source is {slice:?}");
+        assert!(
+            !slice.contains("alpha"),
+            "the paragraph must not start inside the list, got {slice:?}"
+        );
+    }
+
+    #[test]
+    fn a_heading_does_not_lend_its_origin_to_the_next_paragraph() {
+        let text = "# Title\n\nstill going";
+        let blocks = parse_blocks(text);
+        let heading = blocks.first().expect("heading");
+        assert!(matches!(heading.kind, Block::Heading(1, _)));
+        let para = blocks
+            .iter()
+            .find(|block| matches!(block.kind, Block::Paragraph(_)))
+            .expect("paragraph");
+        let slice = &text[para.source.clone()];
+        assert!(slice.contains("still"), "paragraph source is {slice:?}");
+        assert!(
+            !slice.contains("Title"),
+            "the paragraph must not start inside the heading, got {slice:?}"
+        );
     }
 
     #[test]

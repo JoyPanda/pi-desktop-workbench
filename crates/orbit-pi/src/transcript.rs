@@ -1103,6 +1103,24 @@ pub struct Transcript {
     /// the app's turn clock is closed. Kept here so a new prompt can remeasure
     /// the assistant rows it just folded without the view owning the clock.
     open_turn_start: Cell<Option<usize>>,
+    /// False while this transcript sits in a parked session. Layout and the
+    /// changed-files card stay frozen; row heights that would have been
+    /// invalidated are recorded in [`Self::dirty_rows`] instead.
+    presented: bool,
+    /// Bumped on `load_from` and `clear`. The markdown cache mixes it into
+    /// the key so a reloaded session does not reuse blocks parsed for the
+    /// previous contents of the same slot.
+    load_generation: u64,
+    /// Rows whose height changed while parked. Flushed on adopt, inside the
+    /// update and before notify.
+    dirty_rows: Rc<RefCell<HashSet<usize>>>,
+    /// Rows whose text or open tool output changed and have not been
+    /// invalidated yet. The heartbeat commits them on the 120ms cadence.
+    /// Tool output keeps its own row: after `MessageEnd` nothing is streaming.
+    stream_paint_rows: Rc<RefCell<HashSet<usize>>>,
+    /// A foreground review-card refresh is waiting for the same cadence.
+    /// `AgentSettled` and an explicit scope change do not wait.
+    review_refresh_pending: Cell<bool>,
 }
 
 impl Transcript {
@@ -1154,7 +1172,87 @@ impl Transcript {
             awaiting_reply: Rc::new(Cell::new(false)),
             user_turns: Rc::new(RefCell::new((0, Rc::new(Vec::new())))),
             open_turn_start: Cell::new(None),
+            presented: true,
+            load_generation: 0,
+            dirty_rows: Rc::new(RefCell::new(HashSet::new())),
+            stream_paint_rows: Rc::new(RefCell::new(HashSet::new())),
+            review_refresh_pending: Cell::new(false),
         }
+    }
+
+    /// This transcript is on screen. Parked transcripts are data-only.
+    pub(crate) fn is_presented(&self) -> bool {
+        self.presented
+    }
+
+    /// Leave the render tree. Later height changes accumulate in the dirty set.
+    /// Rows already waiting on the stream cadence move there too, so the
+    /// resume frame measures them with everything that changed while parked.
+    pub(crate) fn park_presentation(&mut self) {
+        self.presented = false;
+        self.dirty_rows
+            .borrow_mut()
+            .extend(self.stream_paint_rows.borrow_mut().drain());
+    }
+
+    /// Back on screen. Invalidate every row that changed while parked, before
+    /// the adopt update notifies.
+    pub(crate) fn present(&mut self) {
+        self.presented = true;
+        self.flush_dirty_rows();
+    }
+
+    fn bump_load_generation(&mut self) {
+        self.load_generation = self.load_generation.wrapping_add(1);
+    }
+
+    #[cfg(test)]
+    fn dirty_rows(&self) -> Vec<usize> {
+        let mut rows: Vec<usize> = self.dirty_rows.borrow().iter().copied().collect();
+        rows.sort_unstable();
+        rows
+    }
+
+    fn flush_dirty_rows(&mut self) {
+        let rows: Vec<usize> = self.dirty_rows.borrow_mut().drain().collect();
+        for ix in rows {
+            self.scroller.remeasure_items(ix..ix + 1);
+            self.scroller.note_activity();
+        }
+    }
+
+    /// A streaming text or tool-output delta. The string is already current;
+    /// the row height waits for the heartbeat unless the transcript is parked.
+    fn defer_stream_row(&self, ix: usize) {
+        if !self.presented {
+            self.dirty_rows.borrow_mut().insert(ix);
+            return;
+        }
+        self.stream_paint_rows.borrow_mut().insert(ix);
+    }
+
+    /// Invalidate every row deferred since the last commit.
+    pub(crate) fn commit_pending_stream_row(&self) -> bool {
+        if !self.presented {
+            return false;
+        }
+        let rows: Vec<usize> = self.stream_paint_rows.borrow_mut().drain().collect();
+        if rows.is_empty() {
+            return false;
+        }
+        for ix in rows {
+            self.remeasure_row(ix);
+        }
+        true
+    }
+
+    /// Apply a review-card refresh that was coalesced onto the stream cadence.
+    pub(crate) fn flush_pending_review(&mut self) -> bool {
+        if !self.presented || !self.review_refresh_pending.replace(false) {
+            return false;
+        }
+        self.rebuild_review_card();
+        true
     }
 
     /// Remember which user row opened the turn still in progress.
@@ -1294,6 +1392,8 @@ impl Transcript {
 
     /// Rebuild the whole transcript from a `get_messages` response payload.
     pub fn load_from(&mut self, data: &Value) {
+        self.bump_load_generation();
+        self.stream_paint_rows.borrow_mut().clear();
         self.text_selection.borrow_mut().clear();
         let mut parsed = Vec::new();
         let mut waiting: Vec<ChatMessage> = Vec::new();
@@ -1412,6 +1512,7 @@ impl Transcript {
 
     /// Clear for a fresh session.
     pub fn clear(&mut self) {
+        self.bump_load_generation();
         *self.messages.borrow_mut() = Vec::new();
         self.held_notices.clear();
         self.awaiting_new_session = false;
@@ -1419,6 +1520,7 @@ impl Transcript {
         self.text_selection.borrow_mut().clear();
         self.scroller.reset(0);
         self.streaming.set(None);
+        self.stream_paint_rows.borrow_mut().clear();
         self.seed_text.set(false);
         self.seed_thinking.set(false);
         self.stream_started.set(None);
@@ -1464,26 +1566,26 @@ impl Transcript {
                 let changed = self.on_message_boundary(value);
                 // A steer user row hides the card on the way in. The latest
                 // turn's start did not move, so put that turn's files back.
-                self.refresh_review_card();
+                self.request_review_refresh();
                 changed
             }
             Event::MessageUpdate { assistant, usage } => {
                 let changed = self.on_message_update(assistant, usage);
                 if matches!(assistant, Some(AssistantMessageEvent::ToolcallEnd { .. })) {
-                    self.refresh_review_card();
+                    self.request_review_refresh();
                 }
                 changed
             }
             Event::MessageEnd { value } => {
                 let changed = self.on_message_end(value);
-                self.refresh_review_card();
+                self.request_review_refresh();
                 changed
             }
             Event::ToolExecutionStart { value } => self.on_tool_execution(value, false),
             Event::ToolExecutionUpdate { value } => self.on_tool_execution_update(value),
             Event::ToolExecutionEnd { value } => {
                 let changed = self.on_tool_execution(value, true);
-                self.refresh_review_card();
+                self.request_review_refresh();
                 changed
             }
             // The provider request began: start the clock the live rate
@@ -1862,7 +1964,15 @@ impl Transcript {
             if created {
                 self.insert_row();
             } else if let Some(ix) = self.streaming.get() {
-                self.remeasure_row(ix);
+                let defer = matches!(
+                    assistant,
+                    Am::TextDelta { .. } | Am::ThinkingDelta { .. } | Am::ToolcallDelta { .. }
+                );
+                if defer {
+                    self.defer_stream_row(ix);
+                } else {
+                    self.remeasure_row(ix);
+                }
             }
         }
         changed
@@ -2266,7 +2376,7 @@ impl Transcript {
         let detail_open = self.expanded_tools.borrow().contains(&(mix, flat_ix));
         drop(messages);
         if detail_open {
-            self.remeasure_row(mix);
+            self.defer_stream_row(mix);
         }
         true
     }
@@ -2405,6 +2515,11 @@ impl Transcript {
 
     /// Same item count, new height — do not insert a blank row.
     fn remeasure_row(&self, ix: usize) {
+        self.stream_paint_rows.borrow_mut().remove(&ix);
+        if !self.presented {
+            self.dirty_rows.borrow_mut().insert(ix);
+            return;
+        }
         self.scroller.remeasure_items(ix..ix + 1);
         self.scroller.note_activity();
     }
@@ -2486,11 +2601,24 @@ impl Transcript {
     pub(crate) fn set_review_card_scope(&mut self, start: Option<usize>, workspace: Option<&Path>) {
         self.review_card_start = start;
         self.review_workspace = workspace.map(Path::to_path_buf);
-        self.refresh_review_card();
+        self.review_refresh_pending.set(false);
+        self.rebuild_review_card();
+    }
+
+    /// Coalesce onto the stream cadence. Parked transcripts skip the card.
+    fn request_review_refresh(&mut self) {
+        if !self.presented {
+            return;
+        }
+        self.review_refresh_pending.set(true);
     }
 
     /// Rebuild the card from calls that have already landed in the latest turn.
-    fn refresh_review_card(&mut self) {
+    /// A parked transcript keeps the files it had when it left the screen.
+    fn rebuild_review_card(&mut self) {
+        if !self.presented {
+            return;
+        }
         let Some(start) = self.review_card_start else {
             self.review_card_files.clear();
             self.set_tail_row(false);
@@ -2823,7 +2951,8 @@ impl Transcript {
     /// turn's changed-files card when that turn edited or wrote a file.
     fn end_live_run(&mut self) {
         self.clear_live_state();
-        self.refresh_review_card();
+        self.review_refresh_pending.set(false);
+        self.rebuild_review_card();
     }
 
     /// True while an assistant message is still streaming.
@@ -3001,6 +3130,7 @@ impl Transcript {
                 search_hits: search_hits.map(|hits| Rc::new(RefCell::new(hits))),
                 search_active: search_active.map(|ix| Rc::new(Cell::new(Some(ix)))),
                 open_turn_start: self.open_turn_start.get(),
+                parse_generation: self.load_generation,
             },
             cx,
         )
@@ -4481,6 +4611,87 @@ mod tests {
     }
 
     #[test]
+    fn parking_carries_a_deferred_row_into_the_resume_flush() {
+        let mut transcript = Transcript::new();
+        transcript.defer_stream_row(3);
+        transcript.park_presentation();
+        assert!(transcript.stream_paint_rows.borrow().is_empty());
+        assert_eq!(transcript.dirty_rows(), vec![3]);
+        transcript.present();
+        assert!(transcript.dirty_rows().is_empty());
+        assert!(!transcript.commit_pending_stream_row());
+    }
+
+    #[test]
+    fn a_deferred_tool_row_commits_even_when_nothing_is_streaming() {
+        let transcript = Transcript::new();
+        transcript.defer_stream_row(2);
+        transcript.defer_stream_row(4);
+        assert!(transcript.commit_pending_stream_row());
+        assert!(
+            transcript.stream_paint_rows.borrow().is_empty(),
+            "the commit consumes every deferred row"
+        );
+        assert!(!transcript.commit_pending_stream_row());
+    }
+
+    #[test]
+    fn parked_transcript_keeps_review_files_and_flushes_every_dirty_row() {
+        let edit_args = json!({
+            "path": "a.rs",
+            "edits": [{ "oldText": "x", "newText": "y\nz" }]
+        });
+        let mut t = Transcript::new();
+        t.set_review_card_scope(Some(0), None);
+        t.apply_event(&Event::MessageStart {
+            value: json!({"role": "user", "content": "build it"}),
+        });
+        t.apply_event(&Event::MessageStart {
+            value: json!({"role": "assistant", "content": ""}),
+        });
+        t.apply_event(&Event::MessageEnd {
+            value: json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "toolCall", "id": "c1", "name": "edit", "arguments": edit_args}
+                ]
+            }),
+        });
+        assert!(t.flush_pending_review());
+        let files = t.changed_files_summary();
+        assert_eq!(files, vec![("a.rs".into(), 2, 1)]);
+        t.park_presentation();
+        assert!(!t.is_presented());
+        // A later user row still drops the tail. The file list stays put.
+        t.apply_event(&Event::MessageStart {
+            value: json!({"role": "user", "content": "next"}),
+        });
+        assert!(!t.tail_summary.get());
+        assert_eq!(t.changed_files_summary(), files);
+        t.apply_event(&Event::MessageStart {
+            value: json!({"role": "assistant", "content": ""}),
+        });
+        t.apply_event(&Event::MessageUpdate {
+            usage: None,
+            assistant: Some(AssistantMessageEvent::TextDelta {
+                delta: "more".into(),
+            }),
+        });
+        let dirty = t.dirty_rows();
+        assert!(
+            dirty.contains(&1),
+            "the row that became earlier is dirty, got {dirty:?}"
+        );
+        assert!(
+            dirty.len() > 1,
+            "the streaming row is dirty too, got {dirty:?}"
+        );
+        t.present();
+        assert!(t.is_presented());
+        assert!(t.dirty_rows().is_empty());
+    }
+
+    #[test]
     fn settled_run_pins_changed_files_summary() {
         let edit_args = json!({
             "path": "a.rs",
@@ -4515,7 +4726,10 @@ mod tests {
                 ]
             }),
         });
-        // The edit has landed, so the card is up before the run settles.
+        // The edit has landed. The card waits for the heartbeat, then paints
+        // before the run settles.
+        assert!(!t.tail_summary.get());
+        assert!(t.flush_pending_review());
         assert!(t.tail_summary.get());
         assert_eq!(t.scroller.item_count(), 3);
         assert_eq!(t.changed_files_summary(), vec![("a.rs".into(), 2, 1)]);
@@ -4560,6 +4774,7 @@ mod tests {
                 ]
             }),
         });
+        assert!(t.flush_pending_review());
         assert!(t.tail_summary.get());
         t.apply_event(&Event::AgentEnd { will_retry: false });
         assert!(t.tail_summary.get());
@@ -4640,10 +4855,13 @@ mod tests {
                 ]
             }),
         });
+        assert!(t.flush_pending_review());
         assert!(t.tail_summary.get());
         t.apply_event(&Event::MessageStart {
             value: json!({"role": "user", "content": "steer"}),
         });
+        // The steer hides the card; the heartbeat puts that turn's files back.
+        assert!(t.flush_pending_review());
         assert!(t.tail_summary.get());
         t.apply_event(&Event::MessageStart {
             value: json!({"role": "assistant", "content": "continuing"}),

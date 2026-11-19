@@ -352,6 +352,48 @@ fn deleting_the_open_draft_clears_its_run_state(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// A session file already moved into the foreground queue is still deleted
+/// when the open unbound draft is discarded. The queue is scanned, not applied.
+#[gpui::test]
+fn deleting_the_open_draft_removes_a_queued_header_file(cx: &mut gpui::TestAppContext) {
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = cx.update(|_, cx| cx.new(OrbitApp::new));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let dir = std::env::temp_dir().join(format!("orbit-draft-del-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            let path = dir.join("header.jsonl");
+            std::fs::write(&path, "{\"type\":\"session\",\"id\":\"x\"}\n").expect("header");
+            app.foreground_events
+                .push_back(Event::Unknown(serde_json::json!("leave")));
+            app.foreground_events.push_back(Event::Response {
+                id: "1".into(),
+                command: "get_state".into(),
+                success: true,
+                data: Some(serde_json::json!({
+                    "sessionFile": path.to_string_lossy(),
+                })),
+                error: None,
+            });
+            let cwd = std::env::temp_dir();
+            app.listed_drafts.push(blank_draft(11, &cwd));
+            app.current_draft_id = Some(11);
+            // The test app's process may already have its own sessionFile in
+            // the channel. Drop that process without clearing the app queue,
+            // so this assertion is about the queued name.
+            app.client.take();
+
+            app.delete_listed_draft(11, cx);
+
+            assert!(!path.exists(), "the queued header-only file is removed");
+            assert!(app.foreground_events.is_empty());
+            assert!(app.current_draft_id.is_none());
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    });
+}
+
 /// A blank page with no workspace still registers under the real folder.
 #[gpui::test]
 fn an_unlisted_page_keeps_the_task_folder(cx: &mut gpui::TestAppContext) {
@@ -482,6 +524,39 @@ fn a_warm_draft_resumes_without_switching_session(cx: &mut gpui::TestAppContext)
             assert!(!app.lives.contains_key(&path));
             assert_eq!(app.input.read(cx).text(), "still here");
             app.drop_client();
+        });
+    });
+}
+
+/// A click on the draft already on screen must not wipe Last Turn. The switch
+/// returns before any session change, so the generation and the scan stay put.
+#[gpui::test]
+fn clicking_the_open_draft_keeps_review_records(cx: &mut gpui::TestAppContext) {
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = cx.update(|_, cx| cx.new(OrbitApp::new));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            let cwd = std::env::temp_dir();
+            app.workspaces.push(cwd.clone());
+            app.current_workspace = Some(cwd.clone());
+            app.listed_drafts.push(blank_draft(7, &cwd));
+            app.current_draft_id = Some(7);
+            let records = crate::turn_review::TurnRecords {
+                turns: vec![(1, Vec::new())],
+            };
+            app.sidepane.update(cx, |pane, cx| {
+                pane.set_turn_records(records.clone(), cx);
+            });
+            let generation = app.session_generation;
+            let mut session = info("draft-7", &cwd);
+            session.draft = Some(7);
+            session.path = drafts::draft_placeholder(7);
+            app.switch_to_session(session, false, cx);
+            assert_eq!(app.current_draft_id, Some(7));
+            assert_eq!(app.session_generation, generation);
+            assert!(app.pending_turn_records.is_none());
+            assert_eq!(app.sidepane.read(cx).stored_turn_records(), &records);
         });
     });
 }

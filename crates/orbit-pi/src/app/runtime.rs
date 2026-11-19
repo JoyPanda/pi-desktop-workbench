@@ -185,6 +185,9 @@ impl OrbitApp {
             error: None,
         };
         self.client = Some(client);
+        // Queued events belonged to the process just replaced. Warm resume
+        // installs the incoming backlog after this returns.
+        self.foreground_events.clear();
         // The birth push belongs to the process that armed it. This one has
         // not accepted `new_session` yet; a resumed process must not inherit it.
         self.default_model_armed = false;
@@ -445,6 +448,7 @@ impl OrbitApp {
             self.error_source = None;
         }
         self.client = None;
+        self.foreground_events.clear();
         self.runtime = RuntimeStatus::default();
         self.abort_requested = false;
         // The stop this clock belonged to has no process left to answer it.
@@ -1089,14 +1093,18 @@ impl OrbitApp {
     }
 
     /// Park a background session, evicting the least-recently parked idle one
-    /// if over the cap. Running sessions are never evicted.
+    /// if over the cap. A running session stays, and so does one whose queue
+    /// still holds events: dropping it would kill the process and lose a
+    /// settle that this tick has not applied yet. When every parked session
+    /// is busy or still queued, the pool grows past the cap until a later
+    /// park finds an idle, empty one.
     pub(super) fn park(&mut self, path: PathBuf, mut parked: ParkedSession) {
         parked.parked_at = Instant::now();
         if self.lives.len() >= MAX_LIVE_SESSIONS {
             let victim = self
                 .lives
                 .iter()
-                .filter(|(_, p)| !p.busy)
+                .filter(|(_, p)| !p.busy && p.pending.is_empty())
                 .min_by_key(|(_, p)| p.parked_at)
                 .map(|(k, _)| k.clone());
             if let Some(victim) = victim {
@@ -1115,7 +1123,12 @@ impl OrbitApp {
         }
         let now = Instant::now();
         let alive = |parked: &ParkedSession| {
-            parked.busy || now.duration_since(parked.parked_at) < PARKED_IDLE_TTL
+            // Events still sitting in the queue have not been applied. The
+            // reap runs before this tick's drain, so dropping the park here
+            // would lose a settle or the reply that names the session file.
+            parked.busy
+                || !parked.pending.is_empty()
+                || now.duration_since(parked.parked_at) < PARKED_IDLE_TTL
         };
         self.lives.retain(|_, parked| alive(parked));
         self.pending_parks.retain(alive);

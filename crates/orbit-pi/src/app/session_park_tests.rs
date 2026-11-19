@@ -264,6 +264,7 @@ fn shortcut_switch_to_a_warm_session_keeps_the_running_process(cx: &mut gpui::Te
                     draft: None,
                     discard: false,
                     startup_model_pinned: false,
+                    pending: std::collections::VecDeque::new(),
                 },
             );
 
@@ -358,6 +359,7 @@ exec cat >/dev/null
                     draft: None,
                     discard: false,
                     startup_model_pinned: false,
+                    pending: std::collections::VecDeque::new(),
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -522,6 +524,7 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                     draft: None,
                     discard: false,
                     startup_model_pinned: false,
+                    pending: std::collections::VecDeque::new(),
                 },
             );
 
@@ -611,6 +614,7 @@ fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext)
                     draft: None,
                     discard: false,
                     startup_model_pinned: false,
+                    pending: std::collections::VecDeque::new(),
                 },
             );
 
@@ -699,6 +703,7 @@ exec cat >/dev/null
                     draft: None,
                     discard: false,
                     startup_model_pinned: false,
+                    pending: std::collections::VecDeque::new(),
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -839,6 +844,365 @@ exec cat >/dev/null
             assert_eq!(
                 app.sidebar_session_statuses().get(&path),
                 Some(&SessionStatus::Completed)
+            );
+        });
+    });
+}
+
+fn parked_shell(client: PiClient, stamp: u64) -> ParkedSession {
+    ParkedSession {
+        client,
+        transcript: Transcript::new(),
+        busy: false,
+        added: 0,
+        removed: 0,
+        mcp_stamp: stamp,
+        turns: crate::turn_review::TurnClock::default(),
+        widgets: Vec::new(),
+        subagents: crate::subagent_status::SubagentBoard::default(),
+        subagent_scrolls: HashMap::new(),
+        subagent_list_scroll: ScrollHandle::new(),
+        queue: PendingQueue::default(),
+        queue_wire: QueueWire::default(),
+        parked_at: Instant::now(),
+        execution: SessionExecution::default(),
+        interaction: ParkedInteraction::default(),
+        retry_detail: None,
+        draft: None,
+        discard: false,
+        startup_model_pinned: false,
+        pending: std::collections::VecDeque::new(),
+    }
+}
+
+/// An idle park past the TTL still keeps events the budget has not applied.
+/// The reap runs before the drain, so an empty-queue check is what lets the
+/// next tick finish them.
+#[gpui::test]
+fn an_idle_park_keeps_events_the_budget_has_not_applied(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let fake = FakePi::start("ttl-queue");
+    let path = PathBuf::from("/tmp/orbit-park-tests/ttl-queue.jsonl");
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            let mut parked = parked_shell(spawn_fake(app, &fake), 0);
+            parked
+                .pending
+                .push_back(Event::Unknown(serde_json::json!("still-queued")));
+            app.park(path.clone(), parked);
+            app.lives.get_mut(&path).expect("parked").parked_at =
+                Instant::now() - super::PARKED_IDLE_TTL - Duration::from_secs(1);
+            app.reap_idle_parked();
+            assert!(
+                app.lives.contains_key(&path),
+                "queued events outlive the idle TTL"
+            );
+            app.lives.get_mut(&path).expect("parked").pending.clear();
+            app.reap_idle_parked();
+            assert!(
+                !app.lives.contains_key(&path),
+                "an idle park with an empty queue is reaped"
+            );
+        });
+    });
+}
+
+fn session_file_response(path: &str) -> Event {
+    Event::Response {
+        id: "1".into(),
+        command: "get_state".into(),
+        success: true,
+        data: Some(serde_json::json!({ "sessionFile": path })),
+        error: None,
+    }
+}
+
+/// The foreground queue spends the shared budget first. A boundary stays
+/// behind the deltas queued in front of it, and the next tick continues.
+#[gpui::test]
+fn foreground_queue_spends_the_budget_before_parked(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let foreground = FakePi::start("budget-fg");
+    let background = FakePi::start("budget-bg");
+    let path = PathBuf::from("/tmp/orbit-park-tests/budget.jsonl");
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let client = spawn_fake(app, &foreground);
+            app.adopt_client(client);
+            app.foreground_events
+                .push_back(Event::Unknown(serde_json::json!("delta")));
+            app.foreground_events.push_back(Event::MessageEnd {
+                value: serde_json::json!({}),
+            });
+            let stamp = app.mcp.fingerprint_for(Some(Path::new("/tmp")));
+            let mut parked = parked_shell(spawn_fake(app, &background), stamp);
+            parked
+                .pending
+                .push_back(Event::Unknown(serde_json::json!("parked")));
+            app.park(path.clone(), parked);
+            app.test_apply_limit = Some(1);
+
+            app.tick(cx);
+
+            assert!(
+                matches!(
+                    app.foreground_events.front(),
+                    Some(Event::MessageEnd { .. })
+                ),
+                "the boundary stays behind its delta"
+            );
+            assert_eq!(
+                app.lives.get(&path).expect("parked").pending.len(),
+                1,
+                "parked apply waits until the foreground queue has had the budget"
+            );
+
+            app.test_apply_limit = Some(2);
+            app.tick(cx);
+
+            assert!(
+                app.foreground_events.is_empty(),
+                "the next tick continues in order"
+            );
+            assert!(
+                app.lives.get(&path).expect("parked").pending.is_empty(),
+                "parked events apply once the foreground queue is done"
+            );
+        });
+    });
+}
+
+/// The warm-pool cap evicts the oldest idle park with an empty queue. A park
+/// that still has events stays, even when it is the oldest and not yet marked
+/// busy. If every park is busy or queued, the pool grows instead of dropping one.
+#[gpui::test]
+fn cap_eviction_keeps_a_park_whose_queue_is_not_empty(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let fakes: Vec<_> = (0..=super::MAX_LIVE_SESSIONS)
+        .map(|i| FakePi::start(&format!("cap-{i}")))
+        .collect();
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            let now = Instant::now();
+            let path_of = |i: usize| PathBuf::from(format!("/tmp/orbit-park-tests/cap-{i}.jsonl"));
+            for i in 0..super::MAX_LIVE_SESSIONS {
+                let path = path_of(i);
+                let mut parked = parked_shell(spawn_fake(app, &fakes[i]), 0);
+                if i == 0 {
+                    parked
+                        .pending
+                        .push_back(Event::Unknown(serde_json::json!("settle-later")));
+                }
+                app.park(path.clone(), parked);
+                app.lives.get_mut(&path).expect("parked").parked_at =
+                    now - Duration::from_secs((super::MAX_LIVE_SESSIONS - i) as u64);
+            }
+            let seventh = path_of(super::MAX_LIVE_SESSIONS);
+            let seventh_parked =
+                parked_shell(spawn_fake(app, &fakes[super::MAX_LIVE_SESSIONS]), 0);
+            app.park(seventh.clone(), seventh_parked);
+            assert!(
+                app.lives.contains_key(&path_of(0)),
+                "the oldest park still has events, so it stays"
+            );
+            assert!(
+                !app.lives.contains_key(&path_of(1)),
+                "the oldest idle park with an empty queue is the one evicted"
+            );
+            assert!(app.lives.contains_key(&seventh));
+            assert_eq!(app.lives.len(), super::MAX_LIVE_SESSIONS);
+
+            for parked in app.lives.values_mut() {
+                parked
+                    .pending
+                    .push_back(Event::Unknown(serde_json::json!("held")));
+            }
+            let eighth = PathBuf::from("/tmp/orbit-park-tests/cap-extra.jsonl");
+            let extra = FakePi::start("cap-extra");
+            let extra_parked = parked_shell(spawn_fake(app, &extra), 0);
+            app.park(eighth.clone(), extra_parked);
+            assert!(app.lives.contains_key(&eighth));
+            assert_eq!(app.lives.len(), super::MAX_LIVE_SESSIONS + 1);
+        });
+    });
+}
+
+/// Scanning a draft's session file does not apply or reorder its queue.
+#[gpui::test]
+fn take_pending_draft_file_scans_without_applying(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let fake = FakePi::start("draft-file");
+    cx.update(|cx| {
+        app.update(cx, |app, _| {
+            let stamp = app.mcp.fingerprint_for(Some(Path::new("/tmp")));
+            let mut parked = parked_shell(spawn_fake(app, &fake), stamp);
+            parked
+                .pending
+                .push_back(Event::Unknown(serde_json::json!("first")));
+            parked
+                .pending
+                .push_back(session_file_response("/tmp/a.jsonl"));
+            parked
+                .pending
+                .push_back(Event::Unknown(serde_json::json!("second")));
+            parked
+                .pending
+                .push_back(session_file_response("/tmp/b.jsonl"));
+            let before = parked.pending.len();
+            let found = OrbitApp::take_pending_draft_file(&mut parked, &app.sessions);
+            assert_eq!(found, Some(PathBuf::from("/tmp/b.jsonl")));
+            assert_eq!(parked.pending.len(), before);
+            assert!(matches!(parked.pending.front(), Some(Event::Unknown(_))));
+        });
+    });
+}
+
+/// A warm switch empties Review before the context moves, and the next tick
+/// scans once for the latest generation only.
+#[gpui::test]
+fn warm_switch_clears_review_before_context_and_scans_next_tick(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let running_path = PathBuf::from("/tmp/orbit-park-tests/review-running.jsonl");
+    let target_path = PathBuf::from("/tmp/orbit-park-tests/review-target.jsonl");
+    let back_path = PathBuf::from("/tmp/orbit-park-tests/review-back.jsonl");
+    let running = FakePi::start("review-running");
+    let target = FakePi::start("review-target");
+    let back = FakePi::start("review-back");
+    let target_session = SessionInfo {
+        path: target_path.clone(),
+        id: "target".into(),
+        cwd: PathBuf::from("/tmp/orbit-park-tests"),
+        title: "Target".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+        draft: None,
+    };
+    let back_session = SessionInfo {
+        path: back_path.clone(),
+        id: "back".into(),
+        cwd: PathBuf::from("/tmp/orbit-park-tests"),
+        title: "Back".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+        draft: None,
+    };
+    let records = crate::turn_review::TurnRecords {
+        turns: vec![(
+            1,
+            vec![crate::turn_review::RecordedCall {
+                path: "left.rs".into(),
+                call: crate::turn_review::FileCall::Write("old\n".into()),
+            }],
+        )],
+    };
+
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let client = spawn_fake(app, &running);
+            app.adopt_client(client);
+            app.current_session_path = Some(running_path.clone());
+            app.session_id = Some("outgoing".into());
+            let stamp = app.mcp.fingerprint_for(Some(&target_session.cwd));
+            let target_client = spawn_fake(app, &target);
+            let back_client = spawn_fake(app, &back);
+            app.park(target_path.clone(), parked_shell(target_client, stamp));
+            app.park(back_path.clone(), parked_shell(back_client, stamp));
+            app.sidepane.update(cx, |pane, cx| {
+                pane.test_open_last_turn(1);
+                pane.set_turn_records(records, cx);
+                pane.conversation_snapshot_calls.clear();
+            });
+
+            app.switch_to_session(target_session, true, cx);
+
+            let generation = app.session_generation;
+            assert_eq!(app.pending_turn_records, Some(generation));
+            app.sidepane.update(cx, |pane, _| {
+                assert!(
+                    pane.stored_turn_records().turns.is_empty(),
+                    "the click frame leaves the side pane empty"
+                );
+                assert!(
+                    pane.conversation_snapshot_calls
+                        .iter()
+                        .all(|count| *count == 0),
+                    "Last Turn must not snapshot the session being left, saw {:?}",
+                    pane.conversation_snapshot_calls
+                );
+            });
+
+            app.switch_to_session(back_session, true, cx);
+            assert_eq!(
+                app.pending_turn_records,
+                Some(app.session_generation),
+                "only the latest switch is still owed a scan"
+            );
+            assert_ne!(app.pending_turn_records, Some(generation));
+
+            app.tick(cx);
+            assert!(app.pending_turn_records.is_none());
+        });
+    });
+}
+
+/// Events the budget has not applied yet stay with their process across a park
+/// and come back to the foreground when that process is resumed.
+#[gpui::test]
+fn unapplied_events_move_with_the_parked_session(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let outgoing_path = PathBuf::from("/tmp/orbit-park-tests/queue-outgoing.jsonl");
+    let target_path = PathBuf::from("/tmp/orbit-park-tests/queue-target.jsonl");
+    let outgoing = FakePi::start("queue-outgoing");
+    let target = FakePi::start("queue-target");
+    let target_session = SessionInfo {
+        path: target_path.clone(),
+        id: "target".into(),
+        cwd: PathBuf::from("/tmp/orbit-park-tests"),
+        title: "Target".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+        draft: None,
+    };
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let client = spawn_fake(app, &outgoing);
+            app.adopt_client(client);
+            app.current_session_path = Some(outgoing_path.clone());
+            app.foreground_events
+                .push_back(Event::Unknown(serde_json::json!("keep-with-outgoing")));
+            app.park_active_session();
+            assert!(
+                app.foreground_events.is_empty(),
+                "the outgoing backlog left with its process"
+            );
+            assert!(
+                matches!(
+                    app.lives.get(&outgoing_path).and_then(|parked| parked.pending.front()),
+                    Some(Event::Unknown(value)) if value == "keep-with-outgoing"
+                ),
+                "park keeps the unapplied events"
+            );
+
+            let stamp = app.mcp.fingerprint_for(Some(&target_session.cwd));
+            let mut parked = parked_shell(spawn_fake(app, &target), stamp);
+            parked
+                .pending
+                .push_back(Event::Unknown(serde_json::json!("keep-with-target")));
+            app.park(target_path.clone(), parked);
+            app.switch_to_session(target_session, true, cx);
+            assert!(
+                matches!(
+                    app.foreground_events.front(),
+                    Some(Event::Unknown(value)) if value == "keep-with-target"
+                ),
+                "resume applies the target's backlog, not the session it left"
+            );
+            assert!(
+                matches!(
+                    app.lives.get(&outgoing_path).and_then(|parked| parked.pending.front()),
+                    Some(Event::Unknown(value)) if value == "keep-with-outgoing"
+                ),
+                "the outgoing backlog is still on the parked session"
             );
         });
     });

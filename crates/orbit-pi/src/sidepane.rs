@@ -125,6 +125,10 @@ pub struct SidePane {
     /// Recorded `edit` / `write` calls per turn. Last Turn renders these
     /// instead of a Git checkpoint diff.
     turn_records: crate::turn_review::TurnRecords,
+    /// How many calls each Last Turn / All Changes snapshot saw. Switch tests
+    /// read this to prove the click frame does not diff the session it left.
+    #[cfg(test)]
+    pub(crate) conversation_snapshot_calls: Vec<usize>,
 
     // ── Review ──
     review: Option<Arc<Snapshot>>,
@@ -230,6 +234,8 @@ impl SidePane {
             session: None,
             latest_turn: None,
             turn_records: crate::turn_review::TurnRecords::default(),
+            #[cfg(test)]
+            conversation_snapshot_calls: Vec::new(),
             review: None,
             review_loading: false,
             review_stale: true,
@@ -712,6 +718,19 @@ impl SidePane {
         cx.notify();
     }
 
+    /// Open Last Turn on `turn` so a switch test can see which records get snapshotted.
+    #[cfg(test)]
+    pub(crate) fn test_open_last_turn(&mut self, turn: usize) {
+        self.open = true;
+        self.embedded = false;
+        self.source = Source::LastTurn { turn_count: turn };
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stored_turn_records(&self) -> &crate::turn_review::TurnRecords {
+        &self.turn_records
+    }
+
     /// Load the workspace's git diff off-thread. Last Turn and All Changes
     /// are the exception: they paint the conversation's `edit` / `write`
     /// calls on this thread and never ask Git whether the folder is a
@@ -812,6 +831,8 @@ impl SidePane {
             Source::AllChanges => self.turn_records.all_calls(),
             _ => return,
         };
+        #[cfg(test)]
+        self.conversation_snapshot_calls.push(calls.len());
         let snapshot =
             crate::turn_review::snapshot_from_calls(self.source, &calls, self.workspace.as_deref());
         self.apply_snapshot(snapshot);

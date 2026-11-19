@@ -22,7 +22,7 @@
 
 use std::{
     cell::Cell,
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     path::{Path, PathBuf},
     rc::Rc,
@@ -375,6 +375,9 @@ struct ParkedSession {
     /// `new_session` has not answered yet. Restored on resume so that reply
     /// does not push the configured default over the argv model.
     startup_model_pinned: bool,
+    /// Events drained from this process and not yet applied. The heartbeat
+    /// fills this, then applies the foreground queue first.
+    pending: VecDeque<Event>,
 }
 
 impl ParkedSession {
@@ -540,6 +543,21 @@ pub struct OrbitApp {
     /// view that gave up) is dropped, killing the child it started, instead of
     /// being adopted over the view the user is on.
     spawn_generation: u64,
+    /// Incremented on every real session switch. Deferred Review scans carry
+    /// the value from the switch that scheduled them and bail when it moved.
+    session_generation: u64,
+    /// One full `push_turn_records` owed to the switch with this generation.
+    /// The click frame clears the side pane instead of scanning.
+    pending_turn_records: Option<u64>,
+    /// Foreground protocol events waiting for this tick's apply budget.
+    foreground_events: VecDeque<Event>,
+    /// When the streaming row and the Working clock were last committed.
+    last_visual_commit: Instant,
+    /// Test-only cap on queued events one tick applies, shared by the
+    /// foreground queue and every parked queue. `None` leaves the time budget
+    /// in charge.
+    #[cfg(test)]
+    test_apply_limit: Option<usize>,
     /// The replacement command (`new_session` / `switch_session`) this view is
     /// waiting on. Until pi answers it, no name report may reach the header: a
     /// `get_state` reply or a title extension still describing the session
@@ -2253,6 +2271,12 @@ impl OrbitApp {
             client,
             runtime,
             spawn_generation: 0,
+            session_generation: 0,
+            pending_turn_records: None,
+            foreground_events: VecDeque::new(),
+            last_visual_commit: Instant::now(),
+            #[cfg(test)]
+            test_apply_limit: None,
             replacement_in_flight: None,
             pending_switch: None,
             pending_prompt: None,

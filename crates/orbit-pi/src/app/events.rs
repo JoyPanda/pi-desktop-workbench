@@ -2,6 +2,67 @@ use super::*;
 use crate::app::sidebar::{clear_review_mark, should_mark_review};
 use crate::toast::ToastKind;
 
+/// One heartbeat may spend about this long applying protocol events. The
+/// clock is checked between events, so a single huge payload still runs, and
+/// whatever is left stays queued.
+const APPLY_BUDGET: Duration = Duration::from_millis(4);
+
+/// Streaming rows and the Working clock commit on this cadence. Tool and
+/// message boundaries paint immediately and are not waiting on it.
+const STREAM_COMMIT: Duration = Duration::from_millis(120);
+
+/// Text, thinking, tool-argument, and tool-output deltas. Start, end, and
+/// message boundaries still paint on this frame.
+fn is_stream_delta(event: &Event) -> bool {
+    match event {
+        Event::MessageUpdate { assistant, .. } => matches!(
+            assistant,
+            Some(
+                orbit_rpc::AssistantMessageEvent::TextDelta { .. }
+                    | orbit_rpc::AssistantMessageEvent::ThinkingDelta { .. }
+                    | orbit_rpc::AssistantMessageEvent::ToolcallDelta { .. }
+            )
+        ),
+        Event::ToolExecutionUpdate { .. } => true,
+        _ => false,
+    }
+}
+
+/// A boundary the cadence must not swallow. The last deferred row and the
+/// changed-files card commit on the same frame the boundary is applied.
+fn forces_visual_commit(event: &Event) -> bool {
+    match event {
+        Event::MessageEnd { .. }
+        | Event::ToolExecutionStart { .. }
+        | Event::ToolExecutionEnd { .. }
+        | Event::AgentSettled { .. } => true,
+        Event::MessageUpdate { assistant, .. } => matches!(
+            assistant,
+            Some(orbit_rpc::AssistantMessageEvent::ToolcallEnd { .. })
+        ),
+        _ => false,
+    }
+}
+
+/// Newest `sessionFile` already sitting in an app-level queue. Does not
+/// remove or reorder the events.
+pub(super) fn newest_session_file(
+    events: &std::collections::VecDeque<Event>,
+) -> Option<PathBuf> {
+    events.iter().rev().find_map(|event| {
+        let Event::Response { success, data, .. } = event else {
+            return None;
+        };
+        if !success {
+            return None;
+        }
+        data.as_ref()
+            .and_then(|data| data.get("sessionFile"))
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+    })
+}
+
 /// pi reports `cancelled: true` when an extension refused the fork or clone.
 fn response_cancelled(data: Option<&serde_json::Value>) -> bool {
     data.and_then(|data| data.get("cancelled"))
@@ -13,8 +74,6 @@ fn response_cancelled(data: Option<&serde_json::Value>) -> bool {
 struct ParkedDrain {
     /// An event changed the parked state — repaint.
     changed: bool,
-    /// The session is mid-run (drives the sidebar loader).
-    busy: bool,
     /// The process named its session file; move it from the pending pool into
     /// `lives` under this path.
     rekey: Option<PathBuf>,
@@ -37,6 +96,11 @@ impl OrbitApp {
     /// Heartbeat (~90ms): drain protocol events into the UI. Returns whether a
     /// run is in flight so the caller can repaint faster while tokens stream.
     pub(crate) fn tick(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(generation) = self.pending_turn_records.take() {
+            if generation == self.session_generation {
+                self.push_turn_records(cx);
+            }
+        }
         // Let a lapsed status message disappear from the status bar.
         if self
             .status_at
@@ -176,12 +240,20 @@ impl OrbitApp {
             self.file_drag_hovered = false;
             cx.notify();
         }
-        let events = {
-            let Some(client) = self.client.as_ref() else {
-                return self.is_active();
-            };
-            client.drain_events()
-        };
+        if self.client.is_none() {
+            let deadline = Instant::now() + APPLY_BUDGET;
+            let mut applied = 0;
+            let mut repaint = self.apply_parked_budget(deadline, &mut applied, cx);
+            repaint |= self.flush_visual_commit(false);
+            if repaint {
+                cx.notify();
+            }
+            return self.is_active();
+        }
+        self.foreground_events
+            .extend(self.client.as_ref().expect("client").drain_events());
+        let deadline = Instant::now() + APPLY_BUDGET;
+        let mut repaint = false;
         // The bridge writes snapshots into the session file, not the event
         // stream; poll for new entries on a slow clock independent of events.
         self.poll_quota_entries();
@@ -190,16 +262,21 @@ impl OrbitApp {
         if self.transcript.rail_hint_timed_out() {
             cx.notify();
         }
-        if events.is_empty() {
-            // Keep the live "Working for…" clock moving while a turn is open.
-            if self.busy || self.transcript.is_streaming() || copy_pending {
-                cx.notify();
-            }
-            return self.is_active();
-        }
-
+        repaint |= copy_pending;
         let mut refresh_sessions = false;
-        for event in &events {
+        let mut applied = 0usize;
+        let mut force_visual = false;
+        while !self.foreground_events.is_empty() {
+            if self.budget_spent(deadline, applied) {
+                break;
+            }
+            let owned = self
+                .foreground_events
+                .pop_front()
+                .expect("foreground queue");
+            let event = &owned;
+            let quiet = is_stream_delta(event);
+            force_visual |= forces_visual_commit(event);
             self.execution.apply_event(event);
             if matches!(event, Event::TurnStart | Event::AgentSettled { .. }) {
                 self.dialog = None;
@@ -219,7 +296,7 @@ impl OrbitApp {
                     // A dialog blocks the run until answered — the one state a
                     // user who walked away cannot otherwise discover.
                     self.notify_input_needed(method, value);
-                    cx.notify();
+                    repaint = true;
                 }
                 Event::SessionInfoChanged { name } => {
                     // pi renamed the session (its own auto-title, the popover's
@@ -482,9 +559,11 @@ impl OrbitApp {
                 }
                 _ => {}
             }
-            if self.transcript.apply_event(event) {
-                cx.notify();
+            self.transcript.apply_event(event);
+            if !quiet {
+                repaint = true;
             }
+            applied += 1;
         }
         self.busy = self.execution.status().is_in_progress();
         if let Some(path) = &self.current_session_path {
@@ -495,13 +574,59 @@ impl OrbitApp {
             self.release_promoted_drafts_on_disk();
             self.prune_workflow_store();
             self.sync_session_menu(cx);
+            repaint = true;
+        }
+        repaint |= self.apply_parked_budget(deadline, &mut applied, cx);
+        repaint |= self.flush_visual_commit(force_visual);
+        if repaint {
             cx.notify();
         }
-        // Responses can change app state without touching the transcript
-        // (model/thinking labels, catalogs, status) — always redraw a frame
-        // in which events were processed so those changes become visible.
-        cx.notify();
         self.is_active()
+    }
+
+    /// The time budget, or the test cap, is spent. Checked between events so
+    /// a boundary stays behind the deltas already queued in front of it.
+    fn queued_apply_limit(&self) -> Option<usize> {
+        #[cfg(test)]
+        {
+            self.test_apply_limit
+        }
+        #[cfg(not(test))]
+        {
+            None
+        }
+    }
+
+    fn budget_spent(&self, deadline: Instant, applied: usize) -> bool {
+        if Instant::now() >= deadline {
+            return true;
+        }
+        #[cfg(test)]
+        if self.test_apply_limit.is_some_and(|limit| applied >= limit) {
+            return true;
+        }
+        #[cfg(not(test))]
+        let _ = applied;
+        false
+    }
+
+    /// Move the Working clock and commit a deferred streaming row or review
+    /// card. Quiet deltas wait for the cadence. A message end, a tool
+    /// boundary, or a settle applied this tick commits on this frame, so the
+    /// last height and the changed-files card are not left for the next beat.
+    fn flush_visual_commit(&mut self, force: bool) -> bool {
+        if !force && self.last_visual_commit.elapsed() < STREAM_COMMIT {
+            return false;
+        }
+        let streamed = self.transcript.commit_pending_stream_row();
+        let reviewed = self.transcript.flush_pending_review();
+        let clock =
+            self.busy || self.transcript.is_streaming() || self.retrying || self.is_compacting;
+        if streamed || reviewed || clock {
+            self.last_visual_commit = Instant::now();
+            return true;
+        }
+        false
     }
 
     /// Step the new-task backdrop's field. Returns whether anything changed and
@@ -597,15 +722,37 @@ impl OrbitApp {
         );
     }
 
-    /// Drain background (parked) sessions. Their runs continue in their own
-    /// pi processes; events keep their transcripts current, so reopening a
-    /// parked session resumes the live stream exactly where it left off.
-    pub(super) fn tick_background(&mut self, cx: &mut Context<Self>) {
-        if self.lives.is_empty() && self.pending_parks.is_empty() {
-            return;
+    /// Pull parked protocol events into each session's queue. Applying waits
+    /// until the foreground queue has had this tick's budget.
+    pub(super) fn tick_background(&mut self, _cx: &mut Context<Self>) {
+        for parked in self.lives.values_mut() {
+            parked.pending.extend(parked.client.drain_events());
         }
+        for parked in &mut self.pending_parks {
+            parked.pending.extend(parked.client.drain_events());
+        }
+    }
+
+    /// Apply queued background events with whatever budget the foreground
+    /// left. A parked stream cannot spend the budget before the session on
+    /// screen has applied.
+    fn apply_parked_budget(
+        &mut self,
+        deadline: Instant,
+        applied: &mut usize,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        for parked in self.lives.values_mut() {
+            parked.pending.extend(parked.client.drain_events());
+        }
+        for parked in &mut self.pending_parks {
+            parked.pending.extend(parked.client.drain_events());
+        }
+        if self.lives.is_empty() && self.pending_parks.is_empty() {
+            return false;
+        }
+        let limit = self.queued_apply_limit();
         let mut changed = false;
-        let mut any_busy = false;
         let mut dead: Vec<PathBuf> = Vec::new();
         // Settles to announce once the `lives` borrow (and the map itself)
         // are no longer held.
@@ -613,10 +760,16 @@ impl OrbitApp {
             Vec::new();
         let mut restores: Vec<(Option<PathBuf>, Option<u64>, String)> = Vec::new();
         for (path, parked) in self.lives.iter_mut() {
-            let drained =
-                Self::drain_parked_session(parked, Some(path), &self.sessions, &mut finished);
+            let drained = Self::drain_parked_session(
+                parked,
+                Some(path),
+                &self.sessions,
+                &mut finished,
+                deadline,
+                applied,
+                limit,
+            );
             changed |= drained.changed;
-            any_busy |= drained.busy;
             if let Some(text) = drained.restore {
                 restores.push((Some(path.clone()), parked.draft, text));
             }
@@ -629,9 +782,14 @@ impl OrbitApp {
             {
                 changed = true;
             }
-            if !parked.client.is_alive() {
+            // A dead process can still have settle or rekey events sitting
+            // behind this tick's budget. Dropping the park now would lose them.
+            if !parked.client.is_alive() && parked.pending.is_empty() {
                 dead.push(path.clone());
             }
+        }
+        if !dead.is_empty() {
+            changed = true;
         }
         for path in dead {
             self.lives.remove(&path);
@@ -650,23 +808,25 @@ impl OrbitApp {
                 None,
                 &self.sessions,
                 &mut finished,
+                deadline,
+                applied,
+                limit,
             );
             changed |= drained.changed;
-            any_busy |= drained.busy;
             if let Some(text) = drained.restore {
                 restores.push((drained.rekey.clone(), draft_id, text));
             }
-            if !self.pending_parks[ix].client.is_alive() {
-                let parked = self.pending_parks.remove(ix);
-                if parked.discard {
-                    if let Some(path) = &drained.rekey {
-                        self.delete_header_only_file(path);
-                    }
-                }
-                changed = true;
-            } else if let Some(path) = drained.rekey {
+            // A rekey learned this tick has to land even when the process
+            // already exited or later events are still queued. Reaping first
+            // would drop the file name and the leftover backlog with it.
+            if let Some(path) = drained.rekey {
                 let parked = self.pending_parks.remove(ix);
                 rekeyed.push((path, parked));
+                changed = true;
+            } else if !self.pending_parks[ix].client.is_alive()
+                && self.pending_parks[ix].pending.is_empty()
+            {
+                self.pending_parks.remove(ix);
                 changed = true;
             } else {
                 ix += 1;
@@ -685,21 +845,20 @@ impl OrbitApp {
             self.notify_turn_finished(Some(&path), title.as_deref(), summary.as_ref(), cx);
             changed = true;
         }
-        if changed || any_busy {
-            // Repaint while a background run is live (sidebar loader phase,
-            // park-state changes) even though the visible transcript's
-            // active client produced no events this tick.
-            cx.notify();
-        }
+        // Busy staying on does not repaint. The sidebar loader changes when
+        // the run starts, settles, or the process leaves.
+        changed
     }
 
     /// Read a pending park once and return a session file it already named.
     pub(super) fn take_pending_draft_file(
         parked: &mut ParkedSession,
-        sessions: &[SessionInfo],
+        _sessions: &[SessionInfo],
     ) -> Option<PathBuf> {
-        let mut finished = Vec::new();
-        Self::drain_parked_session(parked, None, sessions, &mut finished).rekey
+        // Same queue the heartbeat applies, in the same order. Scanning does
+        // not apply or remove events; this park is about to be dropped.
+        parked.pending.extend(parked.client.drain_events());
+        newest_session_file(&parked.pending)
     }
 
     /// Drain one parked session's buffered events into its transcript and
@@ -713,11 +872,20 @@ impl OrbitApp {
         path: Option<&Path>,
         sessions: &[SessionInfo],
         finished: &mut Vec<(PathBuf, Option<String>, Option<transcript::TurnSummary>)>,
+        deadline: Instant,
+        applied: &mut usize,
+        limit: Option<usize>,
     ) -> ParkedDrain {
+        let was_busy = parked.busy;
         let mut changed = false;
         let mut rekey = None;
         let mut restore = None;
-        for event in parked.client.drain_events() {
+        while !parked.pending.is_empty() {
+            if Instant::now() >= deadline || limit.is_some_and(|limit| *applied >= limit) {
+                break;
+            }
+            let event = parked.pending.pop_front().expect("parked queue");
+            *applied += 1;
             let own_prompt = matches!(&event, Event::Response { id, command, .. }
                 if command == "prompt" && parked.execution.prompt_id.as_deref() == Some(id));
             parked.execution.apply_event(&event);
@@ -726,12 +894,15 @@ impl OrbitApp {
                 parked.busy = false;
                 take_restore(&mut restore, parked.on_agent_settled_queue());
             }
-            changed = true;
             match &event {
-                Event::AgentStart => parked.busy = true,
+                Event::AgentStart => {
+                    parked.busy = true;
+                    changed = true;
+                }
                 // `agent_settled` is the real settle (queued steering /
                 // follow-up / retry can continue past `agent_end`).
                 Event::AgentSettled { aborted } => {
+                    changed = true;
                     parked.busy = false;
                     // The clock was parked open with this run. Close it here;
                     // the active view's `finish_turn` does not see this process.
@@ -759,6 +930,7 @@ impl OrbitApp {
                     }
                 }
                 Event::ProcessExited => {
+                    changed = true;
                     parked.startup_model_pinned = false;
                     parked.busy = false;
                     parked.interaction = ParkedInteraction::default();
@@ -869,7 +1041,9 @@ impl OrbitApp {
                                 // the active view, which clears it on the reply; the
                                 // parked one never saw that, so clear it here.
                                 if command == "clone" || command == "fork" {
-                                    parked.transcript = Transcript::new();
+                                    let mut transcript = Transcript::new();
+                                    transcript.park_presentation();
+                                    parked.transcript = transcript;
                                     parked.turns = crate::turn_review::TurnClock::default();
                                     changed = true;
                                 }
@@ -890,12 +1064,15 @@ impl OrbitApp {
                 }
                 _ => {}
             }
-            changed |= parked.transcript.apply_event(&event);
+            parked.transcript.apply_event(&event);
         }
-        parked.busy = parked.execution.status().is_in_progress();
+        let busy = parked.execution.status().is_in_progress();
+        if busy != was_busy {
+            changed = true;
+        }
+        parked.busy = busy;
         ParkedDrain {
             changed,
-            busy: parked.busy,
             rekey,
             restore,
         }
@@ -903,7 +1080,8 @@ impl OrbitApp {
 
     /// The newest `sessionFile` already sitting in this process's buffer.
     /// Used when a draft is deleted before the reply is applied, so a
-    /// header-only file can still be removed.
+    /// header-only file can still be removed. This bypasses the app queue on
+    /// purpose: it only wants `sessionFile`, and every other event is dropped.
     pub(super) fn session_file_in_buffer(client: &mut PiClient) -> Option<PathBuf> {
         let mut found = None;
         for event in client.drain_events() {
@@ -1828,6 +2006,32 @@ impl OrbitApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_output_updates_wait_for_the_stream_cadence() {
+        assert!(is_stream_delta(&Event::ToolExecutionUpdate {
+            value: serde_json::json!({}),
+        }));
+        assert!(!is_stream_delta(&Event::ToolExecutionStart {
+            value: serde_json::json!({}),
+        }));
+        assert!(!is_stream_delta(&Event::ToolExecutionEnd {
+            value: serde_json::json!({}),
+        }));
+        assert!(!is_stream_delta(&Event::MessageEnd {
+            value: serde_json::json!({}),
+        }));
+        assert!(forces_visual_commit(&Event::MessageEnd {
+            value: serde_json::json!({}),
+        }));
+        assert!(forces_visual_commit(&Event::ToolExecutionEnd {
+            value: serde_json::json!({}),
+        }));
+        assert!(forces_visual_commit(&Event::AgentSettled { aborted: false }));
+        assert!(!forces_visual_commit(&Event::ToolExecutionUpdate {
+            value: serde_json::json!({}),
+        }));
+    }
 
     /// The review mark is only spent when the chat column is genuinely in front
     /// of the user. Every surface that replaces the chat area has to count as

@@ -64,7 +64,8 @@ use crate::theme::{self, Theme, ThemeMode, TypeScale};
 use crate::transcript::{ChatMessage, Step, SummaryRow, ToolCall, ToolFacts};
 
 use crate::markdown::{
-    parse_blocks, AlertKind, Block, InlineSpan, ListItem, MdBlock, RichText, TableAlign,
+    parse_blocks, unclosed_block_start, AlertKind, Block, InlineSpan, ListItem, MdBlock, RichText,
+    TableAlign,
 };
 
 /// Opens the changed-files Review in the side pane (see `sidepane.rs`) —
@@ -281,6 +282,8 @@ pub(crate) struct TranscriptView {
     /// session whose clock cannot tell a steer from a new request. Rows at
     /// or after this index stay unfolded while that turn is open.
     pub open_turn_start: Option<usize>,
+    /// Transcript load generation mixed into the markdown block cache key.
+    pub parse_generation: u64,
 }
 
 // ── text selection ─────────────────────────────────────────────────────────
@@ -1514,6 +1517,7 @@ struct RowPaint {
     search_active: bool,
     /// Prose-column width tables must fit. Wide tables scroll inside it.
     table_breakout: TableBreakout,
+    parse_generation: u64,
 }
 
 /// The last message's own footer is suppressed when the tail summary owns
@@ -1808,6 +1812,7 @@ pub(crate) fn render_transcript(view: TranscriptView, cx: &gpui::App) -> impl In
                     .as_ref()
                     .is_some_and(|active| active.get() == Some(ix)),
                 table_breakout,
+                parse_generation: view.parse_generation,
             },
             cx,
         )
@@ -2427,6 +2432,7 @@ fn summary_card_body(markdown: &str, paint: &RowPaint) -> impl IntoElement {
                     column_width: inner,
                 }
             }),
+            paint.parse_generation,
         ))
 }
 
@@ -2615,6 +2621,7 @@ fn render_user_bubble(message: &ChatMessage, paint: &RowPaint, cx: &gpui::App) -
                         true,
                         paint.scroller.clone(),
                         None,
+                        paint.parse_generation,
                     )),
             )
         })
@@ -2825,6 +2832,7 @@ fn render_assistant(message: &ChatMessage, paint: &RowPaint) -> impl IntoElement
                         !paint.live,
                         paint.scroller.clone(),
                         Some(paint.table_breakout),
+                        paint.parse_generation,
                     )),
             );
         }
@@ -6266,20 +6274,37 @@ impl AlertKind {
 }
 
 thread_local! {
-    /// Memoized markdown block parses, keyed by content hash. Every visible
-    /// row re-renders on each heartbeat while a run streams (the live clock
-    /// alone repaints at ~11 Hz); parsing is pure over the source text, so
-    /// each distinct text parses once and rows share the blocks.
+    /// Memoized markdown block parses. The key is the load generation plus a
+    /// hash of the full text, so same-length edits and a reloaded session do
+    /// not reuse another body. A hit still pays the hash; it skips the parse.
     static BLOCK_PARSE_CACHE: RefCell<HashMap<u64, Rc<Vec<MdBlock>>>> =
         RefCell::new(HashMap::new());
 }
 
-/// Parse markdown into blocks, memoized by content. The cache is small and
-/// cleared when full — a stale-entry miss costs one reparse, never a wrong
-/// render (keyed by the text's full 64-bit hash).
-fn parse_blocks_cached(text: &str) -> Rc<Vec<MdBlock>> {
+/// Added to the unclosed tail's salt. Step salts are multiples of 4096, and
+/// `md_id` keeps only the low 16 bits, so an offset of `0x8000` aliases the
+/// step eight positions later. One keeps the tail off that lattice.
+const VEIL_SALT: u64 = 1;
+
+/// Code-block identity inside one message row. Fits in the 32 bits the
+/// scroll and copy element ids keep beside the row index.
+///
+/// Adding `salt + block_ix` makes a veiled tail (`salt + 1`, index 0) share
+/// a key with the prefix block at index 1. The step number and a veil bit
+/// stay in separate fields, so those two blocks do not.
+fn block_key(salt: u64, block_ix: usize) -> usize {
+    let step = ((salt / 4096) as usize) & 0x7fff;
+    let veiled = salt % 4096 != 0;
+    (step << 17) | (usize::from(veiled) << 16) | (block_ix & 0xffff)
+}
+
+/// Parse markdown into blocks, memoized by content and load generation. The
+/// cache is small and cleared when full — a stale-entry miss costs one
+/// reparse, never a wrong render.
+fn parse_blocks_cached(text: &str, generation: u64) -> Rc<Vec<MdBlock>> {
     let key = {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&generation, &mut hasher);
         std::hash::Hash::hash(text, &mut hasher);
         std::hash::Hasher::finish(&hasher)
     };
@@ -6295,6 +6320,36 @@ fn parse_blocks_cached(text: &str) -> Rc<Vec<MdBlock>> {
         cache.insert(key, blocks.clone());
         blocks
     })
+}
+
+/// Split a live body at the last unclosed block. `None` when that block is
+/// the whole text, so a single growing paragraph keeps the prefix salt.
+fn veil_split<'a>(text: &'a str, generation: u64) -> Option<(&'a str, &'a str)> {
+    let blocks = parse_blocks_cached(text, generation);
+    let start = unclosed_block_start(&blocks)?;
+    if start == 0 || start >= text.len() || !text.is_char_boundary(start) {
+        return None;
+    }
+    Some((&text[..start], &text[start..]))
+}
+
+/// Gap the unsplit body would have put above the veiled tail. Each half is
+/// its own column, so the tail's first block would otherwise sit flush.
+fn veil_boundary_gap(text: &str, generation: u64) -> f32 {
+    let blocks = parse_blocks_cached(text, generation);
+    let Some(start) = unclosed_block_start(&blocks) else {
+        return 0.0;
+    };
+    let Some(pos) = blocks
+        .iter()
+        .position(|block| block.source.start == start)
+    else {
+        return 0.0;
+    };
+    if pos == 0 {
+        return 0.0;
+    }
+    block_gap(&blocks[pos - 1].kind, &blocks[pos].kind)
 }
 
 /// The reading column a table is fitted to.
@@ -6337,8 +6392,89 @@ fn render_prose(
     settled: bool,
     scroller: MessageScrollerState,
     table_breakout: Option<TableBreakout>,
+    generation: u64,
+) -> AnyElement {
+    // A live row veils only the last unclosed block. The committed prefix
+    // keeps `salt`, so its expand and copy keys do not move. The tail uses
+    // its own salt because its block indices start again at 0.
+    if !settled {
+        if let Some((prefix, tail)) = veil_split(text, generation) {
+            let gap = veil_boundary_gap(text, generation);
+            return div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .child(render_prose_body(
+                    prefix,
+                    ix,
+                    salt,
+                    theme,
+                    ink,
+                    copied_sections.clone(),
+                    expanded_blocks.clone(),
+                    collapsible,
+                    settled,
+                    scroller.clone(),
+                    table_breakout,
+                    generation,
+                ))
+                .child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .when(gap > 0.0, |node| node.mt(px(gap)))
+                        .child(render_prose_body(
+                            tail,
+                            ix,
+                            salt.wrapping_add(VEIL_SALT),
+                            theme,
+                            ink,
+                            copied_sections,
+                            expanded_blocks,
+                            collapsible,
+                            settled,
+                            scroller,
+                            table_breakout,
+                            generation,
+                        )),
+                )
+                .into_any_element();
+        }
+    }
+    render_prose_body(
+        text,
+        ix,
+        salt,
+        theme,
+        ink,
+        copied_sections,
+        expanded_blocks,
+        collapsible,
+        settled,
+        scroller,
+        table_breakout,
+        generation,
+    )
+    .into_any_element()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_prose_body(
+    text: &str,
+    ix: usize,
+    salt: u64,
+    theme: Theme,
+    ink: Hsla,
+    copied_sections: CopiedSections,
+    expanded_blocks: ExpandedBlocks,
+    collapsible: bool,
+    settled: bool,
+    scroller: MessageScrollerState,
+    table_breakout: Option<TableBreakout>,
+    generation: u64,
 ) -> impl IntoElement + use<> {
-    let blocks = parse_blocks_cached(text);
+    let blocks = parse_blocks_cached(text, generation);
     let gaps: Vec<f32> = blocks
         .iter()
         .enumerate()
@@ -6423,6 +6559,7 @@ pub(crate) fn render_markdown_document(text: &str, theme: Theme) -> impl IntoEle
         true,
         MessageScrollerState::new(1),
         None,
+        0,
     )
 }
 
@@ -6466,6 +6603,7 @@ pub(crate) fn render_subagent_markdown(
         true,
         MessageScrollerState::new(0),
         None,
+        0,
     )
 }
 
@@ -6946,7 +7084,7 @@ fn render_code_block(
     // Block identity within the message: the prose salt scopes the index to
     // the step/user run it was parsed from, so two steps' third blocks
     // never share copy feedback, element state, or fold state.
-    let block_key = salt as usize + block_ix;
+    let block_key = block_key(salt, block_ix);
     let copy_button = code_copy_button(ix, block_key, &code, &copied_sections, theme);
     // Title strip: the language name and the copy affordance in one row, so
     // context and action sit in the same place on every code block.
@@ -7119,7 +7257,7 @@ fn code_lines_body(
     block_ix: usize,
     theme: Theme,
 ) -> impl IntoElement {
-    let block_key = salt as usize + block_ix;
+    let block_key = block_key(salt, block_ix);
     div()
         .id(ElementId::NamedInteger(
             "code-scroll".into(),
@@ -7188,7 +7326,7 @@ fn render_mermaid_block(
     scroller: MessageScrollerState,
 ) -> AnyElement {
     let code = lines.join("\n");
-    let block_key = salt as usize + block_ix;
+    let block_key = block_key(salt, block_ix);
     let showing_source = expanded_blocks.borrow().contains(&(ix, salt, block_ix));
     let copy_button = code_copy_button(ix, block_key, &code, &copied_sections, theme);
 
@@ -10023,14 +10161,59 @@ mod tests {
     #[test]
     fn parse_cache_returns_the_same_blocks_for_the_same_text() {
         let text = "# Title\n\nSome **bold** prose.\n\n- one\n- two\n";
-        let first = parse_blocks_cached(text);
-        let second = parse_blocks_cached(text);
+        let first = parse_blocks_cached(text, 1);
+        let second = parse_blocks_cached(text, 1);
         // Same content, shared allocation — the streaming hot path must not
         // re-parse an unchanged message every frame.
         assert!(Rc::ptr_eq(&first, &second));
         assert!(matches!(first[0].kind, Block::Heading(1, _)));
-        let third = parse_blocks_cached("# Title\n\nchanged\n");
+        let third = parse_blocks_cached("# Title\n\nchanged\n", 1);
         assert!(!Rc::ptr_eq(&first, &third));
+        // Same length, different text, must not share the parsed blocks.
+        let left = parse_blocks_cached("aaaaa", 1);
+        let right = parse_blocks_cached("bbbbb", 1);
+        assert!(!Rc::ptr_eq(&left, &right));
+        // A new load generation misses, even when the text matches.
+        let reloaded = parse_blocks_cached(text, 2);
+        assert!(!Rc::ptr_eq(&first, &reloaded));
+    }
+
+    #[test]
+    fn veil_splits_at_the_last_unclosed_block() {
+        let text = "done\n\nstill going";
+        let (prefix, tail) = veil_split(text, 7).expect("two blocks");
+        assert!(prefix.contains("done"));
+        assert!(tail.contains("still"));
+        assert!(!prefix.contains("still"));
+        let quoted = "> closed\n>\n> open";
+        let blocks = parse_blocks(quoted);
+        let start = unclosed_block_start(&blocks).expect("quote");
+        assert!(start > 0, "the open child is not the quote's first byte");
+        assert!(quoted[start..].contains("open"));
+        // A single growing block starts at 0, so the row is not split.
+        assert!(veil_split("still going", 7).is_none());
+        let code = parse_blocks("```rust\nlet x = 1\n");
+        assert!(
+            matches!(code.last().map(|block| &block.kind), Some(Block::Code(_, _))),
+            "a live code block stays a code block"
+        );
+        let (prefix, tail) = veil_split(text, 7).expect("two blocks");
+        let salt = 4096u64;
+        let prefix_key = md_id(0, salt, 0, 0);
+        let tail_key = md_id(0, salt.wrapping_add(VEIL_SALT), 0, 0);
+        assert_ne!(prefix_key, tail_key);
+        // Step salts are 4096 apart. The tail must not alias the step 8 later.
+        let later_step = md_id(0, 9 * 4096, 0, 0);
+        assert_ne!(tail_key, later_step);
+        // The copy and scroll keys pack the step and the veil bit. Adding the
+        // salts would make the tail alias the prefix's second block.
+        let prefix_block = block_key(salt, 1);
+        let tail_block = block_key(salt.wrapping_add(VEIL_SALT), 0);
+        assert_ne!(prefix_block, tail_block);
+        assert_ne!(tail_block, block_key(17 * 4096, 0));
+        assert!(prefix_block <= u32::MAX as usize && tail_block <= u32::MAX as usize);
+        assert_eq!(veil_boundary_gap(text, 7), 14.0);
+        assert!(!prefix.is_empty() && !tail.is_empty());
     }
 
     /// A selection over `texts` with keys `block-0..block-N` — the shape the
@@ -10422,6 +10605,7 @@ mod tests {
             search_hits: None,
             search_active: None,
             open_turn_start: None,
+            parse_generation: 0,
         }
     }
 
