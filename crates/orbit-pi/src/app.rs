@@ -184,6 +184,140 @@ const MAX_LIVE_SESSIONS: usize = 6;
 /// instead of paying Node startup again; the TTL bounds the memory cost.
 const PARKED_IDLE_TTL: Duration = Duration::from_secs(300);
 
+/// Outstanding queue RPCs on one pi process. Local unqueue (X / Esc /
+/// `AgentSettled`) must not zero these while that process still owes replies.
+#[derive(Debug, Clone, Default)]
+struct QueueWire {
+    /// Outstanding `clear_queue` RPCs.
+    clear_in_flight: usize,
+    /// `follow_up` / `steer` RPCs that have gone out on this process.
+    in_flight: Vec<InFlightEnqueue>,
+    /// A cancelled enqueue mutated pi's queue after every `clear_queue`
+    /// already sent; send one more clear once no cancelled enqueue remains.
+    reclear_needed: bool,
+    /// Enqueues held until a pre-clear barrier (`clear_queue`, cancelled
+    /// in-flight, or reclear) finishes, so a post-X message is not wiped.
+    deferred: Vec<DeferredEnqueue>,
+}
+
+#[derive(Debug, Clone)]
+struct InFlightEnqueue {
+    id: String,
+    mode: SendMode,
+    text: String,
+    cancelled: bool,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredEnqueue {
+    body: CommandBody,
+    label: &'static str,
+    mode: SendMode,
+    text: String,
+}
+
+impl QueueWire {
+    fn has_cancelled_in_flight(&self) -> bool {
+        self.in_flight.iter().any(|entry| entry.cancelled)
+    }
+
+    fn ignores_updates(&self) -> bool {
+        self.clear_in_flight > 0 || self.has_cancelled_in_flight() || self.reclear_needed
+    }
+
+    fn should_defer_enqueue(&self) -> bool {
+        self.ignores_updates()
+    }
+
+    fn cancel_pending(&mut self) {
+        for entry in &mut self.in_flight {
+            entry.cancelled = true;
+        }
+        self.deferred.clear();
+    }
+
+    fn note_clear_sent(&mut self) {
+        self.reclear_needed = false;
+        self.clear_in_flight = self.clear_in_flight.saturating_add(1);
+    }
+
+    fn note_enqueue_sent(&mut self, id: String, mode: SendMode, text: String) {
+        self.in_flight.push(InFlightEnqueue {
+            id,
+            mode,
+            text,
+            cancelled: false,
+        });
+    }
+
+    fn defer(&mut self, item: DeferredEnqueue) {
+        self.deferred.push(item);
+    }
+
+    fn drop_deferred(&mut self) -> bool {
+        let had = !self.deferred.is_empty();
+        self.deferred.clear();
+        had
+    }
+
+    fn on_clear_response(&mut self) {
+        self.clear_in_flight = self.clear_in_flight.saturating_sub(1);
+    }
+
+    /// Pop the matching enqueue. The bool is whether a reclear `clear_queue`
+    /// must go out now.
+    fn on_enqueue_response(
+        &mut self,
+        id: &str,
+        command: &str,
+        success: bool,
+    ) -> Option<(InFlightEnqueue, bool)> {
+        let idx = self
+            .in_flight
+            .iter()
+            .position(|entry| entry.id == id)
+            .or_else(|| {
+                if id.is_empty() {
+                    self.in_flight
+                        .iter()
+                        .position(|entry| entry.mode.as_str() == command)
+                } else {
+                    None
+                }
+            })?;
+        let entry = self.in_flight.remove(idx);
+        if entry.cancelled && success && self.clear_in_flight == 0 {
+            self.reclear_needed = true;
+        }
+        let reclear = self.reclear_needed && !self.has_cancelled_in_flight();
+        if reclear {
+            // Consume even if the follow-up send fails: a dying pipe is about
+            // to `ProcessExited` and reset the wire, and leaving this set
+            // would ignore every later `queue_update` until then.
+            self.reclear_needed = false;
+        }
+        Some((entry, reclear))
+    }
+
+    fn take_ready_deferred(&mut self) -> Vec<DeferredEnqueue> {
+        if self.should_defer_enqueue() {
+            Vec::new()
+        } else {
+            std::mem::take(&mut self.deferred)
+        }
+    }
+}
+
+fn remove_one_queued(queue: &mut PendingQueue, mode: SendMode, text: &str) {
+    let list = match mode {
+        SendMode::Steer => &mut queue.steering,
+        SendMode::FollowUp => &mut queue.follow_up,
+    };
+    if let Some(ix) = list.iter().position(|item| item == text) {
+        list.remove(ix);
+    }
+}
+
 /// How long the session-details Update button shows its success check after a
 /// rename commits, before reverting to the label.
 const RENAME_FEEDBACK: Duration = Duration::from_millis(1400);
@@ -226,6 +360,10 @@ struct ParkedSession {
     /// otherwise show nothing — and a stale restore would show messages pi
     /// already delivered. Drain keeps it current while parked.
     queue: PendingQueue,
+    /// Outstanding queue RPCs on this parked process. Survives park so a
+    /// `clear_queue` still in flight cannot wipe a follow-up queued after X,
+    /// and a stale `queue_update` cannot resurrect a dismissed row on resume.
+    queue_wire: QueueWire,
     /// When this session was last parked; drives idle TTL reaping.
     parked_at: Instant,
     /// Listed draft this process belongs to, once the user has left it.
@@ -237,6 +375,65 @@ struct ParkedSession {
     /// `new_session` has not answered yet. Restored on resume so that reply
     /// does not push the configured default over the argv model.
     startup_model_pinned: bool,
+}
+
+impl ParkedSession {
+    fn apply_queue_update(&mut self, value: &Value) {
+        if self.queue_wire.ignores_updates() {
+            return;
+        }
+        self.queue = PendingQueue::from_value(value);
+    }
+
+    fn on_queue_response(&mut self, id: &str, command: &str, success: bool) -> Option<String> {
+        match command {
+            "clear_queue" => self.queue_wire.on_clear_response(),
+            "steer" | "follow_up" => {
+                if let Some((entry, reclear)) =
+                    self.queue_wire.on_enqueue_response(id, command, success)
+                {
+                    if !success && !entry.cancelled {
+                        remove_one_queued(&mut self.queue, entry.mode, &entry.text);
+                    }
+                    if reclear && self.client.send(CommandBody::ClearQueue).is_ok() {
+                        self.queue_wire.note_clear_sent();
+                    }
+                }
+            }
+            _ => return None,
+        }
+        self.flush_deferred()
+    }
+
+    fn flush_deferred(&mut self) -> Option<String> {
+        if !self.busy {
+            // The run already ended (or never started). Do not send
+            // `follow_up`/`steer` to an idle pi; restore unsent post-X text
+            // so resume can put it in the composer.
+            return self.on_agent_settled_queue();
+        }
+        for item in self.queue_wire.take_ready_deferred() {
+            match self.client.send(item.body) {
+                Ok((id, _)) => self.queue_wire.note_enqueue_sent(id, item.mode, item.text),
+                Err(_) => remove_one_queued(&mut self.queue, item.mode, &item.text),
+            }
+        }
+        None
+    }
+
+    /// Drop the pending bar. If a post-X message was held and never reached
+    /// pi, return its text so the drain can stash it on the session draft.
+    fn on_agent_settled_queue(&mut self) -> Option<String> {
+        let restore = if self.queue_wire.drop_deferred() {
+            self.queue
+                .restore_text()
+                .filter(|text| !text.trim().is_empty())
+        } else {
+            None
+        };
+        self.queue = PendingQueue::default();
+        restore
+    }
 }
 
 /// A new task the sidebar is showing. `path` is a placeholder until pi
@@ -467,13 +664,15 @@ pub struct OrbitApp {
     model_provider: String,
     thinking_label: String,
     busy: bool,
-    /// Pending steering + follow-up messages reported by pi's `queue_update`
-    /// (and echoed by `clear_queue`). While the agent runs, messages sent from
-    /// the composer are queued as follow-ups and shown here until delivered.
+    /// Pending steering + follow-up messages reported by pi's `queue_update`.
+    /// While the agent runs, messages sent from the composer are queued as
+    /// follow-ups and shown here until delivered. Restored into the composer
+    /// from this local mirror — `clear_queue`'s response echoes the *dropped*
+    /// items and must not be written back here.
     queue: PendingQueue,
-    /// A `clear_queue` was sent as part of Escape; restore the returned text
-    /// into the composer when the response arrives (docs' interactive-Esc).
-    restore_queue_on_clear: bool,
+    /// Outstanding queue RPCs on the active process. Local unqueue does not
+    /// zero these while replies are still owed.
+    queue_wire: QueueWire,
     /// Settings → Agent: `set_follow_up_mode` value.
     follow_up_mode: String,
     /// Settings → Agent: `set_auto_compaction` value (read back from state).
@@ -529,9 +728,6 @@ pub struct OrbitApp {
     /// land while the window is frontmost. Rendered bottom-right over every
     /// surface (see [`toast_ui`]).
     toasts: toast::Toasts,
-    /// Text of the last optimistic follow-up. Cleared once pi confirms it in
-    /// `queue_update`; restored to the composer if the command fails.
-    pending_follow_up: Option<String>,
     /// Rename field in the session-details popover.
     session_name_input: Entity<ComposerInput>,
     status: String,
@@ -1385,6 +1581,14 @@ impl ComposerDraft {
             && self.files.is_empty()
             && self.pasted_texts.is_empty()
     }
+
+    fn prepend_text(&mut self, text: String) {
+        if self.text.trim().is_empty() {
+            self.text = text;
+        } else {
+            self.text = format!("{text}\n\n{}", self.text);
+        }
+    }
 }
 
 /// A message that started a pi process for a brand-new task and is waiting for
@@ -1778,8 +1982,8 @@ impl OrbitApp {
             Ok(client) => (Some(client), String::new()),
             Err(err) => (None, tr!("runtime.pi_spawn_failed", error = err)),
         };
-        let startup_model_reportable = client.is_some()
-            && crate::session_defaults::SessionDefault::load().is_unset();
+        let startup_model_reportable =
+            client.is_some() && crate::session_defaults::SessionDefault::load().is_unset();
         let mcp_stamp = mcp.fingerprint();
         let runtime = RuntimeStatus {
             started_at: client.as_ref().map(|_| Instant::now()),
@@ -2085,7 +2289,7 @@ impl OrbitApp {
             thinking_label: "…".into(),
             busy: false,
             queue: PendingQueue::default(),
-            restore_queue_on_clear: false,
+            queue_wire: QueueWire::default(),
             follow_up_mode: "one-at-a-time".into(),
             auto_compaction: true,
             auto_retry: true,
@@ -2109,7 +2313,6 @@ impl OrbitApp {
             abort_sent_at: None,
             prompt_in_flight: None,
             toasts: toast::Toasts::new(),
-            pending_follow_up: None,
             session_name_input,
             status: connect_error.clone(),
             status_at: (!connect_error.is_empty()).then(Instant::now),
@@ -3889,6 +4092,8 @@ mod new_task_spawn_tests;
 mod popup_layout_tests;
 #[cfg(test)]
 mod process_exit_cleanup_tests;
+#[cfg(test)]
+mod queue_restore_tests;
 #[cfg(test)]
 mod refresh_tests;
 #[cfg(test)]

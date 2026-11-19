@@ -569,6 +569,8 @@ more than an hour ago, so a live run keeps its logs and image paths. The two
 groups have independent cleanup actions and neither touches pi's session store
 or anything in the workspace.
 
+Queued follow-ups and steers show in the bar above the composer. The header X
+restores that text into the input without aborting the run; each row copies.
 Composer sending is configurable in Settings → Agent → Behavior: Enter queues a follow-up
 by default or steers the running task, with Alt/Option+Enter selecting the opposite mode.
 The explicit ⌘⇧Enter / Ctrl+Shift+Enter steering shortcut stays fixed. The choice is a

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Copy on each queued follow-up and steer.** The same compact copy control
+  as the error banner sits at the end of the row without growing it, and
+  copying does not dismiss the queue.
+
 - **New Task rows in the sidebar.** Clicking New inserts a blank row at once.
   Leaving it with an empty composer removes the row. Text, an image, a file,
   or a long paste keeps the row until the app quits. The first message sent
@@ -58,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a 2 s watcher throttle. If the cap is ever hit, the `@` menu says so.
 
 ### Fixed
+
+- **The queued-prompt bar's X puts the messages back in the input.** Clicking
+  it used to drop the pending follow-ups and steers while the run kept going,
+  so the only way to recover them was to retype. It now restores that text
+  into the composer (queued first if you already typed something) and leaves
+  the agent running — the same hand-back Stop and Esc already did. pi's
+  `clear_queue` reply echoes the dropped items and can overtake a follow-up
+  still on the wire; those updates no longer resurrect the dismissed rows,
+  and a message typed after X is held until that clear finishes so an empty
+  update cannot wipe it.
 
 - **New Task starts pi when you send, not when you click.** The row, its `New Task`
   title, and a focused composer are the whole cost of a click; the pi process for

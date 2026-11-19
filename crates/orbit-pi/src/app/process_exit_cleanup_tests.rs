@@ -220,7 +220,6 @@ fn stopping_the_process_drops_its_dialog_and_queue(cx: &mut gpui::TestAppContext
     app.update(cx, |app, cx| {
         // Queue and retry state as a live run would leave them.
         app.queue.follow_up.push("queued".into());
-        app.pending_follow_up = Some("queued".into());
         app.retrying = true;
         app.runtime_stop(cx);
         assert!(app.client.is_none());
@@ -229,7 +228,7 @@ fn stopping_the_process_drops_its_dialog_and_queue(cx: &mut gpui::TestAppContext
             "a dialog outlived the process that asked the question"
         );
         assert!(
-            app.queue.follow_up.is_empty() && app.pending_follow_up.is_none(),
+            app.queue.follow_up.is_empty(),
             "queued messages for a dead run stayed in the queue bar"
         );
         assert!(!app.retrying, "the retry counter outlived its run");

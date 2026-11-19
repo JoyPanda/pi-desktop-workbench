@@ -4821,11 +4821,28 @@ impl OrbitApp {
         };
 
         let mut rows: Vec<AnyElement> = Vec::with_capacity(count);
+        let mut ix = 0u64;
         for text in &self.queue.steering {
-            rows.push(queue_row(&tr!("view.queue_steer"), text, false, theme));
+            let copy = self.queue_copy_button(ix, text.clone(), theme, cx);
+            rows.push(queue_row(
+                &tr!("view.queue_steer"),
+                text,
+                false,
+                theme,
+                Some(copy),
+            ));
+            ix += 1;
         }
         for text in &self.queue.follow_up {
-            rows.push(queue_row(&tr!("view.queue_follow_up"), text, true, theme));
+            let copy = self.queue_copy_button(ix, text.clone(), theme, cx);
+            rows.push(queue_row(
+                &tr!("view.queue_follow_up"),
+                text,
+                true,
+                theme,
+                Some(copy),
+            ));
+            ix += 1;
         }
 
         Some(
@@ -4982,17 +4999,58 @@ impl OrbitApp {
         )
     }
 
-    /// Discard the pending queue without aborting the run. The composer text
-    /// stays untouched (unlike Escape, which restores queued text).
+    /// Copy this queued prompt. Same Compact chrome as header `clear-queue`,
+    /// including [`BUTTON_GROUP`] so the glyph brightens on hover.
+    fn queue_copy_button(
+        &self,
+        ix: u64,
+        text: String,
+        theme: Theme,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        icon_button_frame(
+            div()
+                .id(("queue-copy", ix))
+                .debug_selector(move || format!("queue-copy-{ix}")),
+            &theme,
+            ButtonSize::Compact,
+        )
+        .group(BUTTON_GROUP)
+        .tip(tr!("common.copy"))
+        .cursor_pointer()
+        .text_color(theme.text_muted)
+        .hover(|s| s.bg(theme.surface_hover).text_color(theme.text_primary))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.copy_queued_prompt(&text, cx);
+                cx.stop_propagation();
+            }),
+        )
+        .child(icon(
+            "icons/copy.svg",
+            ButtonSize::Compact.icon_size().px(&theme),
+            theme.text_muted,
+        ))
+        .into_any_element()
+    }
+
+    /// Copy a queued prompt. Shared by the row button and its tests.
+    pub(super) fn copy_queued_prompt(&self, text: &str, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()));
+    }
+
+    /// Unqueue pending messages into the composer without aborting the run.
     pub(super) fn on_clear_queue(
         &mut self,
         _: &MouseUpEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.restore_queue_on_clear = false;
-        self.send(CommandBody::ClearQueue, "clear_queue");
-        cx.notify();
+        if self.unqueue_to_composer(cx) {
+            self.input.read(cx).focus(window);
+            cx.notify();
+        }
     }
 
     /// Full-window image lightbox: the clicked attachment at `Contain` scale

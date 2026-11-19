@@ -40,7 +40,16 @@ pub(crate) fn humanize_command(command: &str) -> String {
 /// kind label plus the message text. Deliberately flat, with no border or
 /// fill of its own: the bar around it is already the raised surface, and a
 /// card inside a card doubles the chrome (DESIGN.md's card budget).
-pub(crate) fn queue_row(kind: &str, text: &str, follow: bool, theme: Theme) -> AnyElement {
+///
+/// `trailing` sits on the first line. Its wrapper pulls 1px into the vertical
+/// padding so an 18px Compact button does not grow a 16px text row.
+pub(crate) fn queue_row(
+    kind: &str,
+    text: &str,
+    follow: bool,
+    theme: Theme,
+    trailing: Option<AnyElement>,
+) -> AnyElement {
     div()
         .w_full()
         .flex()
@@ -75,6 +84,9 @@ pub(crate) fn queue_row(kind: &str, text: &str, follow: bool, theme: Theme) -> A
                 .text_color(theme.text_primary)
                 .child(text.to_string()),
         )
+        .when_some(trailing, |row, el| {
+            row.child(div().flex_none().my(px(-1.)).child(el))
+        })
         .into_any_element()
 }
 

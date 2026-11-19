@@ -3,6 +3,7 @@
 //! not grow its own copy.
 
 use super::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// A fake `pi` launcher, removed when the test drops it.
 pub(super) struct FakePi {
@@ -11,13 +12,11 @@ pub(super) struct FakePi {
 
 impl FakePi {
     pub(super) fn start(tag: &str) -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "orbit-fake-pi-{tag}-{}-{}",
             std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
+            NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir_all(&dir).expect("fake pi dir");
         #[cfg(unix)]

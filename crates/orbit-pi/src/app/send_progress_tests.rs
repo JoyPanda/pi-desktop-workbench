@@ -97,7 +97,13 @@ fn a_second_prompt_while_pending_queues_as_a_follow_up(cx: &mut gpui::TestAppCon
             app.submit_as("second".to_owned(), SendMode::FollowUp, cx);
 
             assert_eq!(app.queue.follow_up, vec!["second".to_owned()]);
-            assert_eq!(app.pending_follow_up.as_deref(), Some("second"));
+            assert_eq!(
+                app.queue_wire
+                    .in_flight
+                    .last()
+                    .map(|entry| entry.text.as_str()),
+                Some("second")
+            );
         });
     });
 }

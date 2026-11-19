@@ -79,18 +79,8 @@ impl OrbitApp {
             );
             return;
         }
-        // A rejected follow-up/steer never entered pi's queue: drop the
-        // optimistic chip and hand the text back so nothing is lost.
-        if matches!(command, "follow_up" | "steer") {
-            if let Some(text) = self.pending_follow_up.take() {
-                if let Some(pos) = self.queue.follow_up.iter().position(|t| *t == text) {
-                    self.queue.follow_up.remove(pos);
-                }
-                if self.input.read(cx).text().trim().is_empty() {
-                    self.input.update(cx, |input, cx| input.set_text(text, cx));
-                }
-            }
-        }
+        // A rejected follow-up/steer is unwound from the local queue in
+        // `on_response` (matched by RPC id) before this banner is raised.
         // A rejected prompt never opened a turn. The run state was set
         // optimistically when the prompt went out, so unwind it here instead of
         // leaving the composer on Stop and the transcript waiting for an answer
@@ -99,6 +89,9 @@ impl OrbitApp {
             self.execution.fail();
             self.busy = false;
             self.transcript.abandon_reply();
+            // A post-X follow-up held for this turn must not flush onto an
+            // idle pi after the prompt is rejected.
+            self.settle_local_queue(cx);
             // pi is the authority on whether something else is still running;
             // `get_state` re-syncs `busy` from it.
             self.send(CommandBody::GetState, "get_state");
@@ -207,6 +200,9 @@ impl OrbitApp {
         // A pin belonged to the process being replaced. The caller sets a new
         // one only after this process has accepted `new_session`.
         self.startup_model_pinned = false;
+        // A new process has no in-flight queue RPCs. Resume paths restore
+        // `queue_wire` from the parked session after this.
+        self.queue_wire = QueueWire::default();
     }
 
     /// Give up the spawn still on its way, if any. Any process the app already
@@ -485,7 +481,6 @@ impl OrbitApp {
         // Queued messages were queued for a run that no longer exists, and the
         // retry counter was counting that run's attempts.
         self.reset_queue();
-        self.pending_follow_up = None;
         self.retrying = false;
         self.retry_detail = None;
         // A login in flight dies with its process; remember the provider so
@@ -874,8 +869,7 @@ impl OrbitApp {
         match spawned {
             Ok(client) => {
                 self.adopt_client(client);
-                self.startup_model_reportable =
-                    chosen.is_none() && self.session_default.is_unset();
+                self.startup_model_reportable = chosen.is_none() && self.session_default.is_unset();
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
                 self.send(CommandBody::GetState, "get_state");
                 self.refresh_catalogs();

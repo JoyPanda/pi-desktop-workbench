@@ -36,6 +36,7 @@ Usage — requests, tokens, cost, and cache, read from your own sessions:
 
 - Chat-style agent sessions — composer with model selection, thinking effort, follow-up queueing, mid-run steering, cancel, and streaming replies
 - A send is in flight from the keystroke: pressing Enter flips the composer to Stop and starts the live “Working for…” row at the send, instead of waiting for pi’s first streamed token. A second Enter queues a follow-up rather than racing a second prompt, and a prompt pi rejects unwinds that state
+- **Queued follow-ups and steers sit in a bar above the composer.** The header X puts them back in the input without stopping the run, and each row copies
 - **Enter behavior** — Settings → Agent → Behavior picks what Enter does: queue a follow-up (default) or steer the running task. Alt/Option+Enter uses the other mode, and ⌘⇧Enter / Ctrl+Shift+Enter always steers
 - Compact hints immediately left of the context-window indicator show both sending modes while the agent is working. Steering takes effect after the current response and tools finish; idle Enter sends normally, and Shift+Enter inserts a new line
 - **Workflow modes** — scope a session to **Plan**, **Build**, or **Ask**: Plan and Ask are read-only (write tools disabled, bash gated), so you can explore and plan before switching to Build

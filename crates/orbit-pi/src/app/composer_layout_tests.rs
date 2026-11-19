@@ -100,6 +100,17 @@ fn queue_bar_is_one_compact_grouped_surface(cx: &mut gpui::TestAppContext) {
     assert!(clear.center().y < one.top() + px(30.));
     assert!((one.right() - px(12.) - clear.right()).abs() <= px(1.));
 
+    // Copy is on the follow-up row, not a second header control. Assert
+    // absence of a second copy *before* drawing two rows: debug_bounds keeps
+    // selectors from earlier paints in this window.
+    let copy0 = cx.debug_bounds("queue-copy-0").expect("copy on follow-up");
+    assert!(
+        cx.debug_bounds("queue-copy-1").is_none(),
+        "a single row has one copy button"
+    );
+    assert!(copy0.center().y > one.top() + px(30.));
+    assert!((clear.right() - copy0.right()).abs() <= px(1.));
+
     // A second message adds one hairline-separated row, not a second card.
     let two = draw(
         PendingQueue {
@@ -114,6 +125,60 @@ fn queue_bar_is_one_compact_grouped_surface(cx: &mut gpui::TestAppContext) {
         row >= px(27.) && row <= px(33.),
         "one more row should add ~30px, added {row}"
     );
+    cx.debug_bounds("queue-copy-0")
+        .expect("copy on steering row");
+    cx.debug_bounds("queue-copy-1")
+        .expect("copy on follow-up row");
+}
+
+/// Each row's copy action writes that prompt to the clipboard and leaves the
+/// queue bar intact. Layout of `queue-copy-0` / `queue-copy-1` is pinned in
+/// [`queue_bar_is_one_compact_grouped_surface`].
+#[gpui::test]
+fn queue_copy_buttons_copy_row_text_without_clearing(cx: &mut gpui::TestAppContext) {
+    use crate::theme::{Theme, ThemeKey};
+    use orbit_rpc::PendingQueue;
+
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+    let cx = cx.add_empty_window();
+    let app = cx.update(|_, cx| cx.new(OrbitApp::new));
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.queue = PendingQueue {
+                steering: vec!["tighten the hero".into()],
+                follow_up: vec!["ship the landing page".into()],
+            };
+            app.copy_queued_prompt(&app.queue.steering[0].clone(), cx);
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("tighten the hero")
+    );
+
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.copy_queued_prompt(&app.queue.follow_up[0].clone(), cx);
+        });
+    });
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("ship the landing page")
+    );
+
+    cx.update(|_, cx| {
+        app.update(cx, |app, _| {
+            assert_eq!(app.queue.steering, vec!["tighten the hero".to_string()]);
+            assert_eq!(
+                app.queue.follow_up,
+                vec!["ship the landing page".to_string()]
+            );
+        });
+    });
 }
 #[gpui::test]
 fn sending_hints_match_footer_metrics_and_share_the_context_row(cx: &mut gpui::TestAppContext) {

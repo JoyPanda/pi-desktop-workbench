@@ -277,6 +277,30 @@ impl OrbitApp {
             self.queue_prompt_for_new_process(body, label, composer, cx);
             return;
         }
+        if running && self.queue_wire.should_defer_enqueue() {
+            if self.client.is_none() {
+                self.attachments = attachments;
+                self.files = files;
+                self.pasted_texts = pasted_texts;
+                self.toast_warning(tr!("runtime.pi_not_running"));
+                cx.notify();
+                return;
+            }
+            self.prompt_history.borrow_mut().record(&text);
+            match mode {
+                SendMode::Steer => self.queue.steering.push(text.clone()),
+                SendMode::FollowUp => self.queue.follow_up.push(text.clone()),
+            }
+            self.queue_wire.defer(DeferredEnqueue {
+                body,
+                label,
+                mode,
+                text,
+            });
+            self.input.update(cx, |input, cx| input.clear(cx));
+            cx.notify();
+            return;
+        }
         let Some(id) = self.send_tracked(body, label) else {
             // Keep the prompt and attachments so nothing is lost.
             self.attachments = attachments;
@@ -290,12 +314,10 @@ impl OrbitApp {
         if running {
             // Show it immediately; the next `queue_update` reconciles the list.
             match mode {
-                SendMode::Steer => self.queue.steering.push(text),
-                SendMode::FollowUp => {
-                    self.queue.follow_up.push(text.clone());
-                    self.pending_follow_up = Some(text);
-                }
+                SendMode::Steer => self.queue.steering.push(text.clone()),
+                SendMode::FollowUp => self.queue.follow_up.push(text.clone()),
             }
+            self.queue_wire.note_enqueue_sent(id, mode, text);
             self.input.update(cx, |input, cx| input.clear(cx));
             cx.notify();
             return;
@@ -526,11 +548,143 @@ impl OrbitApp {
         self.turns.rebuild(&indices);
     }
 
-    /// Forget the queued-message mirror — the queue belongs to the previous
-    /// session/process. The next `queue_update`/`get_state` re-establishes it.
+    /// Forget the queued-message mirror and any in-flight wire counters —
+    /// the process that owed those replies is gone or replaced.
     pub(super) fn reset_queue(&mut self) {
+        self.clear_local_queue();
+        self.queue_wire = QueueWire::default();
+    }
+
+    /// Forget the local pending-queue mirror without touching wire counters.
+    /// The same process may still owe `clear_queue` / enqueue replies.
+    pub(super) fn clear_local_queue(&mut self) {
         self.queue = PendingQueue::default();
-        self.restore_queue_on_clear = false;
+    }
+
+    /// Move the local pending queue into the composer and drop the mirror.
+    ///
+    /// Image attachments that rode the original `follow_up`/`steer` are not in
+    /// [`PendingQueue`] and are not restored. Does not send RPC or focus.
+    pub(super) fn take_queue_to_composer(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.queue.is_empty() {
+            return false;
+        }
+        if let Some(queued) = self
+            .queue
+            .restore_text()
+            .filter(|text| !text.trim().is_empty())
+        {
+            let typed = self.input.read(cx).text();
+            let restored = if typed.trim().is_empty() {
+                queued
+            } else {
+                // Something was typed while the queue sat: keep both, the queued
+                // text first, because it was written first.
+                format!("{queued}\n\n{typed}")
+            };
+            self.input
+                .update(cx, |input, cx| input.set_text(restored, cx));
+        }
+        self.clear_local_queue();
+        true
+    }
+
+    /// Ask pi to drop its pending queue. Increments `clear_in_flight` so stale
+    /// `queue_update`s cannot resurrect the bar while the RPC is out. If an
+    /// enqueue is still unanswered, arm a reclear for when it returns.
+    pub(super) fn send_clear_queue(&mut self) {
+        if self.send(CommandBody::ClearQueue, "clear_queue") {
+            self.queue_wire.note_clear_sent();
+        }
+    }
+
+    /// Restore queued text into the composer and tell pi to drop the queue.
+    pub(super) fn unqueue_to_composer(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.take_queue_to_composer(cx) {
+            self.queue_wire.cancel_pending();
+            self.send_clear_queue();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Send deferred follow-ups/steers once a pre-clear barrier has lifted.
+    pub(super) fn flush_deferred_enqueues(&mut self, cx: &mut Context<Self>) {
+        if !self.is_running() {
+            if !self.queue_wire.deferred.is_empty() {
+                self.settle_local_queue(cx);
+            }
+            return;
+        }
+        for item in self.queue_wire.take_ready_deferred() {
+            match self.send_tracked(item.body, item.label) {
+                Some(id) => self.queue_wire.note_enqueue_sent(id, item.mode, item.text),
+                None => {
+                    remove_one_queued(&mut self.queue, item.mode, &item.text);
+                    if self.input.read(cx).text().trim().is_empty() {
+                        self.input
+                            .update(cx, |input, cx| input.set_text(item.text, cx));
+                    }
+                }
+            }
+        }
+    }
+
+    /// A settled turn has no queued continuation unless a post-X message was
+    /// held and never reached pi — restore that instead of dropping it.
+    pub(super) fn settle_local_queue(&mut self, cx: &mut Context<Self>) {
+        if self.queue_wire.drop_deferred() {
+            self.take_queue_to_composer(cx);
+        } else {
+            self.clear_local_queue();
+        }
+    }
+
+    /// This process moved onto a different session. Restore any unsent post-X
+    /// message into the composer, drop the bar, and forget in-flight enqueues
+    /// so a late reply cannot reclear or restore into the new session.
+    pub(super) fn discard_inflight_queue_on_replace(&mut self, cx: &mut Context<Self>) {
+        self.settle_local_queue(cx);
+        self.queue_wire.in_flight.clear();
+        self.queue_wire.reclear_needed = false;
+    }
+
+    /// Fold a parked session's unsent post-X text into the draft that resume
+    /// (or a later cold open) restores into the composer.
+    pub(super) fn stash_parked_queue_restore(
+        &mut self,
+        path: Option<&Path>,
+        draft_id: Option<u64>,
+        text: String,
+    ) {
+        if let Some(path) = path {
+            match self.drafts.entry(path.to_path_buf()) {
+                std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                    occupied.get_mut().prepend_text(text);
+                }
+                std::collections::hash_map::Entry::Vacant(vacant) => {
+                    vacant.insert(ComposerDraft {
+                        text,
+                        ..ComposerDraft::default()
+                    });
+                }
+            }
+            return;
+        }
+        if let Some(id) = draft_id {
+            if let Some(row) = self.listed_drafts.iter_mut().find(|row| row.id == id) {
+                match &mut row.composer {
+                    Some(draft) => draft.prepend_text(text),
+                    None => {
+                        row.composer = Some(ComposerDraft {
+                            text,
+                            ..ComposerDraft::default()
+                        });
+                    }
+                }
+            }
+        }
     }
 
     /// Park the active session's process so it stays warm in the background,
@@ -600,7 +754,8 @@ impl OrbitApp {
             subagents,
             subagent_scrolls,
             subagent_list_scroll,
-            queue: self.queue.clone(),
+            queue: std::mem::take(&mut self.queue),
+            queue_wire: std::mem::take(&mut self.queue_wire),
             parked_at: Instant::now(),
             turns: std::mem::take(&mut self.turns),
             draft: self.parking_draft.take(),
@@ -830,9 +985,8 @@ impl OrbitApp {
                 .update(cx, |pane, cx| pane.close_source_menu(cx));
             return;
         }
-        // Interactive Esc: drop the pending queue first so its text can be
-        // restored to the composer when the `clear_queue` response lands
-        // (docs), then abort the run.
+        // Interactive Esc: restore any queued follow-up/steer into the
+        // composer immediately, then abort the run.
         self.request_abort(cx);
         cx.notify();
     }
@@ -866,13 +1020,15 @@ impl OrbitApp {
         if let Some(sent_at) = self.abort_sent_at {
             if sent_at.elapsed() >= ABORT_RETRY_GRACE {
                 self.force_stop_run(cx);
+            } else {
+                // A follow-up queued after the first abort still has to come
+                // back; the early return must not swallow it. Do not send
+                // `clear_queue` if this press is about to kill the process.
+                self.unqueue_to_composer(cx);
             }
             return;
         }
-        if !self.queue.is_empty() {
-            self.restore_queue_on_clear = true;
-            self.send(CommandBody::ClearQueue, "clear_queue");
-        }
+        self.unqueue_to_composer(cx);
         // Only a request with a run behind it may claim pi's cancelled-retry
         // report: an Esc pressed on an idle composer must not swallow the
         // failure of a retry that really does run out later. The request is
@@ -934,20 +1090,9 @@ impl OrbitApp {
         }
         // Nothing pi never acknowledged can still be delivered, so hand the
         // queued text back before the drop resets the queue: a stop must not eat
-        // what the user typed while they waited.
-        if let Some(queued) = self.queue.restore_text() {
-            let typed = self.input.read(cx).text();
-            let restored = if typed.trim().is_empty() {
-                queued
-            } else {
-                // Something was typed while the stop was waiting: keep both,
-                // the queued text first, because it was written first.
-                format!("{queued}\n\n{typed}")
-            };
-            self.input
-                .update(cx, |input, cx| input.set_text(restored, cx));
-        }
-        self.restore_queue_on_clear = false;
+        // what the user typed while they waited. The first abort already ran
+        // this; a second copy is not restored.
+        self.take_queue_to_composer(cx);
         self.busy = false;
         self.execution.stop();
         // `abandon_reply` alone leaves a streaming row live; the process this
@@ -1856,6 +2001,7 @@ impl OrbitApp {
         self.clear_subagent_folds();
         self.subagents.drop_inflight();
         self.queue = parked.queue;
+        self.queue_wire = parked.queue_wire;
         self.mcp_stamp = parked.mcp_stamp;
         // The park does not carry the previous view's title or ids.
         self.current_title = title;
@@ -2346,6 +2492,7 @@ impl OrbitApp {
             // pi re-emits `queue_update` only on a change, so a warm resume
             // restores the pending bar from the drained mirror instead.
             self.queue = parked.queue;
+            self.queue_wire = parked.queue_wire;
             self.send(CommandBody::GetState, "get_state");
             self.refresh_catalogs();
             self.refresh_context_stats();

@@ -18,6 +18,19 @@ struct ParkedDrain {
     /// The process named its session file; move it from the pending pool into
     /// `lives` under this path.
     rekey: Option<PathBuf>,
+    /// Unsent post-X queue text taken when the parked run settled (or a
+    /// prompt was handled without a run). Stashed onto the session draft.
+    restore: Option<String>,
+}
+
+fn take_restore(slot: &mut Option<String>, next: Option<String>) {
+    let Some(next) = next else {
+        return;
+    };
+    *slot = Some(match slot.take() {
+        Some(existing) => format!("{existing}\n\n{next}"),
+        None => next,
+    });
 }
 
 impl OrbitApp {
@@ -278,15 +291,7 @@ impl OrbitApp {
                     }
                 }
                 Event::QueueUpdate { value } => {
-                    self.queue = PendingQueue::from_value(value);
-                    // pi confirmed the optimistic follow-up; stop tracking it.
-                    let confirmed = self
-                        .pending_follow_up
-                        .as_ref()
-                        .is_some_and(|pending| self.queue.follow_up.iter().any(|t| t == pending));
-                    if confirmed {
-                        self.pending_follow_up = None;
-                    }
+                    self.apply_queue_update(value);
                 }
                 Event::ExtensionError { value } => {
                     let path = value
@@ -324,10 +329,12 @@ impl OrbitApp {
                     self.busy = false;
                     self.retrying = false;
                     self.retry_detail = None;
-                    self.pending_follow_up = None;
                     // A settled run has no queued continuation left; clear the
-                    // bar even if the final `queue_update` was missed.
-                    self.queue = PendingQueue::default();
+                    // bar even if the final `queue_update` was missed. Keep
+                    // wire counters: a `clear_queue` sent just before settle
+                    // is still on this process. A post-X message that never
+                    // left Orbit is restored, not dropped.
+                    self.settle_local_queue(cx);
                     refresh_sessions = true;
                     self.refresh_context_stats();
                     #[cfg(debug_assertions)]
@@ -400,8 +407,7 @@ impl OrbitApp {
                     self.busy = false;
                     self.retrying = false;
                     self.retry_detail = None;
-                    self.pending_follow_up = None;
-                    self.queue = PendingQueue::default();
+                    self.reset_queue();
                     // The run is gone; its dialog (if any) can never be
                     // answered, so drop it without a reply.
                     self.dialog = None;
@@ -605,11 +611,15 @@ impl OrbitApp {
         // are no longer held.
         let mut finished: Vec<(PathBuf, Option<String>, Option<transcript::TurnSummary>)> =
             Vec::new();
+        let mut restores: Vec<(Option<PathBuf>, Option<u64>, String)> = Vec::new();
         for (path, parked) in self.lives.iter_mut() {
             let drained =
                 Self::drain_parked_session(parked, Some(path), &self.sessions, &mut finished);
             changed |= drained.changed;
             any_busy |= drained.busy;
+            if let Some(text) = drained.restore {
+                restores.push((Some(path.clone()), parked.draft, text));
+            }
             let status = parked.execution.status();
             // Record the outcome, but only when it moved: this runs per parked
             // session on every heartbeat, and re-inserting the same value would
@@ -634,6 +644,7 @@ impl OrbitApp {
         let mut rekeyed: Vec<(PathBuf, ParkedSession)> = Vec::new();
         let mut ix = 0;
         while ix < self.pending_parks.len() {
+            let draft_id = self.pending_parks[ix].draft;
             let drained = Self::drain_parked_session(
                 &mut self.pending_parks[ix],
                 None,
@@ -642,6 +653,9 @@ impl OrbitApp {
             );
             changed |= drained.changed;
             any_busy |= drained.busy;
+            if let Some(text) = drained.restore {
+                restores.push((drained.rekey.clone(), draft_id, text));
+            }
             if !self.pending_parks[ix].client.is_alive() {
                 let parked = self.pending_parks.remove(ix);
                 if parked.discard {
@@ -660,6 +674,9 @@ impl OrbitApp {
         }
         for (path, parked) in rekeyed {
             self.admit_rekeyed_park(path, parked);
+        }
+        for (path, draft_id, text) in restores {
+            self.stash_parked_queue_restore(path.as_deref(), draft_id, text);
         }
         // A parked run that settled while the user was elsewhere still wants
         // saying. The settle also flips the sidebar's running loader, so the
@@ -699,12 +716,15 @@ impl OrbitApp {
     ) -> ParkedDrain {
         let mut changed = false;
         let mut rekey = None;
+        let mut restore = None;
         for event in parked.client.drain_events() {
             let own_prompt = matches!(&event, Event::Response { id, command, .. }
                 if command == "prompt" && parked.execution.prompt_id.as_deref() == Some(id));
             parked.execution.apply_event(&event);
             if own_prompt && !parked.execution.status().is_in_progress() {
                 parked.transcript.abandon_reply();
+                parked.busy = false;
+                take_restore(&mut restore, parked.on_agent_settled_queue());
             }
             changed = true;
             match &event {
@@ -720,7 +740,10 @@ impl OrbitApp {
                     parked.retry_detail = None;
                     // A settled run has no queued continuation left; clear
                     // the mirror even if the final `queue_update` was missed.
-                    parked.queue = PendingQueue::default();
+                    // Keep `queue_wire`: this process may still owe replies.
+                    // A deferred post-X message is restored onto the session
+                    // draft so resume does not show a ghost bar.
+                    take_restore(&mut restore, parked.on_agent_settled_queue());
                     // A pending session has no sidebar row yet, so there is
                     // no path to name in a notification; it is re-keyed
                     // moments later and notices from then on.
@@ -741,12 +764,13 @@ impl OrbitApp {
                     parked.interaction = ParkedInteraction::default();
                     parked.retry_detail = None;
                     parked.queue = PendingQueue::default();
+                    parked.queue_wire = QueueWire::default();
                 }
                 // pi emits `queue_update` only when the queue changes, so a
                 // parked session must mirror it here to restore the pending
                 // bar on resume — and to drop messages pi already delivered.
                 Event::QueueUpdate { value } => {
-                    parked.queue = PendingQueue::from_value(value);
+                    parked.apply_queue_update(value);
                 }
                 // Native requests remain blocked until this session is opened.
                 // The reducer saved the raw request; no answer is fabricated.
@@ -818,43 +842,50 @@ impl OrbitApp {
                     parked.removed += r;
                 }
                 Event::Response {
+                    id,
                     command,
                     success,
                     data,
                     ..
-                } if path.is_none() && *success => {
-                    let file = data
-                        .as_ref()
-                        .and_then(|data| data.get("sessionFile"))
-                        .and_then(Value::as_str)
-                        .map(PathBuf::from);
-                    match command.as_str() {
-                        "new_session" | "clone" | "fork" => {
-                            // The reply landed while parked, so resume must
-                            // not treat it as still in flight.
-                            if command == "new_session" {
-                                parked.startup_model_pinned = false;
-                            }
-                            // A clone or fork inherits the source transcript in
-                            // the active view, which clears it on the reply; the
-                            // parked one never saw that, so clear it here.
-                            if command == "clone" || command == "fork" {
-                                parked.transcript = Transcript::new();
-                                parked.turns = crate::turn_review::TurnClock::default();
-                                changed = true;
-                            }
-                            match file {
-                                Some(file) => rekey = Some(file),
-                                // pi creates the file but does not echo it on
-                                // this reply; the follow-up `get_state` names
-                                // it (same order the active view uses).
-                                None => {
-                                    let _ = parked.client.send(CommandBody::GetState);
+                } => {
+                    take_restore(
+                        &mut restore,
+                        parked.on_queue_response(id, command, *success),
+                    );
+                    if path.is_none() && *success {
+                        let file = data
+                            .as_ref()
+                            .and_then(|data| data.get("sessionFile"))
+                            .and_then(Value::as_str)
+                            .map(PathBuf::from);
+                        match command.as_str() {
+                            "new_session" | "clone" | "fork" => {
+                                // The reply landed while parked, so resume must
+                                // not treat it as still in flight.
+                                if command == "new_session" {
+                                    parked.startup_model_pinned = false;
+                                }
+                                // A clone or fork inherits the source transcript in
+                                // the active view, which clears it on the reply; the
+                                // parked one never saw that, so clear it here.
+                                if command == "clone" || command == "fork" {
+                                    parked.transcript = Transcript::new();
+                                    parked.turns = crate::turn_review::TurnClock::default();
+                                    changed = true;
+                                }
+                                match file {
+                                    Some(file) => rekey = Some(file),
+                                    // pi creates the file but does not echo it on
+                                    // this reply; the follow-up `get_state` names
+                                    // it (same order the active view uses).
+                                    None => {
+                                        let _ = parked.client.send(CommandBody::GetState);
+                                    }
                                 }
                             }
+                            "get_state" | "get_session_stats" => rekey = file,
+                            _ => {}
                         }
-                        "get_state" | "get_session_stats" => rekey = file,
-                        _ => {}
                     }
                 }
                 _ => {}
@@ -866,6 +897,7 @@ impl OrbitApp {
             changed,
             busy: parked.busy,
             rekey,
+            restore,
         }
     }
 
@@ -914,6 +946,15 @@ impl OrbitApp {
         self.log_resident("session");
     }
 
+    /// Mirror a `queue_update` unless a `clear_queue` is still on the wire
+    /// (or a reclear is armed because an enqueue raced the last clear).
+    pub(super) fn apply_queue_update(&mut self, value: &serde_json::Value) {
+        if self.queue_wire.ignores_updates() {
+            return;
+        }
+        self.queue = PendingQueue::from_value(value);
+    }
+
     /// Apply a command response to the app. The arguments are the response's
     /// own fields; `id` is what tells one `prompt` from another.
     #[allow(clippy::too_many_arguments)]
@@ -933,6 +974,29 @@ impl OrbitApp {
         if command.starts_with("auth.") {
             self.on_auth_response(command, success, data, error, cx);
             return;
+        }
+        // pi's `clear_queue` response carries the *dropped* items after an
+        // empty `queue_update`. Never write that echo back into `self.queue`.
+        if command == "clear_queue" {
+            self.queue_wire.on_clear_response();
+            self.flush_deferred_enqueues(cx);
+        }
+        if matches!(command, "steer" | "follow_up") {
+            if let Some((entry, reclear)) =
+                self.queue_wire.on_enqueue_response(id, command, success)
+            {
+                if !success && !entry.cancelled {
+                    remove_one_queued(&mut self.queue, entry.mode, &entry.text);
+                    if self.input.read(cx).text().trim().is_empty() {
+                        self.input
+                            .update(cx, |input, cx| input.set_text(entry.text, cx));
+                    }
+                }
+                if reclear {
+                    self.send_clear_queue();
+                }
+            }
+            self.flush_deferred_enqueues(cx);
         }
         // Account quota/balance/spend from the `quota.*` namespace; carries no
         // secrets, so it merges straight into the cache.
@@ -1029,14 +1093,18 @@ impl OrbitApp {
                 self.send(CommandBody::GetState, "get_state");
                 return;
             }
-            // Agent-control commands answer with no payload; nothing more to do.
+            // Agent-control commands: nothing more to do. `steer`/`follow_up`
+            // already decremented enqueue tracking above. `clear_queue` carries
+            // the dropped `{steering, followUp}` payload, which must not be
+            // written back into the local mirror.
             "set_steering_mode"
             | "set_follow_up_mode"
             | "set_auto_compaction"
             | "set_auto_retry"
             | "abort_retry"
             | "steer"
-            | "follow_up" => {
+            | "follow_up"
+            | "clear_queue" => {
                 return;
             }
             // The rename has no payload. A footer fork keeps its title locked
@@ -1074,6 +1142,10 @@ impl OrbitApp {
                     self.execution = SessionExecution::default();
                     self.busy = false;
                     self.transcript.abandon_reply();
+                    // A post-X follow-up held for this turn must not flush
+                    // `follow_up` onto an idle pi after `/review` (etc.) is
+                    // handled without a run.
+                    self.settle_local_queue(cx);
                     // The turn opened at the send never ran: close it so the
                     // next prompt starts a fresh one.
                     self.finish_turn(cx);
@@ -1336,7 +1408,7 @@ impl OrbitApp {
                     // A resumed session keeps the model in its file (D-D).
                     self.default_model_armed = false;
                     self.reset_turns(cx);
-                    self.reset_queue();
+                    self.discard_inflight_queue_on_replace(cx);
                     self.sync_review_context(cx);
                     // Load the session *before* the slower auth/quota probes,
                     // which would otherwise queue ahead of `get_messages` and
@@ -1377,7 +1449,7 @@ impl OrbitApp {
                 self.subagent_list_rows = 0;
                 self.clear_subagent_folds();
                 self.reset_turns(cx);
-                self.reset_queue();
+                self.discard_inflight_queue_on_replace(cx);
                 self.sync_review_context(cx);
                 *refresh_sessions = true;
                 // A fresh session is born on the default model; `set_model`
@@ -1392,20 +1464,6 @@ impl OrbitApp {
                 }
                 self.send(CommandBody::GetState, "get_state");
                 self.refresh_catalogs();
-            }
-            // `clear_queue` echoes the text it dropped so Escape can put it
-            // back in the composer (docs' interactive-Esc behavior).
-            "clear_queue" => {
-                let queue = PendingQueue::from_value(data);
-                if self.restore_queue_on_clear {
-                    self.restore_queue_on_clear = false;
-                    if let Some(text) = queue.restore_text() {
-                        self.input.update(cx, |input, cx| input.set_text(text, cx));
-                    }
-                }
-                // `queue_update` mirrors the same fact; this keeps the row
-                // correct even if the event is missed.
-                self.queue = queue;
             }
             _ => {
                 let _ = success;
@@ -1725,7 +1783,7 @@ impl OrbitApp {
         self.context = None;
         self.session_usage = None;
         self.reset_turns(cx);
-        self.reset_queue();
+        self.discard_inflight_queue_on_replace(cx);
         self.session_id = None;
         // A branch mirrors its source session; it is not put on the default model.
         self.default_model_armed = false;
