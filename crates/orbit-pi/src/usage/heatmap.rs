@@ -499,7 +499,7 @@ fn day_readout(
             div()
                 .h(px(HEADER_H))
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(stamp_label(day.start_ms, Granularity::Day)),
         );

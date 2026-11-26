@@ -2164,7 +2164,7 @@ fn render_rail_preview(
                 .line_height(theme.ui_px(20.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
-                .child(prompt.to_string()),
+                .child(crate::app::helpers::one_line(prompt)),
         )
         .when(!response.is_empty(), |card| {
             card.child(
@@ -2206,7 +2206,7 @@ fn render_rail_hint(
             div()
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(16.))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(tr!("transcript_view.jump_between_turns")),
         )
@@ -2228,7 +2228,7 @@ fn render_rail_hint(
 /// Whitespace-normalized grapheme snippet
 /// (the presentation navigation previews use).
 fn snippet(text: &str, max_graphemes: usize) -> String {
-    let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized = crate::app::helpers::one_line(text);
     let mut graphemes = normalized.graphemes(true);
     let head: String = graphemes.by_ref().take(max_graphemes).collect();
     if graphemes.next().is_some() {
@@ -3027,7 +3027,7 @@ fn render_activity_group(
                 div()
                     .min_w_0()
                     .truncate()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_secondary)
                     .child(title),
             )
@@ -3916,7 +3916,7 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                     .bg(theme.overlay_strong)
                     .text_size(TextSize::XSmall.px(&theme))
                     .line_height(theme.ui_px(14.))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
                     .child(SharedString::from(question.header.clone())),
             );
@@ -3928,7 +3928,7 @@ fn render_ask_card(tool: &ToolCall, theme: Theme, key: (usize, usize)) -> AnyEle
                 .whitespace_normal()
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(theme.ui_px(18.))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(SharedString::from(question.question.clone())),
         );
@@ -4627,7 +4627,7 @@ fn render_detail_section(
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_size(TextSize::Small.px(&theme))
                         .line_height(theme.ui_px(15.))
                         .text_color(theme.text_muted)
@@ -4714,7 +4714,7 @@ fn render_detail_section(
             .w_full()
             .justify_start()
             .cursor_pointer()
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.text_muted)
             .hover(|style| style.text_color(theme.text_primary))
             .child(glyph(
@@ -5046,7 +5046,7 @@ fn render_edit_diff(
             .w_full()
             .justify_start()
             .cursor_pointer()
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.text_muted)
             .hover(|style| style.text_color(theme.text_primary))
             .child(glyph(
@@ -5618,7 +5618,7 @@ fn render_turn_fold(
             )
             .group(BUTTON_GROUP)
             .cursor_pointer()
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.text_muted)
             .hover(|style| style.text_color(theme.text_secondary))
             .child(label)
@@ -5709,7 +5709,7 @@ fn render_stopped_marker(theme: Theme) -> impl IntoElement {
             div()
                 .text_size(TextSize::Default.px(&theme))
                 .line_height(theme.ui_px(18.))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_muted)
                 .child(tr!("transcript_view.stopped")),
         )
@@ -5750,7 +5750,7 @@ fn render_working_indicator(
             .truncate()
             .text_size(label_size)
             .line_height(label_line)
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.accent_text)
             .child(label)
             .into_any_element()
@@ -5783,7 +5783,7 @@ fn render_working_indicator(
                 .min_w_0()
                 .text_size(label_size)
                 .line_height(label_line)
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(label_el),
         )
 }
@@ -7109,7 +7109,7 @@ fn render_code_block(
                 .truncate()
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(15.))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.output_code_header_fg)
                 .child(label),
         )
@@ -7166,7 +7166,7 @@ fn render_code_block(
                 .gap(DynamicSpacing::Base06.px(&theme))
                 .cursor_pointer()
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_secondary)
                 .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
                 .child(label)
@@ -7349,7 +7349,7 @@ fn render_mermaid_block(
                 .truncate()
                 .text_size(TextSize::Small.px(&theme))
                 .line_height(theme.ui_px(15.))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.output_code_header_fg)
                 .child(tr!("transcript_view.mermaid_diagram")),
         )
@@ -7400,7 +7400,7 @@ fn render_mermaid_block(
         .gap(DynamicSpacing::Base06.px(&theme))
         .cursor_pointer()
         .text_size(TextSize::Small.px(&theme))
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme.text_secondary)
         .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
         .child(toggle_label)
@@ -7999,7 +7999,7 @@ pub(crate) fn render_changed_files(
         .border_color(theme.border)
         .raised(theme.surface_elevated, &theme)
         .cursor_pointer()
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme.text_secondary)
         .hover(|style| {
             style
@@ -8050,7 +8050,7 @@ pub(crate) fn render_changed_files(
                         .truncate()
                         .text_size(TextSize::Default.px(&theme))
                         .line_height(theme.ui_px(17.))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(title),
                 )
@@ -8108,7 +8108,7 @@ pub(crate) fn render_changed_files(
             .gap(DynamicSpacing::Base06.px(&theme))
             .cursor_pointer()
             .text_size(TextSize::Small.px(&theme))
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.text_secondary)
             .hover(|style| style.bg(theme.surface_hover).text_color(theme.text_primary))
             .child(label);

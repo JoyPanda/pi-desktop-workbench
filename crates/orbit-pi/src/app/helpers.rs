@@ -1,8 +1,8 @@
 use super::*;
 use crate::platform::WindowCommand;
 use crate::theme::tokens::{
-    self, button, context_menu, input, list, list_item, panel, picker, ButtonSize, DynamicSpacing,
-    IconSize, Radius, StyledExt, TextSize,
+    self, button, chip, context_menu, input, list, list_item, panel, picker, ButtonSize,
+    DynamicSpacing, IconSize, Radius, StyledExt, TextSize,
 };
 use crate::usage::tooltip::Tooltip;
 use gpui::{Font, FontFeatures, FontStyle, InteractiveElement};
@@ -66,7 +66,7 @@ pub(crate) fn queue_row(
                 .pt(px(1.))
                 .text_size(TextSize::XSmall.px(&theme))
                 .line_height(TextSize::XSmall.line_height(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(if follow {
                     theme.text_muted
                 } else {
@@ -340,10 +340,11 @@ pub(crate) fn picker_search_frame<E: Styled>(el: E, theme: &Theme) -> E {
 }
 
 /// One picker row, Zed's inset `ListItem` at `Sparse` spacing: Base04
-/// outside, Base06 inside, 4px above and below, 6px corners, and at least
-/// one Comfortable line of Default text (29px). A row with a secondary line
-/// grows to fit it (see `picker::two_line_entry_height`). Callers add the id,
-/// colors, hover, selection, and click handling.
+/// outside, Base06 inside, Base12 between icon and label, 4px above and
+/// below, 6px corners, and at least one Comfortable line of Default text
+/// (29px). A row with a secondary line grows to fit it (see
+/// `picker::two_line_entry_height`). Callers add the id, colors, hover,
+/// selection, and click handling.
 pub(crate) fn picker_entry<E: Styled>(el: E, theme: &Theme) -> E {
     el.min_h(picker::entry_height(theme))
         .mx(list_item::inset(theme))
@@ -354,10 +355,145 @@ pub(crate) fn picker_entry<E: Styled>(el: E, theme: &Theme) -> E {
         .items_center()
         .gap(list_item::content_gap(theme))
         .text_size(picker::TEXT.px(theme))
+        .font_weight(tokens::weight::FUNCTIONAL)
+}
+
+/// Collapse embedded newlines and whitespace runs to single spaces so a
+/// one-line `truncate()` surface fed external prose (YAML blurbs, session
+/// titles, prompts) cannot hard-break into extra lines: gpui's nowrap only
+/// disables soft wrap, a literal '\n' still breaks.
+pub(crate) fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A composer chip's frame: the dense button height with Cursor-pill
+/// breathing room — 8px horizontal padding, 12px gaps, Large corners, 12px
+/// label. Callers keep colors, hover/open state, and click handling.
+///
+/// Height and label size are pinned here even though they currently equal
+/// `ButtonSize::Default`'s own values (callers pass `chip::ICON` for glyphs):
+/// the chip owns its metrics, so a future button change cannot silently
+/// restyle every chip.
+pub(crate) fn chip_frame<E: Styled + gpui::InteractiveElement>(el: E, theme: &Theme) -> E {
+    button_frame(el, theme, ButtonSize::Default)
+        .h(chip::height(theme))
+        .px(chip::padding_x(theme))
+        .gap(chip::gap(theme))
+        .rounded(chip::RADIUS.px(theme))
+        .text_size(chip::LABEL.px(theme))
+}
+
+/// A menu row's leading icon column: fixed [`picker::icon_slot`] so every
+/// label starts at the same x regardless of the glyph's visual weight.
+pub(crate) fn menu_icon_slot(path: &'static str, color: Hsla, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(picker::icon_slot(theme))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(icon(path, context_menu::ICON.px(theme), color))
+}
+
+/// A menu row's trailing check column: always occupies
+/// [`picker::trailing_slot`], so the check appearing or disappearing never
+/// shifts the row's content width; the height is reserved too so the empty
+/// slot centers identically to a filled one.
+pub(crate) fn menu_check_slot(show: bool, theme: &Theme) -> impl IntoElement {
+    div()
+        .flex_none()
+        .w(picker::trailing_slot(theme))
+        .h(context_menu::ICON.px(theme))
+        .flex()
+        .items_center()
+        .justify_center()
+        .children(show.then(|| {
+            icon(
+                "icons/check.svg",
+                context_menu::ICON.px(theme),
+                theme.accent_text,
+            )
+        }))
+}
+
+/// One row in a mode picker (Plan/Build/Ask, access modes): Cursor's
+/// single-line pattern — icon slot, medium name, the description inline on
+/// the same line (truncating, never wrapping), and a reserved check slot.
+/// Selection and highlight change fills and ink only, never geometry, so
+/// moving through the list never reflows a row. Both texts truncate: a long
+/// localized name degrades to an ellipsis instead of clipping the row.
+pub(crate) fn mode_menu_row(
+    id: impl Into<ElementId>,
+    icon_path: &'static str,
+    label: String,
+    description: String,
+    selected: bool,
+    highlighted: bool,
+    theme: Theme,
+    on_hover: impl Fn(&bool, &mut Window, &mut gpui::App) + 'static,
+    listener: impl Fn(&MouseUpEvent, &mut Window, &mut gpui::App) + 'static,
+) -> AnyElement {
+    let lit = selected || highlighted;
+    let id = id.into();
+    let debug = id.to_string();
+    let check_sel = format!("{debug}-check");
+    picker_entry(
+        div()
+            .id(id)
+            .debug_selector(move || debug)
+            .group(BUTTON_GROUP),
+        &theme,
+    )
+    .cursor_pointer()
+    .when(lit, |row| row.bg(theme.surface_selected))
+    .when(!lit, |row| row.hover(|s| s.bg(theme.surface_hover)))
+    .on_hover(on_hover)
+    .on_mouse_up(MouseButton::Left, listener)
+    .child(menu_icon_slot(
+        icon_path,
+        if selected {
+            theme.accent_text
+        } else {
+            theme.text_muted
+        },
+        &theme,
+    ))
+    .child(
+        div()
+            .flex_shrink()
+            .min_w_0()
+            .truncate()
+            .font_weight(tokens::weight::FUNCTIONAL)
+            .text_color(if lit {
+                theme.text_primary
+            } else {
+                theme.text_secondary
+            })
+            .child(label),
+    )
+    // The description stays muted even on the highlighted row: highlight
+    // is a fill change, not an ink change (deliberate, keeps scanning calm).
+    .child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .truncate()
+            .font_weight(gpui::FontWeight::NORMAL)
+            .text_size(picker::SECONDARY_TEXT.px(&theme))
+            .text_color(theme.text_muted)
+            .child(description),
+    )
+    .child(
+        div()
+            .flex_none()
+            .debug_selector(move || check_sel)
+            .child(menu_check_slot(selected, &theme)),
+    )
+    .into_any_element()
 }
 
 /// A labeled button's frame, Zed's `ButtonLike`: the size's height and
-/// horizontal padding, Base04 between icon and label, [`button::radius`],
+/// horizontal padding, Base12 between icon and label, [`button::radius`],
 /// and a one-line label at 1× line height (Zed's `UiLabel`) so it sits
 /// inside even a 22px button. The label size follows [`button::label_size`]
 /// and an icon inside it takes [`ButtonSize::icon_size`], so every button's
@@ -378,6 +514,7 @@ pub(crate) fn button_frame<E: Styled + gpui::InteractiveElement>(
         .rounded(button::radius(size).px(theme))
         .whitespace_nowrap()
         .text_size(button::label_size(size).px(theme))
+        .font_weight(tokens::weight::FUNCTIONAL)
         .line_height(relative(1.))
         .focus(|style| style.border_1().border_color(theme.focus_ring))
 }
@@ -502,7 +639,7 @@ pub(crate) fn empty_state(
             div()
                 .mt(DynamicSpacing::Base16.px(&theme))
                 .text_size(TextSize::Default.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(title.to_string()),
         );
@@ -675,7 +812,7 @@ pub(crate) fn star_project_banner(
                     div()
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(tr!("sidebar.star_orbit")),
                 )

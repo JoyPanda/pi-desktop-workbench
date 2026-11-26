@@ -523,7 +523,7 @@ impl OrbitApp {
             CommandId::CheckForUpdates => {
                 self.on_check_for_updates(&crate::CheckForUpdates, window, cx)
             }
-            CommandId::Quit => cx.quit(),
+            CommandId::Quit => crate::main_window::request_quit(cx),
             // Context-only commands are dispatched by their own focus nodes
             // (the review tree), never by the palette.
             CommandId::ReviewTreeNext

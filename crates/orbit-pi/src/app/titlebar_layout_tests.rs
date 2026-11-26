@@ -73,3 +73,22 @@ fn open_toggle_clears_the_traffic_lights() {
         view::titlebar_cluster_left()
     );
 }
+
+/// The toggle's glyph shares the New Task glyph's ink line: the alignment
+/// helper centers a Medium glyph in a `TITLEBAR_NAV_H` box on that line.
+#[test]
+fn open_toggle_glyph_shares_the_new_task_ink_line() {
+    let theme = crate::theme::Theme::dark();
+    let toggle_glyph =
+        f32::from(crate::theme::tokens::ButtonSize::Medium.icon_size().px(&theme));
+    let line = view::titlebar_toggle_aligned_left(&theme)
+        + (crate::app::helpers::TITLEBAR_NAV_H - toggle_glyph) / 2.;
+    // Expected ink line from raw spacing tokens, not the sidebar helper, so
+    // render drift on either surface fails the test.
+    let pad = f32::from(crate::theme::tokens::DynamicSpacing::Base08.px(&theme));
+    let expected = pad + f32::from(crate::theme::tokens::BORDER_WIDTH) + pad + pad / 2.;
+    assert!(
+        (line - expected).abs() < 0.01,
+        "Hide Sidebar's glyph must sit on the New Task glyph line"
+    );
+}

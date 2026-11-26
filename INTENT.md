@@ -127,7 +127,7 @@ it survives resume and branch.
 **Rationale:** pi exposes no RPC command for active tools or the system prompt, so
 extension hooks are the only honest mechanism — the same call D1 made for access
 modes. Per-session (not global like `access.json`) because scope is a property of
-the task, and up to six parked sessions run at once. Reading the store fresh on every
+the task, and any number of parked sessions run at once (D17). Reading the store fresh on every
 hook re-arms a live session with no restart.
 
 **Residual:** this is a guard, not a sandbox (pi ships none).
@@ -325,6 +325,55 @@ task that gets sent always gets its own process, so no replacement command is se
 The Settings credential/catalog restarts still spawn eagerly and still send `new_session`
 (`SpawnThen::NewSession`) because they exist to reload pi itself.
 
+### D17 — Parked pi processes are never reaped by count or age
+
+**Choice:** a session left running or idle is parked with its process (`park_active_session` →
+`lives`). The pool has no cap and no idle TTL. A parked process leaves only when its session is
+deleted, the user stops it, the process exits, or Orbit itself quits. An MCP edit does not
+restart a process that is already up, idle or mid-run; the next spawn reads the new file. The
+Settings "Apply" and "Reconnect" actions still restart the process on screen, because the user
+asked that session to load the new file.
+**Rationale:** pi's `cacheWarming` (default `"idle"`, global setting) keeps the provider prompt
+cache warm from inside the live process for up to 30 minutes between runs. A 5-minute TTL cut
+that off, and a cap of six made ordinary switching evict sessions and drop the per-session state
+that rides on the process. Sessions in daily use are few; the cost of an unbounded pool is
+memory, not correctness.
+**Consequence:** each idle parked session can spend tokens refreshing its cache for up to 30
+minutes after its last run (pi only does it when the refresh is expected to pay for itself).
+Watch for unbounded node processes if parallel use grows. Supersedes the "up to six parked
+sessions, 300 s idle TTL" pool.
+
+### D18 — pi is spawned only by the send button
+
+**Choice:** the only thing that starts a pi process is sending a message: the first send of a New
+Task (`SpawnThen::Prompt`) or the first send on a session opened without a process
+(`SpawnThen::ResumePrompt`: spawn with `--session <file>`, `get_messages`, then the prompt). Launching
+the app, clicking a session, clicking New Task, Settings credential/catalog reloads and a process
+exit all start nothing. A session without a process ("cold") shows its disk preview and its
+draft; a warm parked process is still resumed instantly. Auto-restart is gone: an idle exit goes
+cold silently, an exit mid-run raises the banner with Reconnect. Settings → Reload/Start stays an
+eager entry point. Auxiliary processes (MCP probe, auth/quota probes, fork/clone) are outside
+this rule.
+**Rationale:** a click on a session you only want to read must not pay a Node spawn, and the
+same rule for New Task and old sessions is easier to hold in your head. Together with D17 the
+process pool is "exactly the sessions you have sent in this run of the app".
+**Consequence:** a cold session has no process to tell, so its choices are *staged*
+(`session_staging.rs`, `~/.orbit-pi/session-staging.json`): the model, thinking level and a new
+name are shown at once and sent to the process the first send starts, when that
+process is up and before the prompt. A staged value is dropped only on pi's success reply;
+a refusal drops it and shows the command banner; a model the catalog no longer lists is dropped
+with a notice. The model catalog and `/` commands come from `catalog_cache.rs`
+(`~/.orbit-pi/catalog-cache.json`), shown at launch and refreshed by a short-lived auxiliary pi
+when older than six hours or missing for the workspace. The context ring and usage totals show the session's last live numbers (`session_snapshot.rs`,
+`~/.orbit-pi/session-snapshots.json`), dimmed, until a live reply replaces them. Still unavailable
+without a process: the subagent board and queue, and auth/quota (the Providers page reads as not connected
+until the first send). If the session's folder is gone, the send is refused with the Worktrees
+dialog and an error banner is shown on open. Quitting or removing a project with a run in flight
+asks first; deleting a session already confirms and stops its parked process. Supersedes the
+"launch session still spawns in place" and eager Settings-restart wording in D16.
+or removing a project with a run in flight asks first; deleting a session already confirms and
+stops its parked process. Supersedes the "launch session still spawns in place" and eager
+Settings-restart wording in D16.
 ## The feature parity contract
 
 Everything below must behave identically in the GPUI app (against the pi CLI) as it does in the
@@ -380,7 +429,7 @@ Appearance's interface-font picker includes bundled Onest in Regular, Medium,
 SemiBold, and Bold weights; it works offline without an OS font installation.
 The default interface face and saved font preferences remain unchanged.
 
-Done: streaming transcript + virtualization; markdown + highlighting; composer with steering, follow-ups, cancel, autocomplete, attachments; extension dialogs; diff/Review + Git page + GitHub issues/PRs (where `gh` is available); sessions (list/switch/new/delete/clone/cross-workspace) over an Orbit-owned project list (only folders the user added; removing one never touches pi) whose groups sort by activity, added date, name, or session count, with a **warm process pool** so re-opening a recent session is a resume, not a Node spawn; Git worktrees as first-class workspaces (`worktree.rs` + the Worktrees page: discovery, create from a new/existing branch, open/rename/move/lock/remove/prune/repair, configurable `.wt` root, optional async setup script with `ORBIT_ROOT_PATH`/`ORBIT_WORKTREE_PATH`, sessions rooted in and restored to the worktree — D14); Explorer project panel + editable Files surface; integrated terminal (⌘J); usage, skills, plugins, models, providers, settings pages; transcript find; image lightbox; theming (dark/light/system, ten Classic palettes plus an opt-in Operational pair) + reduce-motion; localization (ten locales + System, D9); in-app signed updater + Version History; notifications; open-in-editor; signed/notarizable macOS packaging + best-effort Windows/Linux bundles (D5); CI; access modes (a guard, not a sandbox), workflow modes (Plan/Build/Ask per D8), and the auto-title / quota extension bridges (D10); Zed design tokens (D11) with context menus, the tooltip, the extension dialog, the floating modal cards (provider usage / API-key / editor, update dialog, custom UI), the sidebar session / workspace rows, the transcript's message / card chrome, the settings section / group / row chrome, UI type on `TextSize` across every surface, corner radii on `Radius`, and one-shot motion on `AnimationDuration` migrated onto them.
+Done: streaming transcript + virtualization; markdown + highlighting; composer with steering, follow-ups, cancel, autocomplete, attachments; extension dialogs; diff/Review + Git page + GitHub issues/PRs (where `gh` is available); sessions (list/switch/new/delete/clone/cross-workspace) over an Orbit-owned project list (only folders the user added; removing one never touches pi) whose groups sort by activity, added date, name, or session count, with a **warm process pool** (never reaped, D17) so re-opening a session you sent in is a resume, not a Node spawn; Git worktrees as first-class workspaces (`worktree.rs` + the Worktrees page: discovery, create from a new/existing branch, open/rename/move/lock/remove/prune/repair, configurable `.wt` root, optional async setup script with `ORBIT_ROOT_PATH`/`ORBIT_WORKTREE_PATH`, sessions rooted in and restored to the worktree — D14); Explorer project panel + editable Files surface; integrated terminal (⌘J); usage, skills, plugins, models, providers, settings pages; transcript find; image lightbox; theming (dark/light/system, ten Classic palettes plus an opt-in Operational pair) + reduce-motion; localization (ten locales + System, D9); in-app signed updater + Version History; notifications; open-in-editor; signed/notarizable macOS packaging + best-effort Windows/Linux bundles (D5); CI; access modes (a guard, not a sandbox), workflow modes (Plan/Build/Ask per D8), and the auto-title / quota extension bridges (D10); Zed design tokens (D11) with context menus, the tooltip, the extension dialog, the floating modal cards (provider usage / API-key / editor, update dialog, custom UI), the sidebar session / workspace rows, the transcript's message / card chrome, the settings section / group / row chrome, UI type on `TextSize` across every surface, corner radii on `Radius`, and one-shot motion on `AnimationDuration` migrated onto them.
 
 Attached images are compressed when they are queued (`attachments.rs`): the
 longest edge is capped at 1400 px (never upscaled), opaque images are re-encoded

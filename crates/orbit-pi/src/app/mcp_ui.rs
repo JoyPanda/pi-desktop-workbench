@@ -3,9 +3,11 @@
 //! The page lists the servers Pi actually loads (read from Pi's own
 //! `mcp.json` files), shows Pi's own connection status and tool counts, and
 //! offers add / edit / enable / disable / test / remove. Every mutation is
-//! written to the file that defines the server, then Pi is restarted *only*
-//! when a running process would otherwise keep using stale configuration —
-//! and that restart preserves the session (see [`OrbitApp::mcp_apply_now`]).
+//! written to the file that defines the server. A process that is already
+//! running keeps the configuration it started with until Orbit quits, or
+//! until the user explicitly applies or reconnects
+//! ([`OrbitApp::mcp_apply_now`]). The next process this app spawns reads the
+//! new file.
 //!
 //! Rendering follows the standard Settings anatomy: a pinned toolbar over a
 //! scrolling body of grouped cards (see `app/settings.rs`). The add/edit form
@@ -26,7 +28,7 @@ use crate::mcp::{
     McpTransport, McpTransportKind,
 };
 use crate::theme::tokens::{
-    button, input, list_item, modal, panel, ButtonSize, DynamicSpacing, IconSize, Radius,
+    button, chip, input, list_item, modal, panel, ButtonSize, DynamicSpacing, IconSize, Radius,
     StyledExt, TextSize,
 };
 
@@ -200,13 +202,13 @@ impl OrbitApp {
         cx.notify();
     }
 
-    /// Any Orbit-made configuration change lands here: re-read state, then
-    /// schedule the probe and the safe Pi apply.
+    /// Any Orbit-made configuration change lands here: re-read state and
+    /// refresh the page. The process already on screen is left alone; a later
+    /// spawn picks up the file.
     pub(super) fn mcp_config_changed(&mut self, cx: &mut Context<Self>) {
         self.mcp.refresh();
         self.mcp_external_change = false;
         self.schedule_mcp_probe(MCP_PROBE_DEBOUNCE, cx);
-        self.mcp_apply_at = Some(Instant::now() + MCP_APPLY_DEBOUNCE);
         cx.notify();
     }
 
@@ -242,19 +244,18 @@ impl OrbitApp {
         }
         let workspace = self.workspace_dir();
         self.drop_client();
+        let args = vec![
+            "--session".to_string(),
+            session_path.to_string_lossy().into_owned(),
+        ];
         match self
             .extensions
-            .spawn(&workspace, false, &self.mcp.secret_env())
+            .spawn_with_startup_args(&workspace, &args, &self.mcp.secret_env())
         {
             Ok(client) => {
                 self.adopt_client(client);
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&workspace));
-                self.replacement_in_flight = self.send_tracked(
-                    CommandBody::SwitchSession {
-                        session_path: session_path.to_string_lossy().into_owned(),
-                    },
-                    "switch_session",
-                );
+                let _ = self.begin_resumed_session(cx);
                 self.set_status(tr!("mcp.applied_restarting"));
                 self.mcp.log_event(
                     "pi_restarted",
@@ -914,7 +915,7 @@ impl OrbitApp {
         }
         let entity = cx.entity();
         Some(
-            button_frame(div().id("status-mcp"), &theme, ButtonSize::Default)
+            chip_frame(div().id("status-mcp"), &theme)
                 .cursor_pointer()
                 .hover(|style| {
                     style
@@ -929,12 +930,30 @@ impl OrbitApp {
                         app.sync_terminal_active(cx);
                     });
                 })
-                .child(icon(
-                    "icons/tools/mcp.svg",
-                    ButtonSize::Default.icon_size().px(&theme),
-                    theme.text_muted,
-                ))
-                .child(div().size(px(6.)).rounded_full().bg(dot))
+                // The state dot badges the icon's corner instead of floating
+                // between icon and count; a hairline ring in the canvas color
+                // separates it from the glyph.
+                .child(
+                    div()
+                        .relative()
+                        .flex_none()
+                        .child(icon(
+                            "icons/tools/mcp.svg",
+                            chip::ICON.px(&theme),
+                            theme.text_muted,
+                        ))
+                        .child(
+                            div()
+                                .absolute()
+                                .bottom(px(-1.))
+                                .right(px(-2.))
+                                .size(px(6.))
+                                .rounded_full()
+                                .bg(dot)
+                                .border_1()
+                                .border_color(theme.background),
+                        ),
+                )
                 .child(div().text_color(theme.text_secondary).child(label))
                 .into_any_element(),
         )
@@ -1049,7 +1068,7 @@ impl OrbitApp {
 
         let add = button_frame(div().id("mcp-add"), &theme, ButtonSize::Large)
             .cursor_pointer()
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .raised(theme.action, &theme)
             .text_color(theme.action_fg)
             .hover(|style| style.raised(theme.action_hover, &theme))
@@ -1660,7 +1679,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Default.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(if loading {
                         tr!("mcp.checking")
@@ -1679,7 +1698,7 @@ impl OrbitApp {
                 .child(
                     button_frame(div().id("mcp-empty-add"), &theme, ButtonSize::Medium)
                         .cursor_pointer()
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .raised(theme.action, &theme)
                         .text_color(theme.action_fg)
                         .hover(|style| style.raised(theme.action_hover, &theme))
@@ -1709,7 +1728,7 @@ impl OrbitApp {
             .gap(DynamicSpacing::Base04.px(&theme))
             .child(
                 div()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.error)
                     .child(title),
             )
@@ -1748,7 +1767,7 @@ impl OrbitApp {
                     .gap(DynamicSpacing::Base03.px(&theme))
                     .child(
                         div()
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("mcp.external_change_title")),
                     )
@@ -1796,7 +1815,7 @@ impl OrbitApp {
                     .gap(DynamicSpacing::Base03.px(&theme))
                     .child(
                         div()
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("mcp.restart_title")),
                     )
@@ -1843,7 +1862,7 @@ impl OrbitApp {
                     .gap(input::gap(&theme))
                     .child(
                         input_label(label, &theme)
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_secondary),
                     )
                     .child(
@@ -1923,7 +1942,7 @@ impl OrbitApp {
                 .gap(input::gap(&theme))
                 .child(
                     input_label(tr!("mcp.name"), &theme)
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary),
                 )
                 .child(
@@ -2050,7 +2069,7 @@ impl OrbitApp {
                                     ))
                                     .child(
                                         div()
-                                            .font_weight(FontWeight::MEDIUM)
+                                            .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme.text_secondary)
                                             .child(tr!("mcp.oauth_settings")),
                                     ),
@@ -2136,7 +2155,7 @@ impl OrbitApp {
                             ))
                             .child(
                                 div()
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(if selected {
                                         theme.text_primary
                                     } else {
@@ -2224,7 +2243,7 @@ impl OrbitApp {
                             ))
                             .child(
                                 div()
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(if selected {
                                         theme.text_primary
                                     } else {
@@ -2257,7 +2276,7 @@ impl OrbitApp {
                     .gap(DynamicSpacing::Base08.px(&theme))
                     .child(
                         input_label(tr!("mcp.transport"), &theme)
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_secondary),
                     )
                     .child(transport_chips)
@@ -2282,7 +2301,7 @@ impl OrbitApp {
                     .gap(DynamicSpacing::Base06.px(&theme))
                     .child(
                         input_label(tr!("mcp.exposure"), &theme)
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_secondary),
                     )
                     .child(exposure_list),
@@ -2294,7 +2313,7 @@ impl OrbitApp {
                     .gap(DynamicSpacing::Base06.px(&theme))
                     .child(
                         input_label(tr!("mcp.scope"), &theme)
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_secondary),
                     )
                     .child(scope_list),
@@ -2329,7 +2348,7 @@ impl OrbitApp {
             );
         let save = button_frame(div().id("mcp-editor-save"), &theme, ButtonSize::Large)
             .cursor_pointer()
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .raised(theme.action, &theme)
             .text_color(theme.action_fg)
             .hover(|style| style.raised(theme.action_hover, &theme))
@@ -2368,7 +2387,7 @@ impl OrbitApp {
                         div()
                             .text_size(modal::HEADLINE.px(&theme))
                             .line_height(modal::HEADLINE.line_height(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(title),
                     )
@@ -2603,7 +2622,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(tr!("mcp.empty_title")),
             )
@@ -2687,7 +2706,7 @@ impl OrbitApp {
                                 move || format!("quota-mcp-name-{name}")
                             })
                             .text_size(TextSize::Small.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if server.def.enabled {
                                 theme.text_primary
                             } else {
@@ -2877,7 +2896,7 @@ fn mcp_popup_action(
         ButtonSize::Compact,
     )
     .cursor_pointer()
-    .font_weight(FontWeight::MEDIUM);
+    .font_weight(FontWeight::SEMIBOLD);
     button = if primary {
         button
             .raised(theme.action, &theme)
@@ -3084,7 +3103,7 @@ fn mcp_text_button(
         ButtonSize::Medium,
     )
     .cursor_pointer()
-    .font_weight(FontWeight::MEDIUM);
+    .font_weight(FontWeight::SEMIBOLD);
     button = if primary {
         button
             .raised(theme.action, &theme)

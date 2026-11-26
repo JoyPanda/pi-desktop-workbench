@@ -44,6 +44,7 @@ mod archive;
 mod ask;
 mod assets;
 mod attachments;
+mod catalog_cache;
 mod auth;
 mod auto_title;
 mod backdrop;
@@ -97,6 +98,8 @@ mod recent_models;
 mod review;
 mod rpc_patches;
 mod session_defaults;
+mod session_snapshot;
+mod session_staging;
 mod session_retention;
 mod sessions;
 mod shimmer;
@@ -684,6 +687,6 @@ fn main() {
         // new window is up so it can commit the swap instead of rolling back.
         updater::signal_relaunch_ready();
 
-        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_action(|_: &Quit, cx| main_window::request_quit(cx));
     });
 }

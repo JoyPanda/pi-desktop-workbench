@@ -287,7 +287,7 @@ impl Render for BranchPicker {
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .child(tr!("branch_picker.create_and_checkout_new_branch")),
                         )
@@ -311,7 +311,7 @@ impl Render for BranchPicker {
                         .raised(theme.action, &theme)
                         .hover(|s| s.raised(theme.action_hover, &theme))
                         .cursor_pointer()
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.action_fg)
                         .on_mouse_up(
                             gpui::MouseButton::Left,
@@ -403,7 +403,7 @@ impl Render for BranchPicker {
                         .min_w_0()
                         .truncate()
                         .font_weight(if highlighted || selected {
-                            FontWeight::MEDIUM
+                            FontWeight::SEMIBOLD
                         } else {
                             FontWeight::NORMAL
                         })
@@ -420,6 +420,7 @@ impl Render for BranchPicker {
                     row.child(
                         div()
                             .flex_none()
+                            .font_weight(FontWeight::NORMAL)
                             .text_size(picker::SECONDARY_TEXT.px(&theme))
                             .text_color(if highlighted || selected {
                                 theme.text_secondary

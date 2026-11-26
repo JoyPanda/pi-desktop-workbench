@@ -19,9 +19,7 @@ use super::*;
 
 use crate::commands::{self, CommandId};
 use crate::subagent_status::ListRow;
-use crate::theme::tokens::{
-    button, picker, popover, ButtonSize, DynamicSpacing, IconSize, TextSize,
-};
+use crate::theme::tokens::{button, popover, weight, ButtonSize, DynamicSpacing, IconSize, TextSize};
 
 /// Tab strip height; the same row rhythm as the bottom terminal's header.
 const TAB_BAR_H: f32 = 40.;
@@ -423,11 +421,7 @@ impl OrbitApp {
             div()
                 .min_w_0()
                 .truncate()
-                .font_weight(if active {
-                    FontWeight::MEDIUM
-                } else {
-                    FontWeight::NORMAL
-                })
+                .font_weight(weight::FUNCTIONAL)
                 .text_color(text_color)
                 .child(title),
         )
@@ -573,11 +567,11 @@ impl OrbitApp {
             return None;
         }
         let mut menu = picker_surface(div().id("right-dock-add-menu"), &theme)
-            .w(px(220.))
-            .py(picker::list_padding_y(&theme))
+            .w(px(280.))
+            .py(DynamicSpacing::Base06.px(&theme))
             .flex()
             .flex_col()
-            .gap(DynamicSpacing::Base01.px(&theme))
+            .gap(DynamicSpacing::Base02.px(&theme))
             .occlude()
             .on_mouse_down_out(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                 this.dock_add_menu_open = false;

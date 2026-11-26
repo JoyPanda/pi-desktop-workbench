@@ -685,34 +685,40 @@ pub(super) fn sidebar_icon_column(theme: &Theme) -> Pixels {
     IconSize::Medium.px(theme) + DynamicSpacing::Base08.px(theme)
 }
 
-/// New Task's left padding: half of `Base08`, so its icon column starts where
-/// the list rows' column starts.
-pub(super) fn sidebar_new_task_pad_left(theme: &Theme) -> Pixels {
-    DynamicSpacing::Base08.px(theme) * 0.5
+/// The sidebar's outer horizontal inset: cards and the eyebrow sit this far
+/// from the panel's left/right borders — one rhythm, read once.
+pub(super) fn sidebar_outer_inset(theme: &Theme) -> Pixels {
+    DynamicSpacing::Base08.px(theme)
 }
 
-/// Horizontal padding of the session list. The nav inset is `0.75rem`; this
-/// pulls back by half of `Base08` so the card's border and inner pad land the
-/// icon column on New Task's column.
+/// New Task's inner left padding (the card's own pad), matching the list
+/// rows' inner pad so both icon columns coincide.
+pub(super) fn sidebar_new_task_pad_left(theme: &Theme) -> Pixels {
+    DynamicSpacing::Base08.px(theme)
+}
+
+/// Horizontal padding of the session list: the same outer inset as the nav,
+/// so card outer edges (and therefore label edges) coincide with New Task.
 pub(super) fn sidebar_list_pad(theme: &Theme) -> Pixels {
-    px(f32::from(theme.rems(0.75)) - f32::from(DynamicSpacing::Base08.px(theme)) / 2.)
+    sidebar_outer_inset(theme)
 }
 
 /// Left edge of a 16px glyph in that column, measured from the sidebar's left.
-/// The glyph stays centered in the wider slot and lines up with Hide Sidebar.
+/// The glyph stays centered in the wider slot; the Projects eyebrow and the
+/// titlebar toggle both read this line.
 pub(super) fn sidebar_glyph_left(theme: &Theme) -> f32 {
     let slot = f32::from(sidebar_icon_column(theme));
     let icon = f32::from(IconSize::Medium.px(theme));
-    f32::from(theme.rems(0.75))
+    f32::from(sidebar_outer_inset(theme))
         + f32::from(BORDER_WIDTH)
         + f32::from(sidebar_new_task_pad_left(theme))
         + (slot - icon) / 2.
 }
 
 /// Left edge of the label that sits `Base06` past the icon column.
-/// New Task reaches it from the nav inset, a hairline, and [`sidebar_new_task_pad_left`].
+/// New Task reaches it from the outer inset, a hairline, and [`sidebar_new_task_pad_left`].
 pub(super) fn sidebar_new_task_label_x(theme: &Theme) -> f32 {
-    f32::from(theme.rems(0.75))
+    f32::from(sidebar_outer_inset(theme))
         + f32::from(BORDER_WIDTH)
         + f32::from(sidebar_new_task_pad_left(theme))
         + f32::from(sidebar_icon_column(theme))
@@ -970,7 +976,7 @@ fn session_card(hover: &SessionTooltip, theme: &Theme) -> impl IntoElement {
             div()
                 .w_full()
                 .whitespace_normal()
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .child(hover.title.clone()),
         )
         .child(
@@ -1200,7 +1206,7 @@ pub(crate) fn render_side_row(
                                 .min_w_0()
                                 .truncate()
                                 .text_size(TextSize::Default.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 // Keep the user's project hue on the name as
                                 // well as its mark (issue #78).
                                 .text_color(workspace_mark::label_ink(&theme, mark.tint.as_deref()))
@@ -1263,7 +1269,7 @@ pub(crate) fn render_side_row(
                                     .bg(theme.accent.opacity(0.08))
                                     .text_center()
                                     .text_size(TextSize::XSmall.px(&theme))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_secondary)
                                     .child(format!("{count}")),
                             )
@@ -1648,7 +1654,7 @@ pub(crate) fn render_side_row(
                                             .rounded(Radius::Small.px(&theme))
                                             .bg(theme.accent.opacity(0.10))
                                             .text_size(TextSize::XSmall.px(&theme))
-                                            .font_weight(FontWeight::MEDIUM)
+                                            .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme.accent_text)
                                             .child(tr!("sidebar.current")),
                                     )
@@ -1742,10 +1748,14 @@ fn session_title(
     running: bool,
 ) -> AnyElement {
     let color = theme.text_primary;
+    // Titles derive from user prose and can carry literal newlines; gpui
+    // hard-breaks on '\n' even under nowrap, which would overflow the fixed
+    // row height into the next row. Collapse to one line before truncating.
+    let title: SharedString = super::helpers::one_line(&title).into();
     let weight = if active {
         FontWeight::SEMIBOLD
     } else {
-        FontWeight::MEDIUM
+        FontWeight::NORMAL
     };
     let size = TextSize::Default.px(&theme);
     let line_height = BufferLineHeight::Standard.relative();
@@ -1826,7 +1836,7 @@ pub(crate) fn session_menu_popup(
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("sidebar.delete_this_session")),
                     )
@@ -2370,7 +2380,7 @@ fn workspace_appearance_picker(
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(tr!("sidebar.icon_and_color")),
         )
@@ -2846,7 +2856,7 @@ pub(crate) fn empty_sessions_state(theme: Theme) -> impl IntoElement + use<> {
         .child(
             div()
                 .text_size(TextSize::Default.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_secondary)
                 .child(tr!("sidebar.no_projects_yet")),
         )
@@ -2959,6 +2969,8 @@ impl OrbitApp {
             return;
         };
         if self.current_session_path.as_ref() == Some(&menu.path) {
+            // A cold session stages the name until its first send, so the
+            // editor opens either way.
             if self.pending_session_rename.is_none() {
                 self.begin_session_rename(window, cx);
             }
@@ -2975,9 +2987,14 @@ impl OrbitApp {
             return;
         };
         self.switch_to_session(session, true, cx);
-        // A cold switch must finish before pi can safely accept a rename.
+        // A warm session finishes its switch before pi can accept a rename. A
+        // session opened with no process cannot be renamed until a message
+        // has started one.
         if self.runtime_is_live() {
             self.pending_session_rename = Some(menu.path);
+        } else if self.client.is_none() {
+            // Cold: nothing to wait for; the name is staged on commit.
+            self.begin_session_rename(window, cx);
         }
         cx.notify();
     }
@@ -3065,17 +3082,16 @@ impl OrbitApp {
                 }
                 return;
             }
-            // Defensive: a warm parked process would recreate the file.
-            if self.lives.contains_key(&menu.path) {
-                self.toast_warning(tr!("sidebar.live_process_delete"));
-                cx.notify();
-                return;
-            }
+            // The confirmation was the user's answer, running or not: stop
+            // the parked process first, or it would recreate the file.
+            self.lives.remove(&menu.path);
             if let Err(err) = fs::remove_file(&menu.path) {
                 self.toast_error(tr!("sidebar.delete_failed", error = err));
             } else {
                 // A deleted session must not leave a stale pin behind.
                 crate::pins::remove(&menu.path);
+                crate::session_staging::clear(&menu.path);
+                crate::session_snapshot::clear(&menu.path);
                 crate::archive::remove(&menu.path);
                 // Nor a review mark for a row that can never come back.
                 self.awaiting_review.remove(&menu.path);
@@ -3246,7 +3262,47 @@ impl OrbitApp {
         let Some(menu) = self.workspace_menu.take() else {
             return;
         };
+        // Only a run in flight is worth a question; idle processes are cheap
+        // to lose (the sessions resume on the next send).
+        let running = self.running_in_workspace(&menu.cwd);
+        if running == 0 {
+            self.finish_workspace_remove(menu, cx);
+            return;
+        }
+        self.confirm_native(
+            tr!("sidebar.remove_running_title"),
+            tr!("sidebar.remove_running_detail", count = running),
+            tr!("sidebar.remove_confirm"),
+            cx,
+            move |app, cx| app.finish_workspace_remove(menu, cx),
+        );
+        cx.notify();
+    }
+
+    fn finish_workspace_remove(&mut self, menu: WorkspaceMenu, cx: &mut Context<Self>) {
         self.remove_workspace(&menu.cwd, cx);
+        // Parked processes of a project that left the sidebar can no longer
+        // be reached, and nothing reaps them by age (INTENT D17): stop them
+        // here so they do not outlive the row that owned them.
+        let paths: Vec<PathBuf> = self
+            .sessions
+            .iter()
+            .filter(|session| session.cwd == menu.cwd)
+            .map(|session| session.path.clone())
+            .collect();
+        // The open session's own process goes too when it belonged here.
+        let current_here = self
+            .current_session_path
+            .as_ref()
+            .is_some_and(|path| paths.contains(path));
+        for path in paths {
+            self.lives.remove(&path);
+        }
+        if current_here {
+            // The same teardown as the Stop button: cancels a pending spawn,
+            // closes the live row, and hands a waiting message back.
+            self.runtime_stop(cx);
+        }
         // Forget the dropped group's view state so re-adding it starts fresh.
         self.collapsed_workspaces.remove(&menu.label);
         self.expanded_workspace_groups.remove(&menu.label);
@@ -3254,6 +3310,71 @@ impl OrbitApp {
         cx.notify();
     }
 
+    /// Sessions of `cwd` with a run in flight: parked busy ones plus the open
+    /// session when it is running.
+    fn running_in_workspace(&self, cwd: &Path) -> usize {
+        let parked = self
+            .sessions
+            .iter()
+            .filter(|session| session.cwd == cwd)
+            .filter(|session| self.lives.get(&session.path).is_some_and(|p| p.busy))
+            .count();
+        let current_runs = self.is_running() || self.is_compacting || self.retrying;
+        let current_here = self
+            .current_session_path
+            .as_ref()
+            .is_some_and(|path| self.sessions.iter().any(|s| &s.path == path && s.cwd == cwd));
+        parked + usize::from(current_runs && current_here)
+    }
+
+    /// Runs in flight across the whole app: the open session plus busy parked
+    /// ones. Drives the quit confirmation.
+    pub(crate) fn running_session_count(&self) -> usize {
+        let parked = self.lives.values().filter(|parked| parked.busy).count();
+        parked + usize::from(self.is_running() || self.is_compacting || self.retrying)
+    }
+
+    /// Ask with the platform's native warning dialog and run `then` on the
+    /// confirm button. Deferred to a task: a click handler runs inside a
+    /// window update, which the prompt cannot re-enter.
+    pub(crate) fn confirm_native(
+        &mut self,
+        message: String,
+        detail: String,
+        confirm: String,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut OrbitApp, &mut Context<OrbitApp>) + 'static,
+    ) {
+        let Some(window) = cx.active_window() else {
+            then(self, cx);
+            return;
+        };
+        let cancel = tr!("sidebar.cancel");
+        cx.spawn(async move |this, cx| {
+            let answer = cx
+                .update(|cx| {
+                    window
+                        .update(cx, |_, window, cx| {
+                            window.prompt(
+                                gpui::PromptLevel::Warning,
+                                &message,
+                                Some(&detail),
+                                &[confirm.as_str(), cancel.as_str()],
+                                cx,
+                            )
+                        })
+                        .ok()
+                })
+                .ok()
+                .flatten();
+            if let Some(answer) = answer {
+                if let Ok(0) = answer.await {
+                    let _ = this.update(cx, |app, cx| then(app, cx));
+                }
+            }
+        })
+        .detach();
+    }
     /// Keep the row menu honest: close it when its session vanishes from
     /// the store (deleted externally, session ended, …).
     pub(super) fn sync_session_menu(&mut self, cx: &mut Context<Self>) {
@@ -3616,7 +3737,7 @@ fn clamp_cursor(index: usize, count: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::theme::tokens::{ButtonSize, BORDER_WIDTH};
+    use crate::theme::tokens::BORDER_WIDTH;
 
     #[gpui::test]
     fn row_rename_waits_for_the_target_session_state(cx: &mut gpui::TestAppContext) {
@@ -3731,16 +3852,25 @@ mod tests {
             }),
         ];
         for theme in &themes {
+            // Expectations built from the raw spacing tokens, NOT from the
+            // sidebar helpers, so a helper drift fails the test instead of
+            // re-deriving itself.
+            let pad = f32::from(DynamicSpacing::Base08.px(theme));
+            let hairline = f32::from(BORDER_WIDTH);
+            let column = f32::from(IconSize::Medium.px(theme)) + pad;
+            let glyph = pad + hairline + pad + pad / 2.;
+            let label = pad + hairline + pad + column + f32::from(DynamicSpacing::Base06.px(theme));
             assert!(
-                (sidebar_new_task_label_x(theme) - sidebar_list_label_x(theme)).abs() < 0.01,
-                "New Task and the list rows must start their text together"
+                (sidebar_glyph_left(theme) - glyph).abs() < 0.01,
+                "the centered glyph must sit on the sidebar's own icon line"
             );
-            let hide_sidebar_glyph = f32::from(theme.rems(0.75))
-                + f32::from(BORDER_WIDTH)
-                + f32::from(ButtonSize::Large.padding_x(theme));
             assert!(
-                (sidebar_glyph_left(theme) - hide_sidebar_glyph).abs() < 0.01,
-                "the centered glyph must stay on the Hide Sidebar line"
+                (sidebar_new_task_label_x(theme) - label).abs() < 0.01,
+                "New Task label must sit Base06 past the icon column"
+            );
+            assert!(
+                (sidebar_list_label_x(theme) - label).abs() < 0.01,
+                "list labels must share New Task's label edge"
             );
         }
     }

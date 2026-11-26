@@ -79,7 +79,7 @@ pub fn render_file_header(
                 .whitespace_nowrap()
                 .font_family(theme::code_font_family())
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_secondary)
                 .child(file.path.clone()),
         )
@@ -154,7 +154,7 @@ pub fn render_section_header(
                 .rounded_full()
                 .bg(theme.overlay)
                 .text_size(TextSize::XSmall.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_secondary)
                 .child(count.to_string()),
         )
@@ -166,7 +166,7 @@ pub fn render_section_header(
                 .min_w(px(42.))
                 .text_align(gpui::TextAlign::Right)
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(if additions > 0 {
                     theme.success
                 } else {
@@ -179,7 +179,7 @@ pub fn render_section_header(
                 .min_w(px(36.))
                 .text_align(gpui::TextAlign::Right)
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(if deletions > 0 {
                     theme.error
                 } else {

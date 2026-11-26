@@ -419,7 +419,7 @@ fn compact_action(is_compacting: bool, on_compact: Rc<ActionClick>, theme: Theme
         .border_1()
         .border_color(theme.border)
         .raised(theme.surface_elevated, &theme)
-        .font_weight(FontWeight::MEDIUM);
+        .font_weight(FontWeight::SEMIBOLD);
     if is_compacting {
         button
             .text_color(theme.text_muted)
@@ -637,6 +637,9 @@ pub struct ContextMeterData<'a> {
     pub session: Option<&'a SessionUsage>,
     /// chars/4 estimate over the loaded transcript.
     pub conversation_est: u64,
+    /// The numbers are the session's last live ones, not a process's current
+    /// reply (the session has none): the ring is drawn dimmed.
+    pub snapshot: bool,
 }
 
 /// Ring chip + optional hover/details popover, anchored above the control.
@@ -656,6 +659,7 @@ pub fn context_control<V: 'static>(
     let session = data.session;
     let fraction = usage.and_then(ContextUsage::fraction).unwrap_or(0.0);
     let fill = fill_color(Some(fraction), &theme);
+    let fill = if data.snapshot { fill.opacity(0.55) } else { fill };
     let slices = usage
         .map(|u| usage_slices(u, data.conversation_est, &theme))
         .unwrap_or_default();

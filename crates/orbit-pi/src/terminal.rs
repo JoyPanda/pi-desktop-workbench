@@ -1922,7 +1922,7 @@ impl TerminalPanel {
                 .min_w_0()
                 .truncate()
                 .font_weight(if active {
-                    FontWeight::MEDIUM
+                    FontWeight::SEMIBOLD
                 } else {
                     FontWeight::NORMAL
                 })
@@ -2112,7 +2112,7 @@ impl TerminalPanel {
                             )
                             .raised(theme.action, &theme)
                             .cursor_pointer()
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.action_fg)
                             .hover(|style| style.opacity(0.9))
                             .on_mouse_up(

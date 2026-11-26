@@ -1033,7 +1033,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("worktree.page.title")),
                     ),
@@ -1144,7 +1144,7 @@ impl OrbitApp {
                 .border_1()
                 .border_color(theme.border)
                 .raised(theme.surface_elevated, &theme)
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
                 .hover(|s| s.raised(theme.surface_hover, &theme))
                 .child(icon(
@@ -1367,7 +1367,7 @@ impl OrbitApp {
                         .gap(DynamicSpacing::Base02.px(&theme))
                         .child(
                             div()
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .child(title),
                         )
@@ -1562,7 +1562,7 @@ impl OrbitApp {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .child(tr!("worktree.howto.title")),
                         )
                         .child(dismiss),
@@ -1668,7 +1668,7 @@ impl OrbitApp {
                             .gap(DynamicSpacing::Base06.px(&theme))
                             .child(
                                 div()
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_primary)
                                     .child(name.clone()),
                             )
@@ -1841,7 +1841,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Title.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(title),
                     ),
@@ -2278,7 +2278,7 @@ impl OrbitApp {
                         .gap(DynamicSpacing::Base02.px(&theme))
                         .child(
                             div()
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .child(name),
                         )
@@ -2856,7 +2856,7 @@ impl OrbitApp {
                             .flex_col()
                             .child(
                                 div()
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(if selected || highlighted {
                                         theme.text_primary
                                     } else {
@@ -2868,6 +2868,7 @@ impl OrbitApp {
                                 div()
                                     .mt(DynamicSpacing::Base02.px(&theme))
                                     .truncate()
+                                    .font_weight(FontWeight::NORMAL)
                                     .font_family(theme::code_font_family())
                                     .text_size(picker::SECONDARY_TEXT.px(&theme))
                                     .text_color(if selected || highlighted {
@@ -3171,7 +3172,7 @@ fn worktree_field_label(theme: &Theme, label: String, hint: Option<&str>) -> Any
         .gap(DynamicSpacing::Base02.px(theme))
         .child(
             input_label(label, theme)
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_secondary),
         );
     if let Some(hint) = hint {
@@ -3294,7 +3295,7 @@ where
         .raised(theme.accent.opacity(0.14), &theme)
         .cursor_pointer()
         .hover(|s| s.raised(theme.accent.opacity(0.2), &theme))
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme.accent_text)
         .child(label)
         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
@@ -3369,7 +3370,7 @@ where
         )
         .cursor_pointer()
         .hover(|s| s.raised(theme.surface_hover, &theme))
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(if selected {
             theme.accent_text
         } else {

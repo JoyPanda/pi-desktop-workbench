@@ -249,7 +249,7 @@ impl OrbitApp {
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(toast_tokens::TITLE.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .child(title),
                         )
@@ -264,7 +264,7 @@ impl OrbitApp {
                                 .rounded(toast_tokens::BADGE_RADIUS.px(&theme))
                                 .bg(theme.overlay)
                                 .text_size(toast_tokens::BODY.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_secondary)
                                 .child(updates.len().to_string()),
                         )
@@ -371,7 +371,7 @@ impl OrbitApp {
                     div()
                         .line_clamp(2)
                         .text_size(toast_tokens::TITLE.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(toast.title.clone()),
                 )

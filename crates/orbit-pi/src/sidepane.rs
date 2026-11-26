@@ -1275,7 +1275,7 @@ impl SidePane {
                         .max_w(px(120.))
                         .overflow_hidden()
                         .whitespace_nowrap()
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(self.source_label(self.source)),
                 )
@@ -1319,7 +1319,7 @@ impl SidePane {
                     .items_center()
                     .gap_2()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(div().text_color(theme.success).child(format!("+{added}")))
                     .child(div().text_color(theme.error).child(format!("-{removed}")))
             }))
@@ -2369,7 +2369,7 @@ impl SidePane {
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_size(TextSize::Small.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_secondary)
                                 .child(name),
                         ),

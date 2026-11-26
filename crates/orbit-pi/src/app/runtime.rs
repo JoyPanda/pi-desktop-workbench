@@ -1,7 +1,5 @@
 use super::helpers::*;
 use super::*;
-use gpui::Timer;
-
 impl OrbitApp {
     /// Record a status message; the status bar surfaces it briefly (see
     /// [`STATUS_MESSAGE_TTL`]). Internal RPC chatter never calls this —
@@ -256,6 +254,28 @@ impl OrbitApp {
         then: SpawnThen,
         cx: &mut Context<Self>,
     ) {
+        self.spawn_pi_client_inner(cwd, then, None, cx);
+    }
+
+    /// Start a process for an existing session that has none ([`SpawnThen::
+    /// ResumePrompt`]). The child gets no `--model`: a resumed session keeps
+    /// the model recorded in its file, never Orbit's default.
+    pub(super) fn spawn_pi_client_to_resume(
+        &mut self,
+        cwd: PathBuf,
+        session_path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        self.spawn_pi_client_inner(cwd, SpawnThen::ResumePrompt, Some(session_path), cx);
+    }
+
+    fn spawn_pi_client_inner(
+        &mut self,
+        cwd: PathBuf,
+        then: SpawnThen,
+        session_path: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         self.invalidate_pending_spawn();
         self.spawn_generation = self.spawn_generation.wrapping_add(1);
         // Everything the spawn needs is a plain value: the extension entry
@@ -268,14 +288,31 @@ impl OrbitApp {
         // / `--thinking`, which is what the first turn actually runs on.
         // The pin is not raised here: a spawn that is cancelled before it
         // lands must not suppress the next session's default.
-        let chosen = self.current_draft_model();
+        let resuming = then == SpawnThen::ResumePrompt;
+        let chosen = if resuming {
+            None
+        } else {
+            self.current_draft_model()
+        };
         // Recorded now: by the time the process lands the row may already be
         // a sent session, and `current_draft_model` would no longer mean
         // "this child's argv was a composer choice".
         let pinned_model = chosen.is_some();
-        let startup_args = chosen
-            .unwrap_or_else(|| self.session_default.clone())
-            .cli_args();
+        let startup_args = if resuming {
+            // Boot straight into the file. `--session` with a path opens it
+            // before RPC starts, so the prompt never lands on an empty session.
+            match session_path.as_ref() {
+                Some(path) => vec![
+                    "--session".to_string(),
+                    path.to_string_lossy().into_owned(),
+                ],
+                None => Vec::new(),
+            }
+        } else {
+            chosen
+                .unwrap_or_else(|| self.session_default.clone())
+                .cli_args()
+        };
         #[cfg(test)]
         let test_bin = self.spawn_bin.clone();
         #[cfg(not(test))]
@@ -291,6 +328,7 @@ impl OrbitApp {
             then,
             startup_args,
             pinned_model,
+            session_path,
         };
         self.pending_spawn = Some(ticket.clone());
         let ticket_for_spawn = ticket.clone();
@@ -328,6 +366,105 @@ impl OrbitApp {
         cx.notify();
     }
 
+    /// `get_messages`, staged choices, then state and catalogs. The prompt
+    /// waits for the snapshot. Returns whether `get_messages` was queued.
+    pub(super) fn begin_resumed_session(&mut self, cx: &mut Context<Self>) -> bool {
+        let sent = self.send(CommandBody::GetMessages, "get_messages");
+        self.apply_staged_choices();
+        self.send(CommandBody::GetState, "get_state");
+        self.refresh_catalogs();
+        self.probe_auth();
+        let _ = cx;
+        sent
+    }
+
+    /// A send whose process landed after the user had already left. Run the
+    /// same handshake on that process, and adopt it only when the page has
+    /// come back to this session and is still empty of a process.
+    fn admit_detached_spawn(
+        &mut self,
+        shell: DetachedSpawn,
+        spawned: anyhow::Result<PiClient>,
+        cx: &mut Context<Self>,
+    ) {
+        let client = match spawned {
+            Ok(client) => client,
+            Err(_) => {
+                if let Some(prompt) = shell.pending_prompt {
+                    self.stash_failed_send(
+                        shell.session_path.as_deref(),
+                        shell.draft,
+                        prompt.composer,
+                    );
+                }
+                return;
+            }
+        };
+        let back = self.client.is_none()
+            && match shell.ticket.then {
+                SpawnThen::ResumePrompt => {
+                    shell.session_path.is_some()
+                        && self.current_session_path == shell.session_path
+                }
+                SpawnThen::Prompt => {
+                    shell.draft.is_some() && self.current_draft_id == shell.draft
+                }
+                SpawnThen::NewSession => false,
+            };
+        if back {
+            self.transcript = shell.transcript;
+            self.pending_prompt = shell.pending_prompt;
+            self.execution = shell.execution;
+            self.busy = shell.busy;
+            self.startup_model_pinned = shell.startup_model_pinned;
+            self.turns = shell.turns;
+            self.added = shell.added;
+            self.removed = shell.removed;
+            if let Some(id) = shell.draft {
+                self.current_draft_id = Some(id);
+            }
+            if let Some(path) = shell.session_path.clone() {
+                self.current_session_path = Some(path);
+            }
+            self.adopt_client(client);
+            self.mcp_stamp = shell.ticket.mcp_stamp;
+            self.startup_model_reportable = !shell
+                .ticket
+                .startup_args()
+                .iter()
+                .any(|arg| arg == "--model");
+            match shell.ticket.then {
+                SpawnThen::Prompt => {
+                    if let Some(pending) = self.pending_prompt.take() {
+                        match self.send_tracked(pending.body.clone(), &pending.label) {
+                            Some(id) => {
+                                self.prompt_in_flight = Some(id.clone());
+                                self.execution.prompt_id = Some(id);
+                            }
+                            // The write failed: put the prompt back so the
+                            // unwind below has something to hand to the composer.
+                            None => {
+                                self.pending_prompt = Some(pending);
+                                self.unwind_pending_prompt(cx);
+                            }
+                        }
+                    }
+                    self.send(CommandBody::GetState, "get_state");
+                }
+                SpawnThen::ResumePrompt => {
+                    if !self.begin_resumed_session(cx) {
+                        self.unwind_pending_prompt(cx);
+                    }
+                }
+                SpawnThen::NewSession => {}
+            }
+            cx.notify();
+            return;
+        }
+        self.park_detached_client(client, shell);
+        cx.notify();
+    }
+
     /// The main-thread half of [`Self::spawn_pi_client_later`]: adopt the
     /// process if the view is still waiting for it, then do what the ticket
     /// was taken for.
@@ -348,6 +485,14 @@ impl OrbitApp {
             .as_ref()
             .is_some_and(|pending| pending.generation == ticket.generation)
         {
+            if let Some(pos) = self
+                .detached_spawns
+                .iter()
+                .position(|shell| shell.ticket.generation == ticket.generation)
+            {
+                let shell = self.detached_spawns.remove(pos);
+                self.admit_detached_spawn(shell, spawned, cx);
+            }
             return;
         }
         self.pending_spawn = None;
@@ -367,7 +512,7 @@ impl OrbitApp {
                         // on screen; hand it over now, and let its id drive the
                         // reply bookkeeping the way a live send does.
                         if let Some(pending) = self.pending_prompt.take() {
-                            match self.send_tracked(pending.body, &pending.label) {
+                            match self.send_tracked(pending.body.clone(), &pending.label) {
                                 Some(id) => {
                                     // Delivered, so it joins the ↑/↓ recall log
                                     // — which is not when it was typed.
@@ -378,8 +523,12 @@ impl OrbitApp {
                                     self.execution.prompt_id = Some(id);
                                 }
                                 // The write failed: the message never left, so
-                                // it goes back like any other failed send.
-                                None => self.unwind_pending_prompt(cx),
+                                // it goes back like any other failed send. Put
+                                // it back first — the unwind reads pending_prompt.
+                                None => {
+                                    self.pending_prompt = Some(pending);
+                                    self.unwind_pending_prompt(cx);
+                                }
                             }
                         }
                         // The process is up either way. Catalog refresh does
@@ -400,9 +549,18 @@ impl OrbitApp {
                             self.replacement_in_flight.is_some() && ticket.pinned_model;
                         self.set_status(tr!("session.new_session"));
                     }
+                    SpawnThen::ResumePrompt => {
+                        // `--session` already opened the file. Load pi's view,
+                        // then deliver the prompt once that snapshot lands.
+                        if !self.begin_resumed_session(cx) {
+                            self.unwind_pending_prompt(cx);
+                        }
+                    }
                 }
-                self.refresh_catalogs();
-                self.probe_auth();
+                if ticket.then != SpawnThen::ResumePrompt {
+                    self.refresh_catalogs();
+                    self.probe_auth();
+                }
             }
             Err(err) => {
                 self.startup_model_pinned = false;
@@ -414,11 +572,12 @@ impl OrbitApp {
                 let source = match ticket.then {
                     SpawnThen::Prompt => "prompt",
                     SpawnThen::NewSession => "new_session",
+                    SpawnThen::ResumePrompt => "prompt",
                 };
                 let message = tr!("runtime.pi_spawn_failed", error = err);
                 self.client = None;
                 self.runtime.error = Some(message.clone());
-                if ticket.then == SpawnThen::Prompt {
+                if matches!(ticket.then, SpawnThen::Prompt | SpawnThen::ResumePrompt) {
                     self.unwind_pending_prompt(cx);
                 }
                 self.set_error_from(source, message.clone());
@@ -447,6 +606,8 @@ impl OrbitApp {
             self.error = None;
             self.error_source = None;
         }
+        // What the meter shows stays, but it is no longer a live reply.
+        self.context_is_snapshot = self.context.is_some() || self.session_usage.is_some();
         self.client = None;
         self.foreground_events.clear();
         self.runtime = RuntimeStatus::default();
@@ -826,16 +987,155 @@ impl OrbitApp {
         }
     }
 
+    /// Replace the model catalog from a get_available_models payload — a live
+    /// process's reply or the cached copy a cold launch shows.
+    pub(super) fn apply_models_payload(&mut self, data: &Value) {
+        self.available_models = data
+            .get("models")
+            .and_then(serde_json::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|m| {
+                        let id = m.get("id").and_then(serde_json::Value::as_str)?;
+                        let name = m.get("name").and_then(serde_json::Value::as_str)?;
+                        let provider =
+                            m.get("provider").and_then(serde_json::Value::as_str)?;
+                        Some(ModelEntry {
+                            id: id.into(),
+                            name: name.into(),
+                            provider: provider.into(),
+                            context_window: m
+                                .get("contextWindow")
+                                .and_then(serde_json::Value::as_u64),
+                            thinking_levels: catalog_thinking_levels(m),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+
+    /// Replace the slash-command list from a get_commands payload.
+    pub(super) fn apply_commands_payload(&mut self, data: &Value) {
+        let home = crate::platform::home_dir_opt();
+        let workspace = self.current_workspace.clone();
+        self.slash_commands = data
+            .get("commands")
+            .and_then(serde_json::Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| {
+                        let name = c.get("name").and_then(Value::as_str)?;
+                        let description =
+                            c.get("description").and_then(Value::as_str).unwrap_or("");
+                        // `source` + `sourceInfo` carry the command's
+                        // provenance; Orbit folds it into a scope badge.
+                        let source = c.get("source").and_then(Value::as_str).unwrap_or("");
+                        let info = c.get("sourceInfo");
+                        let scope =
+                            info.and_then(|i| i.get("scope")).and_then(Value::as_str);
+                        let origin =
+                            info.and_then(|i| i.get("origin")).and_then(Value::as_str);
+                        let path = info.and_then(|i| i.get("path")).and_then(Value::as_str);
+                        Some(SlashCommand {
+                            name: name.to_string(),
+                            description: description.to_string(),
+                            scope: mentions::classify_scope(
+                                source,
+                                scope,
+                                origin,
+                                path,
+                                workspace.as_deref(),
+                                home.as_deref(),
+                            ),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+
+    /// Show the last catalog pi reported, so a cold launch has a model picker
+    /// and a / menu before any process exists (INTENT D18). A live process's
+    /// reply replaces it.
+    pub(super) fn load_catalog_cache(&mut self, cx: &mut Context<Self>) {
+        let cache = crate::catalog_cache::load();
+        if let Some(models) = cache.models.as_ref() {
+            self.apply_models_payload(models);
+        }
+        if let Some(commands) = self
+            .current_workspace
+            .as_deref()
+            .and_then(|cwd| cache.commands_for(cwd))
+        {
+            self.apply_commands_payload(commands);
+        }
+        if let Some(state) = cache.state.as_ref() {
+            self.apply_reported_model(state);
+        }
+        self.paint_unsent_model();
+        self.sync_model_selector(cx);
+    }
+
+    /// Refresh that cache off-thread with a short-lived auxiliary pi: ask for
+    /// the catalog and commands, store them, and let the child go. Not a
+    /// session process, so it is outside the send-only rule (D18). Skipped
+    /// when the cache is fresh for this workspace or a real process exists.
+    pub(super) fn start_catalog_probe(&mut self, cx: &mut Context<Self>) {
+        if self.client.is_some() || self.spawn_pending() || self.catalog_probing {
+            return;
+        }
+        let cwd = self.task_cwd();
+        if crate::catalog_cache::load().is_fresh_for(&cwd) {
+            return;
+        }
+        self.catalog_probing = true;
+        let extensions = self.extensions.clone();
+        let env = self.mcp.secret_env();
+        #[cfg(test)]
+        let test_bin = self.spawn_bin.clone();
+        #[cfg(not(test))]
+        let test_bin: Option<PathBuf> = None;
+        let probe_cwd = cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let probed = cx
+                .background_executor()
+                .spawn(async move { crate::catalog_cache::probe(&extensions, &probe_cwd, &env, test_bin) })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.catalog_probing = false;
+                // A process that came up meanwhile is the authority and has
+                // already reported its own catalog.
+                let Ok((models, commands, state)) = probed else {
+                    return;
+                };
+                if app.client.is_none() {
+                    crate::catalog_cache::store_models(&models);
+                    crate::catalog_cache::store_commands(&cwd, &commands);
+                    app.apply_models_payload(&models);
+                    if app.current_workspace.as_deref() == Some(cwd.as_path()) {
+                        app.apply_commands_payload(&commands);
+                    }
+                    if let Some(state) = state.as_ref() {
+                        crate::catalog_cache::store_state(state);
+                        if !app.spawn_pending() {
+                            app.apply_reported_model(state);
+                        }
+                    }
+                    app.paint_unsent_model();
+                    app.sync_model_selector(cx);
+                    app.sync_autocomplete(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
     /// Whether the active pi process is alive and has not exited — the only
     /// state in which commands sent over its stdin can still be answered. A
     /// never-started, stopped, or dead process all read as not live.
     pub(super) fn runtime_is_live(&self) -> bool {
         matches!(self.runtime_state(), RuntimeState::Running)
-    }
-
-    /// A queued retry may have been superseded by an explicit start or stop.
-    pub(super) fn sidebar_runtime_retrying(&self) -> bool {
-        self.auto_restart_scheduled && self.should_auto_restart_now()
     }
 
     /// Spawn the pi process (Start button). No-op while one is running, and
@@ -862,23 +1162,41 @@ impl OrbitApp {
             self.startup_model_pinned = false;
         }
         let secret_env = self.mcp.secret_env();
-        let spawned = match &chosen {
-            Some(choice) => {
-                let args = choice.cli_args();
-                self.extensions
-                    .spawn_with_startup_args(&cwd, &args, &secret_env)
+        let resume_path = self
+            .current_session_path
+            .clone()
+            .filter(|path| !super::session::is_draft_placeholder(path));
+        let spawned = if let Some(path) = &resume_path {
+            let args = vec![
+                "--session".to_string(),
+                path.to_string_lossy().into_owned(),
+            ];
+            self.extensions
+                .spawn_with_startup_args(&cwd, &args, &secret_env)
+        } else {
+            match &chosen {
+                Some(choice) => {
+                    let args = choice.cli_args();
+                    self.extensions
+                        .spawn_with_startup_args(&cwd, &args, &secret_env)
+                }
+                None => self.extensions.spawn(&cwd, true, &secret_env),
             }
-            None => self.extensions.spawn(&cwd, true, &secret_env),
         };
         match spawned {
             Ok(client) => {
                 self.adopt_client(client);
-                self.startup_model_reportable = chosen.is_none() && self.session_default.is_unset();
+                self.startup_model_reportable =
+                    resume_path.is_none() && chosen.is_none() && self.session_default.is_unset();
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
-                self.send(CommandBody::GetState, "get_state");
-                self.refresh_catalogs();
-                // Capability probes queue after the state request.
-                self.probe_auth();
+                if resume_path.is_some() {
+                    let _ = self.begin_resumed_session(cx);
+                } else {
+                    self.send(CommandBody::GetState, "get_state");
+                    self.refresh_catalogs();
+                    // Capability probes queue after the state request.
+                    self.probe_auth();
+                }
                 self.toast_info(tr!("runtime.pi_process_started"));
             }
             Err(err) => {
@@ -898,8 +1216,11 @@ impl OrbitApp {
         // the user asked for it to stop, and hand a waiting message back.
         let was_starting = self.spawn_pending();
         self.invalidate_pending_spawn();
+        if let Some(prompt) = self.take_detached_send_here() {
+            self.pending_prompt = Some(prompt);
+        }
         if self.client.is_none() {
-            if was_starting {
+            if was_starting || self.pending_prompt.is_some() {
                 self.unwind_pending_prompt(cx);
                 self.set_status(tr!("runtime.pi_process_stopped"));
                 cx.notify();
@@ -909,6 +1230,11 @@ impl OrbitApp {
         self.cancel_fork_followup();
         self.drop_client();
         self.busy = false;
+        // A resumed session's message that was waiting on this process never
+        // reached pi: it goes back to the composer.
+        if self.pending_prompt.is_some() {
+            self.unwind_pending_prompt(cx);
+        }
         // The prompt this process was running has no answer coming: close the
         // transcript's live row too, or it would spin on a dead pi.
         self.transcript.abandon_reply();
@@ -921,8 +1247,10 @@ impl OrbitApp {
     pub(super) fn runtime_restart(&mut self, cx: &mut Context<Self>) {
         self.cancel_fork_followup();
         self.drop_client();
+        // `runtime_start` opens the current file with `--session` when there
+        // is one, and loads it. A second `switch_session` would aim at a
+        // process that is already in that file.
         self.runtime_start(cx);
-        self.reattach_current_session();
     }
 
     /// Start a fresh process on the session the UI is showing, quietly, after
@@ -941,19 +1269,18 @@ impl OrbitApp {
             return false;
         };
         let workspace = self.workspace_dir();
+        let args = vec![
+            "--session".to_string(),
+            session_path.to_string_lossy().into_owned(),
+        ];
         match self
             .extensions
-            .spawn(&workspace, false, &self.mcp.secret_env())
+            .spawn_with_startup_args(&workspace, &args, &self.mcp.secret_env())
         {
             Ok(client) => {
                 self.adopt_client(client);
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&workspace));
-                self.replacement_in_flight = self.send_tracked(
-                    CommandBody::SwitchSession {
-                        session_path: session_path.to_string_lossy().into_owned(),
-                    },
-                    "switch_session",
-                );
+                let _ = self.begin_resumed_session(cx);
                 cx.notify();
                 true
             }
@@ -968,83 +1295,23 @@ impl OrbitApp {
         }
     }
 
-    /// Point a just-spawned process back at the session the UI is showing. A
-    /// fresh launch opens a *new* session, so without this pi answers on an
-    /// empty one while the transcript still shows the old conversation and the
-    /// next prompt reaches a model with none of it — the same reattach the MCP
-    /// restart performs.
-    pub(super) fn reattach_current_session(&mut self) {
-        let Some(session_path) = self.current_session_path.clone() else {
-            return;
-        };
-        if self.client.is_none() {
-            // The spawn failed; its own banner says why.
-            return;
-        }
-        self.send(
-            CommandBody::SwitchSession {
-                session_path: session_path.to_string_lossy().into_owned(),
-            },
-            "switch_session",
-        );
-    }
-
-    /// Decide whether an exit is worth respawning on its own, consuming one
-    /// attempt when it is. A process that stayed up for
-    /// [`AUTO_RESTART_HEALTHY_UPTIME`] resets the count first: that is a new
-    /// failure, not a crash loop, so the budget refills.
-    pub(super) fn take_auto_restart(&mut self) -> bool {
-        if self
-            .runtime
-            .started_at
-            .is_some_and(|at| at.elapsed() >= AUTO_RESTART_HEALTHY_UPTIME)
-        {
-            self.auto_restarts = 0;
-        }
-        if self.auto_restarts >= AUTO_RESTART_LIMIT {
-            return false;
-        }
-        self.auto_restarts += 1;
-        true
-    }
-
-    /// Whether the queued respawn should still happen. A Start or Stop while
-    /// it waits clears `exited` or fills `client`, so the user wins.
-    pub(super) fn should_auto_restart_now(&self) -> bool {
-        self.client.is_none() && self.runtime.exited
-    }
-
-    /// Handle the active process exiting: respawn it on its own, or — once the
-    /// retry budget is spent — raise the banner that points at the Reconnect
-    /// button (issue #76).
+    /// Handle the active process exiting. `interrupted` is whether it died
+    /// with work in flight (a run, a compaction), sampled before the exit
+    /// handler reset that state.
     ///
-    /// One death can arrive as two events (the writer reports a dead stdin, the
-    /// reader its EOF), so an exit that finds a respawn already queued is
-    /// ignored: it must neither spend a second attempt nor raise a banner over
-    /// a recovery that is already on its way.
-    pub(super) fn on_process_exited(&mut self, cx: &mut Context<Self>) {
-        if self.auto_restart_scheduled {
-            return;
-        }
-        if !self.take_auto_restart() {
+    /// Orbit never respawns on its own (INTENT D18): a process only starts when
+    /// the user sends. An idle exit therefore settles quietly into the cold
+    /// state — the session is intact on disk and the next send resumes it. An
+    /// exit mid-run lost something, so it raises the banner that points at the
+    /// Reconnect button (issue #76).
+    pub(super) fn on_process_exited(&mut self, interrupted: bool, cx: &mut Context<Self>) {
+        if interrupted {
             self.set_error(self.process_exited_banner());
             return;
         }
-        self.auto_restart_scheduled = true;
-        cx.spawn(async move |this, cx| {
-            Timer::after(AUTO_RESTART_DELAY).await;
-            let _ = this.update(cx, |app, cx| {
-                app.auto_restart_scheduled = false;
-                if app.should_auto_restart_now() {
-                    app.runtime_restart(cx);
-                } else {
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+        self.drop_client();
+        cx.notify();
     }
-
     /// The banner for a dead process: pi's own last stderr line when it left
     /// one, so "process exited" is not a dead end. A bundled `.app` is the
     /// case that needs it most — a launch whose `PATH` cannot reach `node`
@@ -1092,46 +1359,12 @@ impl OrbitApp {
         }
     }
 
-    /// Park a background session, evicting the least-recently parked idle one
-    /// if over the cap. A running session stays, and so does one whose queue
-    /// still holds events: dropping it would kill the process and lose a
-    /// settle that this tick has not applied yet. When every parked session
-    /// is busy or still queued, the pool grows past the cap until a later
-    /// park finds an idle, empty one.
-    pub(super) fn park(&mut self, path: PathBuf, mut parked: ParkedSession) {
-        parked.parked_at = Instant::now();
-        if self.lives.len() >= MAX_LIVE_SESSIONS {
-            let victim = self
-                .lives
-                .iter()
-                .filter(|(_, p)| !p.busy && p.pending.is_empty())
-                .min_by_key(|(_, p)| p.parked_at)
-                .map(|(k, _)| k.clone());
-            if let Some(victim) = victim {
-                self.lives.remove(&victim);
-            }
-        }
+    /// Park a background session. The pool has no cap and no idle TTL: a
+    /// parked process leaves `lives` only when its session is deleted, the
+    /// user stops it, or the process itself exits (see the parked drain in
+    /// `events.rs`). An MCP edit does not drop it.
+    pub(super) fn park(&mut self, path: PathBuf, parked: ParkedSession) {
         self.lives.insert(path, parked);
-    }
-
-    /// Reap idle parked processes past [`PARKED_IDLE_TTL`]. Running sessions
-    /// stay regardless of age. Called from the heartbeat; a no-op when nothing
-    /// is parked.
-    pub(super) fn reap_idle_parked(&mut self) {
-        if self.lives.is_empty() && self.pending_parks.is_empty() {
-            return;
-        }
-        let now = Instant::now();
-        let alive = |parked: &ParkedSession| {
-            // Events still sitting in the queue have not been applied. The
-            // reap runs before this tick's drain, so dropping the park here
-            // would lose a settle or the reply that names the session file.
-            parked.busy
-                || !parked.pending.is_empty()
-                || now.duration_since(parked.parked_at) < PARKED_IDLE_TTL
-        };
-        self.lives.retain(|_, parked| alive(parked));
-        self.pending_parks.retain(alive);
     }
 }
 
@@ -1156,19 +1389,42 @@ fn clip_stderr_line(line: &str) -> String {
 /// what the caller wants done with an empty process.
 #[derive(Clone)]
 pub(super) struct SpawnTicket {
-    generation: u64,
-    cwd: PathBuf,
-    mcp_stamp: u64,
-    then: SpawnThen,
+    pub(super) generation: u64,
+    pub(super) cwd: PathBuf,
+    pub(super) mcp_stamp: u64,
+    pub(super) then: SpawnThen,
     /// `--provider` / `--model` / `--thinking` the child is started with.
+    /// A resume carries `--session <file>` instead, so the process boots
+    /// already in that file.
     startup_args: Vec<String>,
     /// `startup_args` came from the open draft, not the session default.
-    pinned_model: bool,
+    pub(super) pinned_model: bool,
+    /// The session file a [`SpawnThen::ResumePrompt`] process attaches to.
+    pub(super) session_path: Option<PathBuf>,
+}
+
+/// A send that left the screen before its process existed. The ticket still
+/// matches the child; the shell is the transcript and prompt that were on
+/// screen when the user switched away.
+pub(super) struct DetachedSpawn {
+    pub(super) ticket: SpawnTicket,
+    pub(super) transcript: crate::transcript::Transcript,
+    pub(super) pending_prompt: Option<super::PendingPrompt>,
+    pub(super) execution: super::SessionExecution,
+    pub(super) busy: bool,
+    pub(super) draft: Option<u64>,
+    pub(super) discard: bool,
+    pub(super) startup_model_pinned: bool,
+    pub(super) session_path: Option<PathBuf>,
+    /// The open turn clock and edit totals ride with the send, like a normal
+    /// park, so a reattach does not restart the turn or lose the checkpoint.
+    pub(super) turns: crate::turn_review::TurnClock,
+    pub(super) added: u64,
+    pub(super) removed: u64,
 }
 
 impl SpawnTicket {
     /// The startup flags this child was given.
-    #[cfg(test)]
     pub(super) fn startup_args(&self) -> &[String] {
         &self.startup_args
     }
@@ -1181,4 +1437,9 @@ pub(super) enum SpawnThen {
     Prompt,
     /// Ask pi for a new session on it (the Settings credential/catalog restart).
     NewSession,
+    /// Boot it with `--session <file>`, load that file with `get_messages`,
+    /// then deliver the message that started it. This is how a session with no
+    /// process (opened from the sidebar, or left cold) comes back: only a send
+    /// spawns, and the process resumes the file instead of starting a new one.
+    ResumePrompt,
 }

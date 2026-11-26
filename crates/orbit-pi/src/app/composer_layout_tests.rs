@@ -424,3 +424,61 @@ fn the_access_chip_names_the_mode_only_when_it_is_not_the_default(cx: &mut gpui:
         });
     }
 }
+
+/// The composer row at an explicit width, so Send reachability can be asserted
+/// at the narrow widths the fixed-900px probe never exercises.
+struct NarrowComposerRowProbe {
+    app: Entity<OrbitApp>,
+    width: Pixels,
+    compact: bool,
+}
+
+impl Render for NarrowComposerRowProbe {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.app.update(cx, |app, cx| {
+            div().w(self.width).child(app.composer_row(self.compact, cx))
+        })
+    }
+}
+
+/// Send must stay inside the composer row at the narrowest widths the app can
+/// reach (960px window − default sidebar ≈ 646px row), with a long model label
+/// and a labelled access mode competing for space. The model chip yields
+/// (shrinks/truncates) rather than pushing Send past the edge.
+#[gpui::test]
+fn send_stays_inside_the_composer_row_at_narrow_widths(cx: &mut gpui::TestAppContext) {
+    use crate::access::AccessMode;
+    use crate::theme::{Theme, ThemeKey};
+
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+    let cx = cx.add_empty_window();
+    let app = cx.update(|_, cx| {
+        cx.new(|cx| {
+            let mut app = OrbitApp::new(cx);
+            app.access_mode = AccessMode::Supervised;
+            app.model_label = "a-very-long-model-name-that-would-overflow-the-row".to_string();
+            app.available_thinking_levels = vec!["low".into(), "high".into()];
+            app
+        })
+    });
+    for (width, compact) in [(646., false), (600., false), (560., true)] {
+        let probe = cx.update(|_, cx| {
+            cx.new(|_| NarrowComposerRowProbe {
+                app: app.clone(),
+                width: px(width),
+                compact,
+            })
+        });
+        let _ = cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(width), px(60.)),
+            |_, _| probe.clone(),
+        );
+        let row = cx.debug_bounds("composer-row").expect("composer row laid out");
+        let send = cx.debug_bounds("composer-send").expect("send control laid out");
+        assert!(
+            send.right() <= row.right() + px(0.5),
+            "Send pushed past the composer edge at {width}px"
+        );
+    }
+}

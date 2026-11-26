@@ -830,7 +830,7 @@ impl FileViewer {
                         .min_w_0()
                         .truncate()
                         .font_weight(if active {
-                            FontWeight::MEDIUM
+                            FontWeight::SEMIBOLD
                         } else {
                             FontWeight::NORMAL
                         })

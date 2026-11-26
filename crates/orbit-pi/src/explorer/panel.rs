@@ -725,7 +725,7 @@ impl ProjectPanel {
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(title),
             )
@@ -1081,7 +1081,7 @@ impl ProjectPanel {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(name_color)
                         .child(row.name.clone()),
                 );
@@ -1376,7 +1376,7 @@ impl ProjectPanel {
             .child(
                 div()
                     .text_size(TextSize::Default.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(tr!("explorer.delete_title", name = target.name.clone())),
             )
@@ -1446,7 +1446,7 @@ fn prompt_button(
     .on_click(listener)
     .child(
         div()
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(fg)
             .child(label),
     )

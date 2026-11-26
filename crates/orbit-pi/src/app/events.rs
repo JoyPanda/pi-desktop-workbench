@@ -80,6 +80,11 @@ struct ParkedDrain {
     /// Unsent post-X queue text taken when the parked run settled (or a
     /// prompt was handled without a run). Stashed onto the session draft.
     restore: Option<String>,
+    /// The resume handshake failed. The composer goes back to this session,
+    /// and the process is dropped.
+    failed_send: Option<ComposerDraft>,
+    /// Staged model / thinking / rename replies from this process.
+    staged: Vec<(String, bool)>,
 }
 
 fn take_restore(slot: &mut Option<String>, next: Option<String>) {
@@ -133,8 +138,6 @@ impl OrbitApp {
         self.tick_mcp(cx);
         // Persist a settled panel layout (a drag writes once it stops).
         crate::layout::flush_if_settled();
-        // Bound the warm-session pool: reap idle parked processes past the TTL.
-        self.reap_idle_parked();
         // A banner click routes back to the session it announced.
         if let Some(path) = notifications::take_clicked_session() {
             self.activate_session_from_notification(PathBuf::from(path), cx);
@@ -240,6 +243,9 @@ impl OrbitApp {
             self.file_drag_hovered = false;
             cx.notify();
         }
+        if self.transcript.flush_dirty_rows_limited(4) {
+            cx.notify();
+        }
         if self.client.is_none() {
             let deadline = Instant::now() + APPLY_BUDGET;
             let mut applied = 0;
@@ -248,7 +254,7 @@ impl OrbitApp {
             if repaint {
                 cx.notify();
             }
-            return self.is_active();
+            return self.is_active() || self.background_is_active();
         }
         self.foreground_events
             .extend(self.client.as_ref().expect("client").drain_events());
@@ -467,6 +473,9 @@ impl OrbitApp {
                     self.refresh_context_stats();
                 }
                 Event::ProcessExited => {
+                    // Sampled first: the resets below clear the very flags that
+                    // say whether the process died with work in flight.
+                    let interrupted = self.is_running() || self.is_compacting || self.retrying;
                     // The rename can no longer answer, and a held title would
                     // ignore the next session's name reports. The same goes for
                     // a replacement: the process that owed the answer is gone,
@@ -506,9 +515,9 @@ impl OrbitApp {
                     self.abort_requested = false;
                     self.abort_sent_at = None;
                     self.auth.on_disconnect();
-                    // An exit the app can recover from on its own is a restart,
-                    // not a failure to leave on screen — see `on_process_exited`.
-                    self.on_process_exited(cx);
+                    // An idle exit goes cold quietly; one mid-run raises the
+                    // banner — see `on_process_exited`.
+                    self.on_process_exited(interrupted, cx);
                 }
                 Event::MessageEnd { value } => {
                     // A failed LLM call ends the assistant message with
@@ -576,12 +585,24 @@ impl OrbitApp {
             self.sync_session_menu(cx);
             repaint = true;
         }
-        repaint |= self.apply_parked_budget(deadline, &mut applied, cx);
+        // The session on screen spent this tick's slice. Parked sessions
+        // share a slice of their own, so a busy foreground cannot starve them
+        // and a click does not inherit the whole backlog.
+        let parked_deadline = Instant::now() + APPLY_BUDGET;
+        repaint |= self.apply_parked_budget(parked_deadline, &mut applied, cx);
         repaint |= self.flush_visual_commit(force_visual);
         if repaint {
             cx.notify();
         }
-        self.is_active()
+        self.is_active() || self.background_is_active()
+    }
+
+    /// A parked session is mid-run or still booting. The heartbeat keeps its fast
+    /// cadence for it too: at the idle cadence the 4 ms apply budget cannot keep
+    /// up with a streaming run, and the backlog is what a later switch to that
+    /// session would have to chew through on the click.
+    fn background_is_active(&self) -> bool {
+        self.lives.values().any(|parked| parked.busy) || !self.pending_parks.is_empty()
     }
 
     /// The time budget, or the test cap, is spent. Checked between events so
@@ -759,10 +780,24 @@ impl OrbitApp {
         let mut finished: Vec<(PathBuf, Option<String>, Option<transcript::TurnSummary>)> =
             Vec::new();
         let mut restores: Vec<(Option<PathBuf>, Option<u64>, String)> = Vec::new();
-        for (path, parked) in self.lives.iter_mut() {
+        let mut failed_sends: Vec<(Option<PathBuf>, Option<u64>, ComposerDraft)> = Vec::new();
+        let mut staged_replies: Vec<(String, bool)> = Vec::new();
+        let mut live_paths: Vec<PathBuf> = self.lives.keys().cloned().collect();
+        live_paths.sort();
+        let live_count = live_paths.len();
+        let live_start = if live_count == 0 {
+            0
+        } else {
+            self.park_budget_cursor % live_count
+        };
+        for step in 0..live_count {
+            let path = live_paths[(live_start + step) % live_count].clone();
+            let Some(parked) = self.lives.get_mut(&path) else {
+                continue;
+            };
             let drained = Self::drain_parked_session(
                 parked,
-                Some(path),
+                Some(&path),
                 &self.sessions,
                 &mut finished,
                 deadline,
@@ -773,6 +808,11 @@ impl OrbitApp {
             if let Some(text) = drained.restore {
                 restores.push((Some(path.clone()), parked.draft, text));
             }
+            if let Some(composer) = drained.failed_send {
+                failed_sends.push((Some(path.clone()), parked.draft, composer));
+                dead.push(path.clone());
+            }
+            staged_replies.extend(drained.staged);
             let status = parked.execution.status();
             // Record the outcome, but only when it moved: this runs per parked
             // session on every heartbeat, and re-inserting the same value would
@@ -785,9 +825,16 @@ impl OrbitApp {
             // A dead process can still have settle or rekey events sitting
             // behind this tick's budget. Dropping the park now would lose them.
             if !parked.client.is_alive() && parked.pending.is_empty() {
+                // The exit notification may still sit in the channel, undrained,
+                // so the ProcessExited arm above has not run: recover a waiting
+                // resume prompt here too, or this reap drops it with the park.
+                if let Some(prompt) = parked.resume_prompt.take() {
+                    failed_sends.push((Some(path.clone()), parked.draft, prompt.composer));
+                }
                 dead.push(path.clone());
             }
         }
+        self.park_budget_cursor = self.park_budget_cursor.wrapping_add(1);
         if !dead.is_empty() {
             changed = true;
         }
@@ -798,7 +845,7 @@ impl OrbitApp {
         // yet. They drain like any parked session (a run started during boot
         // keeps going) and join `lives` under their file the moment the boot
         // handshake reveals it. A process that never claims a file is dropped
-        // only when it exits or the idle TTL reaps it.
+        // only when it exits.
         let mut rekeyed: Vec<(PathBuf, ParkedSession)> = Vec::new();
         let mut ix = 0;
         while ix < self.pending_parks.len() {
@@ -816,6 +863,14 @@ impl OrbitApp {
             if let Some(text) = drained.restore {
                 restores.push((drained.rekey.clone(), draft_id, text));
             }
+            if let Some(composer) = drained.failed_send {
+                failed_sends.push((drained.rekey.clone(), draft_id, composer));
+                staged_replies.extend(drained.staged);
+                self.pending_parks.remove(ix);
+                changed = true;
+                continue;
+            }
+            staged_replies.extend(drained.staged);
             // A rekey learned this tick has to land even when the process
             // already exited or later events are still queued. Reaping first
             // would drop the file name and the leftover backlog with it.
@@ -826,6 +881,11 @@ impl OrbitApp {
             } else if !self.pending_parks[ix].client.is_alive()
                 && self.pending_parks[ix].pending.is_empty()
             {
+                // Same undrained-exit case as the lives loop: hand back a waiting
+                // prompt before the park goes.
+                if let Some(prompt) = self.pending_parks[ix].resume_prompt.take() {
+                    failed_sends.push((None, draft_id, prompt.composer));
+                }
                 self.pending_parks.remove(ix);
                 changed = true;
             } else {
@@ -837,6 +897,16 @@ impl OrbitApp {
         }
         for (path, draft_id, text) in restores {
             self.stash_parked_queue_restore(path.as_deref(), draft_id, text);
+        }
+        for (path, draft_id, composer) in failed_sends {
+            self.stash_failed_send(path.as_deref(), draft_id, composer);
+        }
+        for (id, success) in staged_replies {
+            if success {
+                let _ = self.ack_staged(&id);
+            } else {
+                self.fail_staged(&id);
+            }
         }
         // A parked run that settled while the user was elsewhere still wants
         // saying. The settle also flips the sidebar's running loader, so the
@@ -880,6 +950,8 @@ impl OrbitApp {
         let mut changed = false;
         let mut rekey = None;
         let mut restore = None;
+        let mut failed_send = None;
+        let mut staged = Vec::new();
         while !parked.pending.is_empty() {
             if Instant::now() >= deadline || limit.is_some_and(|limit| *applied >= limit) {
                 break;
@@ -937,6 +1009,12 @@ impl OrbitApp {
                     parked.retry_detail = None;
                     parked.queue = PendingQueue::default();
                     parked.queue_wire = QueueWire::default();
+                    // A resume whose process died before `get_messages` answered
+                    // never delivered its prompt. Hand the unsent message back to
+                    // the session's draft rather than dropping it with the park.
+                    if let Some(prompt) = parked.resume_prompt.take() {
+                        failed_send = Some(prompt.composer);
+                    }
                 }
                 // pi emits `queue_update` only when the queue changes, so a
                 // parked session must mirror it here to restore the pending
@@ -1020,6 +1098,16 @@ impl OrbitApp {
                     data,
                     ..
                 } => {
+                    if failed_send.is_none() {
+                        failed_send =
+                            parked.continue_resume(command, *success, data.as_ref());
+                    }
+                    if matches!(
+                        command.as_str(),
+                        "set_model" | "set_thinking_level" | "set_session_name"
+                    ) {
+                        staged.push((id.clone(), *success));
+                    }
                     take_restore(
                         &mut restore,
                         parked.on_queue_response(id, command, *success),
@@ -1066,7 +1154,11 @@ impl OrbitApp {
             }
             parked.transcript.apply_event(&event);
         }
-        let busy = parked.execution.status().is_in_progress();
+        // A settled parent is not idle while a subagent it spawned is still
+        // running. The stamp check on reopen only keeps a parked process when
+        // this flag is set.
+        let busy =
+            parked.execution.status().is_in_progress() || parked.subagents.work_in_flight();
         if busy != was_busy {
             changed = true;
         }
@@ -1075,6 +1167,8 @@ impl OrbitApp {
             changed,
             rekey,
             restore,
+            failed_send,
+            staged,
         }
     }
 
@@ -1220,6 +1314,18 @@ impl OrbitApp {
                 self.pending_session_rename = None;
                 self.session_rename_ready = false;
             }
+            // A message waiting on a resumed session never reached pi. That
+            // process is on pi's empty startup session, not the one on screen,
+            // so it goes away with the message handed back: the next send
+            // starts a clean one instead of prompting the wrong session.
+            if matches!(command, "switch_session" | "get_messages")
+                && self
+                    .pending_prompt
+                    .as_ref()
+                    .is_some_and(|pending| pending.resume_path.is_some())
+            {
+                self.cancel_waiting_prompt(cx);
+            }
             // A failed replacement still ends the wait: pi refused it, so no
             // answer is coming and the gate must not outlive it.
             if matches!(command, "new_session" | "switch_session") {
@@ -1228,6 +1334,7 @@ impl OrbitApp {
                 }
                 self.end_replacement(cx);
             }
+            self.fail_staged(id);
             self.on_command_failure(command, error, cx);
             match command {
                 "compact" => {
@@ -1251,6 +1358,10 @@ impl OrbitApp {
                 _ => {}
             }
             return;
+        }
+        // A staged choice leaves the store only on its success reply.
+        if self.ack_staged(id) {
+            *refresh_sessions = true;
         }
         // A successful retry clears the banner it raised earlier.
         self.clear_error_from(command);
@@ -1485,32 +1596,14 @@ impl OrbitApp {
             }
             "get_messages" => {
                 self.apply_messages_snapshot(data, cx);
+                // A message that resumed this session was waiting for pi to
+                // load it: the snapshot replaced the transcript it sat on.
+                self.deliver_resume_prompt(cx);
                 self.refresh_context_stats();
             }
             "get_available_models" => {
-                self.available_models = data
-                    .get("models")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|m| {
-                                let id = m.get("id").and_then(serde_json::Value::as_str)?;
-                                let name = m.get("name").and_then(serde_json::Value::as_str)?;
-                                let provider =
-                                    m.get("provider").and_then(serde_json::Value::as_str)?;
-                                Some(ModelEntry {
-                                    id: id.into(),
-                                    name: name.into(),
-                                    provider: provider.into(),
-                                    context_window: m
-                                        .get("contextWindow")
-                                        .and_then(serde_json::Value::as_u64),
-                                    thinking_levels: catalog_thinking_levels(m),
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                crate::catalog_cache::store_models(data);
+                self.apply_models_payload(data);
                 self.sync_model_selector(cx);
                 // The model catalog arrived after the session: retry a default
                 // that could not be resolved yet.
@@ -1532,42 +1625,10 @@ impl OrbitApp {
                 self.sync_model_selector(cx);
             }
             "get_commands" => {
-                let home = crate::platform::home_dir_opt();
-                let workspace = self.current_workspace.clone();
-                self.slash_commands = data
-                    .get("commands")
-                    .and_then(serde_json::Value::as_array)
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|c| {
-                                let name = c.get("name").and_then(Value::as_str)?;
-                                let description =
-                                    c.get("description").and_then(Value::as_str).unwrap_or("");
-                                // `source` + `sourceInfo` carry the command's
-                                // provenance; Orbit folds it into a scope badge.
-                                let source = c.get("source").and_then(Value::as_str).unwrap_or("");
-                                let info = c.get("sourceInfo");
-                                let scope =
-                                    info.and_then(|i| i.get("scope")).and_then(Value::as_str);
-                                let origin =
-                                    info.and_then(|i| i.get("origin")).and_then(Value::as_str);
-                                let path = info.and_then(|i| i.get("path")).and_then(Value::as_str);
-                                Some(SlashCommand {
-                                    name: name.to_string(),
-                                    description: description.to_string(),
-                                    scope: mentions::classify_scope(
-                                        source,
-                                        scope,
-                                        origin,
-                                        path,
-                                        workspace.as_deref(),
-                                        home.as_deref(),
-                                    ),
-                                })
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                if let Some(cwd) = self.current_workspace.as_deref() {
+                    crate::catalog_cache::store_commands(cwd, data);
+                }
+                self.apply_commands_payload(data);
                 // A `/` menu already open picks up the fresh command list.
                 self.sync_autocomplete(cx);
             }
@@ -1576,6 +1637,11 @@ impl OrbitApp {
                 self.session_usage = SessionUsage::from_stats(data);
                 if let Some(file) = data.get("sessionFile").and_then(Value::as_str) {
                     self.adopt_session_file(PathBuf::from(file));
+                }
+                // A live reply replaces any stored snapshot, and becomes the next one.
+                self.context_is_snapshot = false;
+                if let Some(path) = &self.current_session_path {
+                    crate::session_snapshot::put(path, data);
                 }
             }
             "switch_session" => {
@@ -1592,6 +1658,9 @@ impl OrbitApp {
                     // which would otherwise queue ahead of `get_messages` and
                     // push the transcript out by a network round trip.
                     self.send(CommandBody::GetMessages, "get_messages");
+                    // Choices made while this session had no process go to pi now,
+                    // ahead of the first prompt.
+                    self.apply_staged_choices();
                     self.send(CommandBody::GetState, "get_state");
                     self.refresh_catalogs();
                     self.probe_auth();

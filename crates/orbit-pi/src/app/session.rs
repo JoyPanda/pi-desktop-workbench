@@ -245,7 +245,7 @@ impl OrbitApp {
         // Files are folded as `@path` mentions, so a message may be nothing
         // but attachments.
         let files = std::mem::take(&mut self.files);
-        let text = Self::fold_attached_files(&text, &files, self.current_workspace.as_deref());
+        let text = Self::fold_attached_files(&text, &files, Some(self.task_cwd().as_path()));
         if text.trim().is_empty() {
             // Nothing to send. A file on its own would have folded into its
             // mention above, so the tray was empty too — put it back anyway,
@@ -276,6 +276,35 @@ impl OrbitApp {
             };
             self.queue_prompt_for_new_process(body, label, composer, cx);
             return;
+        }
+        // The app opens on a blank task with no process, like a New Task page.
+        if !running && self.is_blank_launch_task() {
+            // Give the send a draft row so it has an identity: if the reader
+            // leaves before the process lands, the detached spawn can be
+            // re-attached to that row, or a failed spawn stashed back to it.
+            self.ensure_blank_launch_draft(cx);
+            let composer = ComposerDraft {
+                text,
+                attachments,
+                files,
+                pasted_texts,
+            };
+            self.queue_prompt_for_new_process(body, label, composer, cx);
+            return;
+        }
+        // An existing session that has no process (opened from the sidebar, or
+        // idle when its process ended): this message is what starts one.
+        if !running {
+            if let Some(path) = self.cold_session_path() {
+                let composer = ComposerDraft {
+                    text,
+                    attachments,
+                    files,
+                    pasted_texts,
+                };
+                self.queue_prompt_to_resume_session(path, body, label, composer, cx);
+                return;
+            }
         }
         if running && self.queue_wire.should_defer_enqueue() {
             if self.client.is_none() {
@@ -324,7 +353,7 @@ impl OrbitApp {
         }
         // Not running: a normal prompt starts a new turn. The command is out;
         // the UI half is shared with the path that waits for a process.
-        self.show_prompt_turn(&text, &attachments, cx);
+        self.show_prompt_turn(&text, &attachments, true, cx);
         // The composer's own prompt is the only one whose `handled` answer may
         // tear down the working row (see `prompt_in_flight`).
         self.prompt_in_flight = Some(id.clone());
@@ -338,7 +367,13 @@ impl OrbitApp {
     /// Shared by [`Self::submit_as`] and [`Self::queue_prompt_for_new_process`]
     /// so a message that had to wait for a pi process looks exactly like one
     /// that did not.
-    fn show_prompt_turn(&mut self, text: &str, attachments: &[Attachment], cx: &mut Context<Self>) {
+    fn show_prompt_turn(
+        &mut self,
+        text: &str,
+        attachments: &[Attachment],
+        clear_composer: bool,
+        cx: &mut Context<Self>,
+    ) {
         // Sending commits the user to a folder, so make sure it is in Orbit's
         // own sidebar list — the launch-cwd path never picked one explicitly.
         if let Some(cwd) = self
@@ -380,7 +415,12 @@ impl OrbitApp {
         if self.transcript.first_user_message().is_some() {
             self.mark_current_draft_sent();
         }
-        self.input.update(cx, |input, cx| input.clear(cx));
+        // A resume replay (deliver_resume_prompt) re-puts a message that was
+        // already sent; the composer may hold newer text typed since, so it is
+        // not cleared there. A fresh send clears it.
+        if clear_composer {
+            self.input.update(cx, |input, cx| input.clear(cx));
+        }
     }
 
     /// The first message of a brand-new task: no pi process exists yet, so the
@@ -404,17 +444,394 @@ impl OrbitApp {
             return;
         }
         self.prompt_history.borrow_mut().record(&composer.text);
-        self.show_prompt_turn(&composer.text, &composer.attachments, cx);
+        self.show_prompt_turn(&composer.text, &composer.attachments, true, cx);
         self.pending_prompt = Some(PendingPrompt {
             body,
             label: label.to_string(),
             composer,
+            resume_path: None,
         });
         let cwd = self.task_cwd();
         self.spawn_pi_client_later(cwd, SpawnThen::Prompt, cx);
         cx.notify();
     }
 
+    /// The open view is the page the app launches on: no session, no sidebar
+    /// draft, no process, nothing said yet. Nothing was spawned for it, so the
+    /// first message starts the process exactly like a New Task's.
+    pub(super) fn is_blank_launch_task(&self) -> bool {
+        self.client.is_none()
+            && !self.spawn_pending()
+            && self.pending_prompt.is_none()
+            && self.current_session_path.is_none()
+            && self.current_draft_id.is_none()
+            && self.transcript.is_empty()
+            && !self.runtime.exited
+    }
+
+    /// The open session has a file but no process: it was opened from the
+    /// sidebar without one, or its idle process ended. A send resumes it.
+    /// `None` while a process is up or on its way, for a draft that has never
+    /// been sent (that takes the New Task path), and after a crash that left
+    /// the Reconnect banner up.
+    pub(super) fn cold_session_path(&self) -> Option<PathBuf> {
+        if self.client.is_some()
+            || self.spawn_pending()
+            || self.pending_prompt.is_some()
+            || self.runtime.exited
+            || self.active_is_unsent_draft()
+        {
+            return None;
+        }
+        self.current_session_path.clone()
+    }
+
+    /// Whether the open session is cold: it has a file and no process, and
+    /// nothing is wrong with it. The sidebar footer reads this as idle rather
+    /// than offline.
+    pub(super) fn is_cold_session(&self) -> bool {
+        self.client.is_none()
+            && !self.runtime.exited
+            && self.runtime.error.is_none()
+            && self.current_session_path.is_some()
+    }
+
+    /// The session's workspace folder is gone, so a process cannot be started
+    /// for it: the working directory is the session's own, and a fallback
+    /// directory would run the agent somewhere it was never opened (§22).
+    fn cold_session_workspace_missing(&self) -> bool {
+        self.sessions
+            .iter()
+            .find(|session| Some(&session.path) == self.current_session_path.as_ref())
+            .is_some_and(|session| !session.cwd.is_dir())
+    }
+
+    /// Send on a session that has no process. The message goes up over the
+    /// transcript read from disk and a process is started under it with
+    /// `--session`. Once pi has loaded the file (`get_messages`), the prompt
+    /// is delivered (`deliver_resume_prompt`). A failure at any step hands
+    /// the text back to this session's composer.
+    fn queue_prompt_to_resume_session(
+        &mut self,
+        path: PathBuf,
+        body: CommandBody,
+        label: &str,
+        composer: ComposerDraft,
+        cx: &mut Context<Self>,
+    ) {
+        // The session's folder comes from its listing. Unlisted, there is no
+        // folder to run in and none is guessed (§22): the send is refused.
+        // A just-sent session the scan has not listed yet is the open one, and
+        // the open view's workspace is the folder it was opened in.
+        let listed_cwd = self
+            .sessions
+            .iter()
+            .find(|session| session.path == path)
+            .map(|session| session.cwd.clone())
+            .or_else(|| {
+                (self.current_session_path.as_ref() == Some(&path))
+                    .then(|| self.current_workspace.clone())
+                    .flatten()
+            });
+        let cwd = listed_cwd.clone().unwrap_or_else(|| {
+            path.parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| self.task_cwd())
+        });
+        if listed_cwd.is_none() || self.cold_session_workspace_missing() {
+            // Nothing is sent and nothing is re-pointed (§22): the text stays
+            // in the composer and the dialog offers the Worktrees page.
+            // The text already carries the folded pastes and mentions, so the
+            // trays are not restored with it (that would attach them twice).
+            self.input
+                .update(cx, |input, cx| input.set_text(composer.text, cx));
+            // Images were not folded into the text; hand them back with it.
+            self.attachments = composer.attachments;
+            self.worktree_dialog = Some(WorktreeDialog::Unavailable { path: cwd });
+            cx.notify();
+            return;
+        }
+        self.prompt_history.borrow_mut().record(&composer.text);
+        self.show_prompt_turn(&composer.text, &composer.attachments, true, cx);
+        self.pending_prompt = Some(PendingPrompt {
+            body,
+            label: label.to_string(),
+            composer,
+            resume_path: Some(path.clone()),
+        });
+        self.spawn_pi_client_to_resume(cwd, path, cx);
+        cx.notify();
+    }
+
+    /// A sent message is still waiting for its process: either the spawn is
+    /// on its way, or (for a resume) the process is up but has not yet
+    /// attached to the session and loaded it.
+    pub(super) fn prompt_awaits_process(&self) -> bool {
+        self.pending_prompt
+            .as_ref()
+            .is_some_and(|pending| self.client.is_none() || pending.resume_path.is_some())
+    }
+
+    /// Give up on a message that has not been delivered: cancel the spawn,
+    /// drop a process that was only brought up for it, and hand the text back.
+    pub(super) fn cancel_waiting_prompt(&mut self, cx: &mut Context<Self>) {
+        self.invalidate_pending_spawn();
+        if let Some(prompt) = self.take_detached_send_here() {
+            self.pending_prompt = Some(prompt);
+        }
+        if self.client.is_some() {
+            self.drop_client();
+        }
+        self.unwind_pending_prompt(cx);
+    }
+
+    /// A background send for the session now on screen, if its process has
+    /// not landed. Taking it means the late child is dropped when it arrives.
+    pub(super) fn take_detached_send_here(&mut self) -> Option<PendingPrompt> {
+        // A foreground send already waiting is the one to cancel; overwriting
+        // it with a detached one would lose the newer message.
+        if self.pending_prompt.is_some() {
+            return None;
+        }
+        let path = self.current_session_path.clone();
+        let draft = self.current_draft_id;
+        let pos = self.detached_spawns.iter().position(|shell| {
+            (path.is_some() && shell.session_path == path)
+                || (draft.is_some() && shell.draft == draft)
+        })?;
+        self.detached_spawns.remove(pos).pending_prompt
+    }
+
+    /// A detached send whose process is still booting for this session file.
+    /// Taking it re-arms the spawn as the foreground's, so the landing takes the
+    /// normal adopt path instead of racing a second send on the same session.
+    fn take_detached_spawn_for_path(&mut self, path: &Path) -> Option<DetachedSpawn> {
+        let pos = self
+            .detached_spawns
+            .iter()
+            .position(|shell| shell.session_path.as_deref() == Some(path))?;
+        Some(self.detached_spawns.remove(pos))
+    }
+
+    /// A detached send still booting for this listed draft (a New Task whose
+    /// file pi has not named yet has no session path, only a draft id).
+    fn take_detached_spawn_for_draft(&mut self, id: u64) -> Option<DetachedSpawn> {
+        let pos = self
+            .detached_spawns
+            .iter()
+            .position(|shell| shell.draft == Some(id))?;
+        Some(self.detached_spawns.remove(pos))
+    }
+
+    /// Put a detached send's view state back on screen and re-arm its ticket so
+    /// the landing takes the normal adopt path. The caller sets up the page
+    /// (session or draft) around it. Re-arming moves the ticket out of
+    /// `detached_spawns`, so a second send cannot start and overwrite it.
+    fn restore_detached_shell(&mut self, shell: DetachedSpawn) {
+        self.transcript = shell.transcript;
+        self.transcript.present_deferred();
+        self.execution = shell.execution;
+        self.busy = shell.busy;
+        self.pending_prompt = shell.pending_prompt;
+        self.startup_model_pinned = shell.startup_model_pinned;
+        self.prompt_in_flight = self.execution.prompt_id.clone();
+        self.turns = shell.turns;
+        self.added = shell.added;
+        self.removed = shell.removed;
+        self.pending_spawn = Some(shell.ticket);
+    }
+
+    /// `get_messages` has replaced the transcript with pi's own view of the
+    /// resumed session, which does not hold the message being sent yet: put it
+    /// back on screen and deliver it. A no-op unless a resume is waiting.
+    pub(super) fn deliver_resume_prompt(&mut self, cx: &mut Context<Self>) {
+        if !self
+            .pending_prompt
+            .as_ref()
+            .is_some_and(|pending| pending.resume_path.is_some())
+        {
+            return;
+        }
+        let Some(pending) = self.pending_prompt.take() else {
+            return;
+        };
+        self.show_prompt_turn(&pending.composer.text, &pending.composer.attachments, false, cx);
+        match self.send_tracked(pending.body.clone(), &pending.label) {
+            Some(id) => {
+                self.prompt_in_flight = Some(id.clone());
+                self.execution.prompt_id = Some(id);
+            }
+            None => {
+                self.pending_prompt = Some(pending);
+                self.unwind_pending_prompt(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Hand what the user staged on this session while it had no process to
+    /// the process that just resumed it. Sent right behind `switch_session`,
+    /// so pi has it before the first prompt (which waits for `get_messages`).
+    ///
+    /// A staged value is dropped from the store only on its success reply
+    /// ([`Self::ack_staged`]); a refused one stays staged and raises the usual
+    /// command banner. A staged model that the catalog no longer lists is
+    /// dropped with a notice instead of being sent to be refused.
+    /// Staged choices for a process that is no longer the one on screen.
+    fn apply_staged_on_client(&mut self, client: &PiClient, path: &std::path::Path) {
+        let Some(staged) = crate::session_staging::get(path) else {
+            return;
+        };
+        if let Some(model) = staged.model.filter(|model| !model.is_unset()) {
+            let id = model.model_id.clone().unwrap_or_default();
+            let provider = model.provider.clone().unwrap_or_default();
+            let known = self.available_models.is_empty()
+                || self.available_models.iter().any(|entry| {
+                    entry.id == id && (provider.is_empty() || entry.provider == provider)
+                });
+            if !known {
+                crate::session_staging::clear_model(path);
+            } else if let Ok((model_id, _)) = client.send(CommandBody::SetModel {
+                model_id: id,
+                provider,
+            }) {
+                let level = model.thinking.clone().filter(|level| !level.is_empty());
+                self.staged_acks.push(StagedAck {
+                    id: model_id,
+                    path: path.to_path_buf(),
+                    part: StagedPart::Model {
+                        clears: level.is_none(),
+                    },
+                });
+                if let Some(level) = level {
+                    if let Ok((level_id, _)) =
+                        client.send(CommandBody::SetThinkingLevel { level })
+                    {
+                        self.staged_acks.push(StagedAck {
+                            id: level_id,
+                            path: path.to_path_buf(),
+                            part: StagedPart::Thinking,
+                        });
+                    }
+                }
+            }
+        }
+        if let Some(name) = staged.rename {
+            if let Ok((rename_id, _)) = client.send(CommandBody::SetSessionName { name }) {
+                self.staged_acks.push(StagedAck {
+                    id: rename_id,
+                    path: path.to_path_buf(),
+                    part: StagedPart::Rename,
+                });
+            }
+        }
+    }
+
+    pub(super) fn apply_staged_choices(&mut self) {
+        let Some(path) = self.current_session_path.clone() else {
+            return;
+        };
+        let Some(staged) = crate::session_staging::get(&path) else {
+            return;
+        };
+        if let Some(model) = staged.model.filter(|model| !model.is_unset()) {
+            let id = model.model_id.clone().unwrap_or_default();
+            let provider = model.provider.clone().unwrap_or_default();
+            let known = self.available_models.is_empty()
+                || self.available_models.iter().any(|entry| {
+                    entry.id == id && (provider.is_empty() || entry.provider == provider)
+                });
+            if !known {
+                crate::session_staging::clear_model(&path);
+                self.toast_warning(tr!("session.staged_model_gone", model = id));
+            } else {
+                self.default_model_armed = false;
+                let level = model.thinking.clone().filter(|level| !level.is_empty());
+                let model_id = self.send_tracked(
+                    CommandBody::SetModel {
+                        model_id: id,
+                        provider,
+                    },
+                    "set_model",
+                );
+                if let Some(id) = model_id {
+                    self.staged_acks.push(StagedAck {
+                        id,
+                        path: path.clone(),
+                        part: StagedPart::Model {
+                            clears: level.is_none(),
+                        },
+                    });
+                }
+                if let Some(level) = level {
+                    let level_id =
+                        self.send_tracked(CommandBody::SetThinkingLevel { level }, "set_thinking_level");
+                    if let Some(id) = level_id {
+                        self.staged_acks.push(StagedAck {
+                            id,
+                            path: path.clone(),
+                            part: StagedPart::Thinking,
+                        });
+                    }
+                }
+            }
+        }
+        if let Some(name) = staged.rename {
+            let rename_id = self.send_tracked(CommandBody::SetSessionName { name }, "set_session_name");
+            if let Some(id) = rename_id {
+                self.staged_acks.push(StagedAck {
+                    id,
+                    path,
+                    part: StagedPart::Rename,
+                });
+            }
+        }
+    }
+
+    /// A command answered successfully. When it carried a staged choice, that
+    /// choice is applied for good: returns true for a rename, whose new name
+    /// the session list should now read from the file.
+    pub(super) fn ack_staged(&mut self, id: &str) -> bool {
+        let Some(ix) = self.staged_acks.iter().position(|ack| ack.id == id) else {
+            return false;
+        };
+        let ack = self.staged_acks.remove(ix);
+        match ack.part {
+            StagedPart::Model { clears: true } | StagedPart::Thinking => {
+                crate::session_staging::clear_model(&ack.path)
+            }
+            StagedPart::Model { clears: false } => {}
+            StagedPart::Rename => {
+                crate::session_staging::clear_rename(&ack.path);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// A command was refused. pi told the user why through the command banner,
+    /// so the choice is dropped rather than retried on every later resume with
+    /// the chip claiming a model that is not running. A refused model also
+    /// cancels the thinking level sent behind it, which must not complete a
+    /// model pi never took; a refused rename touches nothing else.
+    pub(super) fn fail_staged(&mut self, id: &str) {
+        let Some((path, part)) = self
+            .staged_acks
+            .iter()
+            .find(|ack| ack.id == id)
+            .map(|ack| (ack.path.clone(), ack.part))
+        else {
+            return;
+        };
+        if part == StagedPart::Rename {
+            self.staged_acks.retain(|ack| ack.id != id);
+            crate::session_staging::clear_rename(&path);
+        } else {
+            self.staged_acks
+                .retain(|ack| ack.path != path || ack.part == StagedPart::Rename);
+            crate::session_staging::clear_model(&path);
+        }
+    }
     /// Undo an optimistic prompt whose process never came up: the message
     /// never reached pi, so it leaves the transcript (which held only it), the
     /// text goes back into the composer, and the row stops claiming to be sent.
@@ -434,11 +851,27 @@ impl OrbitApp {
             }
         }
         // The text already carries the folded pastes and `@path` mentions
-        // (`submit_as` folds them in before this), so restoring the trays as
-        // well would attach everything twice on the next send.
-        self.input.update(cx, |input, cx| {
-            input.set_text(pending.composer.text.clone(), cx)
-        });
+        // (`submit_as` folds them in before this), so restoring those trays as
+        // well would attach everything twice on the next send. Images were NOT
+        // folded into the text, so they go back into the tray. Put the failed
+        // text in front of whatever was typed since the send instead of
+        // clobbering it (same join as `ComposerDraft::prepend_text`).
+        let typed_since = self.input.read(cx).text();
+        let restored = if typed_since.trim().is_empty() {
+            pending.composer.text.clone()
+        } else {
+            format!("{}\n\n{}", pending.composer.text, typed_since)
+        };
+        self.input.update(cx, |input, cx| input.set_text(restored, cx));
+        let mut images = pending.composer.attachments;
+        images.extend(std::mem::take(&mut self.attachments));
+        self.attachments = images;
+        // A resumed session's transcript held everything said before this
+        // message, and was just cleared with it. The file on disk has exactly
+        // that — the message never reached pi — so paint it back.
+        if let Some(path) = pending.resume_path {
+            self.preview_session_transcript(path, cx);
+        }
         cx.notify();
     }
 
@@ -677,6 +1110,45 @@ impl OrbitApp {
 
     /// Fold a parked session's unsent post-X text into the draft that resume
     /// (or a later cold open) restores into the composer.
+    /// A background resume failed before the prompt was delivered. The text
+    /// goes back to that session's draft, not onto the page now on screen.
+    pub(super) fn stash_failed_send(
+        &mut self,
+        path: Option<&Path>,
+        draft_id: Option<u64>,
+        mut composer: ComposerDraft,
+    ) {
+        // The text already carries the folded files and pastes (`submit_as`
+        // folds them in before the send). Keeping the original trays too would
+        // re-fold them on the next send and duplicate the content. Images were
+        // not folded into the text, so they stay.
+        composer.files.clear();
+        composer.pasted_texts.clear();
+        // Merge into whatever the session already holds: the reader may have
+        // typed (or stashed) newer work since this send left. Replacing it would
+        // lose that work. The failed text goes in front; its images lead the tray.
+        if let Some(path) = path {
+            let draft = self.drafts.entry(path.to_path_buf()).or_default();
+            draft.prepend_text(composer.text);
+            let mut images = composer.attachments;
+            images.extend(std::mem::take(&mut draft.attachments));
+            draft.attachments = images;
+            return;
+        }
+        if let Some(id) = draft_id {
+            if let Some(row) = self.listed_drafts.iter_mut().find(|row| row.id == id) {
+                row.promoted = false;
+                row.sent_title = None;
+                let mut draft = row.composer.take().unwrap_or_default();
+                draft.prepend_text(composer.text);
+                let mut images = composer.attachments;
+                images.extend(std::mem::take(&mut draft.attachments));
+                draft.attachments = images;
+                row.composer = Some(draft);
+            }
+        }
+    }
+
     pub(super) fn stash_parked_queue_restore(
         &mut self,
         path: Option<&Path>,
@@ -715,9 +1187,119 @@ impl OrbitApp {
     /// Park the active session's process so it stays warm in the background,
     /// whether it is mid-run or idle. Re-opening it resumes the same process
     /// (no Node spawn), so session switching is near-instant. Running parked
-    /// sessions keep draining events; idle ones are reaped after
-    /// [`PARKED_IDLE_TTL`](crate::app::PARKED_IDLE_TTL).
+    /// sessions keep draining events. Parked processes are never evicted by
+    /// count or age: pi's own `cacheWarming` keeps the provider prompt cache
+    /// warm from inside the live process, and it dies only with the session,
+    /// the app, or the process itself.
     ///
+    /// Place a process that finished booting after the user left.
+    pub(super) fn park_detached_client(&mut self, client: PiClient, shell: DetachedSpawn) {
+        let resume = matches!(shell.ticket.then, SpawnThen::ResumePrompt);
+        let mcp_stamp = shell.ticket.mcp_stamp;
+        let path = shell.session_path.clone();
+        let mut parked = ParkedSession {
+            client,
+            transcript: shell.transcript,
+            busy: shell.busy,
+            execution: shell.execution,
+            interaction: ParkedInteraction {
+                dialog: None,
+                approval: None,
+                ask: None,
+                ask_tool_id: None,
+                ask_questions: Vec::new(),
+                ask_replay: None,
+            },
+            retry_detail: None,
+            added: shell.added,
+            removed: shell.removed,
+            mcp_stamp,
+            turns: shell.turns,
+            widgets: Vec::new(),
+            subagents: crate::subagent_status::SubagentBoard::default(),
+            subagent_scrolls: HashMap::new(),
+            subagent_list_scroll: ScrollHandle::new(),
+            queue: PendingQueue::default(),
+            queue_wire: QueueWire::default(),
+            draft: shell.draft,
+            discard: shell.discard,
+            startup_model_pinned: shell.startup_model_pinned,
+            pending: VecDeque::new(),
+            resume_prompt: None,
+        };
+        if resume {
+            parked.resume_prompt = shell.pending_prompt;
+            let _ = parked.client.send(CommandBody::GetMessages);
+            if let Some(path) = path.as_ref() {
+                self.apply_staged_on_client(&parked.client, path);
+            }
+            let _ = parked.client.send(CommandBody::GetState);
+            if let Some(path) = path {
+                self.park(path, parked);
+            } else {
+                self.pending_parks.push(parked);
+            }
+            return;
+        }
+        if let Some(prompt) = shell.pending_prompt {
+            match parked.client.send(prompt.body) {
+                Ok((id, _)) => {
+                    parked.execution.prompt_id = Some(id);
+                    parked.execution.start();
+                    parked.busy = true;
+                    parked.transcript.expect_reply();
+                }
+                Err(_) => {
+                    self.stash_failed_send(path.as_deref(), parked.draft, prompt.composer);
+                    return;
+                }
+            }
+        }
+        let _ = parked.client.send(CommandBody::GetState);
+        self.pending_parks.push(parked);
+    }
+
+    /// A send is waiting on a process that has not landed yet.
+    fn pending_send_spawn(&self) -> bool {
+        self.pending_spawn.as_ref().is_some_and(|ticket| {
+            matches!(ticket.then, SpawnThen::Prompt | SpawnThen::ResumePrompt)
+        })
+    }
+
+    /// Move a not-yet-landed send off the screen. The child keeps booting.
+    /// Returns whether a send was detached.
+    fn detach_send_spawn(&mut self, startup_model_pinned: bool) -> bool {
+        if !self.pending_send_spawn() {
+            return false;
+        }
+        let Some(ticket) = self.pending_spawn.take() else {
+            return false;
+        };
+        let mut transcript = std::mem::replace(&mut self.transcript, Transcript::new());
+        transcript.park_presentation();
+        let session_path = self
+            .current_session_path
+            .clone()
+            .or_else(|| ticket.session_path.clone());
+        self.detached_spawns.push(DetachedSpawn {
+            ticket,
+            transcript,
+            pending_prompt: self.pending_prompt.take(),
+            execution: std::mem::take(&mut self.execution),
+            busy: std::mem::take(&mut self.busy),
+            draft: self.parking_draft.take(),
+            discard: std::mem::take(&mut self.parking_discard),
+            startup_model_pinned,
+            session_path,
+            turns: std::mem::take(&mut self.turns),
+            added: std::mem::take(&mut self.added),
+            removed: std::mem::take(&mut self.removed),
+        });
+        self.foreground_events.clear();
+        self.replacement_in_flight = None;
+        true
+    }
+
     /// A process that has not claimed a session file yet (pi still booting, or
     /// a `new_session` reply in flight) joins the pending pool instead:
     /// leaving it active would let the incoming `adopt_client` overwrite — and
@@ -726,24 +1308,33 @@ impl OrbitApp {
         // Take the pin before invalidating: that call clears it, and the
         // parked process may still be waiting on `new_session`.
         let startup_model_pinned = std::mem::take(&mut self.startup_model_pinned);
-        // The parked process is the view's, so the view's pending spawn is
-        // moot: a client that arrives after this would be adopted onto a page
-        // that has already moved on.
-        self.invalidate_pending_spawn();
         let Some(client) = self.client.take() else {
-            // No process left to apply them. Leaving them would paint the
-            // outgoing session's replies onto whatever is adopted next.
-            self.foreground_events.clear();
+            // No process yet. A send still booting keeps going in the
+            // background; anything else must not land on the next page.
+            if !self.detach_send_spawn(startup_model_pinned) {
+                self.invalidate_pending_spawn();
+                self.foreground_events.clear();
+            }
             return;
         };
-        let busy = self.busy
+        // The live process is what we park. A different spawn still in flight
+        // would otherwise be adopted onto the page we are about to show.
+        self.invalidate_pending_spawn();
+        // The in-flight replacement belongs to this process. Clearing it here
+        // lets the next page paint; the reply is applied on the parked drain.
+        self.replacement_in_flight = None;
+        // The parent turn can already have settled while an async subagent is
+        // still running. That must stay "busy" or a later reopen treats the
+        // process as idle and drops it (killing the runner).
+        let parent_busy = self.busy
             || self.transcript.is_streaming()
             || self.retrying
             || self.is_compacting
             || self.execution.status().is_in_progress();
-        if busy && !self.execution.status().is_in_progress() {
+        if parent_busy && !self.execution.status().is_in_progress() {
             self.execution.start();
         }
+        let busy = parent_busy || self.subagents.work_in_flight();
         if let Some(path) = &self.current_session_path {
             self.remember_session_outcome(path.clone(), self.execution.status());
         }
@@ -785,17 +1376,24 @@ impl OrbitApp {
             subagent_list_scroll,
             queue: std::mem::take(&mut self.queue),
             queue_wire: std::mem::take(&mut self.queue_wire),
-            parked_at: Instant::now(),
             turns: std::mem::take(&mut self.turns),
             draft: self.parking_draft.take(),
             discard: std::mem::take(&mut self.parking_discard),
             startup_model_pinned,
             // Events the budget has not applied yet belong to this process.
             pending: std::mem::take(&mut self.foreground_events),
+            resume_prompt: self
+                .pending_prompt
+                .take()
+                .filter(|pending| pending.resume_path.is_some()),
         };
         match self.current_session_path.take() {
-            Some(path) => self.park(path, parked),
-            None => self.pending_parks.push(parked),
+            Some(path) => {
+                self.park(path, parked);
+            }
+            None => {
+                self.pending_parks.push(parked);
+            }
         }
         self.clear_subagent_folds();
     }
@@ -1036,9 +1634,8 @@ impl OrbitApp {
     pub(super) fn request_abort(&mut self, cx: &mut Context<Self>) {
         // A turn whose process has not started yet has nothing to abort: cancel
         // the spawn and hand the message back, the same as an abort would.
-        if self.pending_prompt.is_some() && self.client.is_none() {
-            self.invalidate_pending_spawn();
-            self.unwind_pending_prompt(cx);
+        if self.prompt_awaits_process() {
+            self.cancel_waiting_prompt(cx);
             self.set_status(tr!("runtime.pi_process_stopped"));
             cx.notify();
             return;
@@ -1112,9 +1709,8 @@ impl OrbitApp {
     pub(super) fn force_stop_run(&mut self, cx: &mut Context<Self>) {
         self.abort_sent_at = None;
         // Same as the first press: a start still in flight is cancelled here.
-        if self.pending_prompt.is_some() && self.client.is_none() {
-            self.invalidate_pending_spawn();
-            self.unwind_pending_prompt(cx);
+        if self.prompt_awaits_process() {
+            self.cancel_waiting_prompt(cx);
             self.set_status(tr!("runtime.pi_process_stopped"));
             cx.notify();
             return;
@@ -1651,11 +2247,21 @@ impl OrbitApp {
     /// Save the composer and decide what the open task becomes. Does not
     /// touch the pi process — [`Self::retire_outgoing`] does that.
     fn settle_outgoing(&mut self, cx: &mut Context<Self>) -> Outgoing {
-        // A message still waiting for its process never reached pi, so leaving
-        // the page takes it back: the text returns to the composer before it is
-        // settled, which keeps the row a draft instead of a session that claims
-        // to exist.
-        if self.pending_prompt.is_some() {
+        // A brand-new task's message never reached pi, so leaving takes it
+        // back and the row stays a draft. A resume of an existing session is
+        // different: the transcript holds the whole history, and the process
+        // is already up waiting on `switch_session` / `get_messages`. Wiping
+        // it here parks an empty transcript, and the restore preview lands
+        // after the page has moved on.
+        let keep_resume = self.runtime_is_live()
+            && self
+                .pending_prompt
+                .as_ref()
+                .is_some_and(|pending| pending.resume_path.is_some());
+        // A send whose process is still booting is kept too: leaving the page
+        // detaches that spawn instead of cancelling it.
+        let keep_send = keep_resume || (self.pending_prompt.is_some() && self.pending_send_spawn());
+        if self.pending_prompt.is_some() && !keep_send {
             self.invalidate_pending_spawn();
             self.unwind_pending_prompt(cx);
         }
@@ -1794,7 +2400,9 @@ impl OrbitApp {
                     self.drop_client();
                 }
             }
-            Outgoing::Kept { id, path } | Outgoing::Promoted { id, path } if live => {
+            Outgoing::Kept { id, path } | Outgoing::Promoted { id, path }
+                if live || self.pending_send_spawn() =>
+            {
                 // `new_session`'s reply clears `current_session_path` before
                 // `get_state` adopts the file. The draft may already know the
                 // path; park under that, not under pending.
@@ -1807,7 +2415,7 @@ impl OrbitApp {
                 self.parking_discard = false;
                 self.park_active_session();
             }
-            Outgoing::Session if live => {
+            Outgoing::Session if live || self.pending_send_spawn() => {
                 self.park_active_session();
             }
             _ => {
@@ -1949,13 +2557,24 @@ impl OrbitApp {
                 self.resume_pending_draft(id, parked, cx);
                 return;
             }
+            if let Some(shell) = self.take_detached_spawn_for_draft(id) {
+                // The draft's send is still booting in the background. Bring it
+                // back onto the page so a second send cannot start and overwrite
+                // it, and Stop can cancel it. A fork left in flight on the page
+                // being left must not suppress this draft binding its file.
+                self.cancel_fork_followup();
+                let outgoing = self.settle_outgoing(cx);
+                self.retire_outgoing(outgoing, cx);
+                self.reattach_detached_draft(id, shell, cx);
+                return;
+            }
             self.reopen_draft_cold(id, cwd, cx);
             return;
         }
         if let Some(parked) = self.lives.remove(&path) {
             // The process is already warm. Restoring it here skips
-            // `switch_to_session`, which would drop a stale MCP stamp and
-            // then `SwitchSession` a file that may still be header-only.
+            // `switch_to_session`, which would `SwitchSession` a file that
+            // may still be header-only.
             let outgoing = self.settle_outgoing(cx);
             self.retire_outgoing(outgoing, cx);
             self.resume_parked_draft(id, Some(path), parked, cx);
@@ -2005,8 +2624,9 @@ impl OrbitApp {
             .and_then(|draft| draft.sent_title.clone());
         self.adopt_client(parked.client);
         self.foreground_events = parked.pending;
+        self.pending_prompt = parked.resume_prompt;
         self.transcript = parked.transcript;
-        self.transcript.present();
+        self.transcript.present_deferred();
         self.turns = parked.turns;
         self.busy = parked.busy;
         self.execution = parked.execution;
@@ -2060,6 +2680,53 @@ impl OrbitApp {
         cx.notify();
     }
 
+    /// Put a draft's still-booting detached send back on screen. Mirrors the
+    /// session reattach: the ticket is re-armed as the foreground's so the
+    /// landing takes the normal adopt path and a second send cannot overwrite it.
+    fn reattach_detached_draft(&mut self, id: u64, shell: DetachedSpawn, cx: &mut Context<Self>) {
+        self.note_session_switch();
+        self.clear_review_records_for_switch(cx);
+        self.current_draft_id = Some(id);
+        self.current_session_path = None;
+        self.client = None;
+        self.runtime = RuntimeStatus::default();
+        self.replacement_in_flight = None;
+        self.startup_model_reportable = false;
+        self.default_model_armed = false;
+        self.reset_quota_entries();
+        self.extension_widgets.clear();
+        self.subagents = crate::subagent_status::SubagentBoard::default();
+        self.subagent_scrolls.clear();
+        self.subagent_list_scroll = ScrollHandle::new();
+        self.subagent_scroll_placed = 0;
+        self.subagent_list_rows = 0;
+        self.clear_subagent_folds();
+        // A stop deadline and a session identity belonged to the page being
+        // left; neither may escalate against or label the draft's booting send.
+        self.abort_sent_at = None;
+        self.abort_requested = false;
+        self.pending_session_rename = None;
+        self.session_rename_ready = false;
+        self.session_id = None;
+        self.current_title = self
+            .listed_drafts
+            .iter()
+            .find(|draft| draft.id == id)
+            .and_then(|draft| draft.sent_title.clone());
+        self.reset_session_name(cx);
+        self.context = None;
+        self.session_usage = None;
+        self.context_is_snapshot = false;
+        self.restore_detached_shell(shell);
+        self.retrying = self.execution.retrying;
+        self.is_compacting = self.execution.compacting;
+        self.retry_detail = None;
+        let cwd = self.draft_cwd(id);
+        self.show_draft_page(&cwd, cx);
+        self.restore_draft_composer(id, cx);
+        cx.notify();
+    }
+
     fn reopen_draft_cold(&mut self, id: u64, cwd: PathBuf, cx: &mut Context<Self>) {
         let outgoing = self.settle_outgoing(cx);
         self.retire_outgoing(outgoing, cx);
@@ -2082,12 +2749,12 @@ impl OrbitApp {
         self.reveal_workspace_group(cwd);
     }
 
-    /// Spawn a process for a draft that already owns the composer. Does not
+    /// Show the page for a draft that already owns the composer. Spawns
+    /// nothing: the process is born with the first send (INTENT D18). Does not
     /// settle the outgoing task — the caller did that.
     fn boot_draft_process(&mut self, cwd: &Path, cx: &mut Context<Self>) {
         self.show_draft_page(cwd, cx);
         self.paint_unsent_model();
-        self.spawn_pi_client_later(cwd.to_path_buf(), SpawnThen::NewSession, cx);
     }
 
     fn unbind_draft(&mut self, id: u64) {
@@ -2125,7 +2792,7 @@ impl OrbitApp {
                     self.delete_header_only_file(&path);
                 }
                 self.current_session_path = None;
-                self.runtime_start(cx);
+                cx.notify();
             }
             Outgoing::Promoted { id, path: None } => {
                 let cwd = self.draft_cwd(id);
@@ -2168,7 +2835,7 @@ impl OrbitApp {
         let Some(path) = path else {
             self.drop_client();
             self.current_session_path = None;
-            self.runtime_start(cx);
+            cx.notify();
             return;
         };
         self.restore_composer_draft(Some(&path), cx);
@@ -2191,7 +2858,7 @@ impl OrbitApp {
             self.switch_to_session(session, false, cx);
         } else {
             self.current_session_path = None;
-            self.runtime_start(cx);
+            cx.notify();
         }
     }
 
@@ -2378,25 +3045,19 @@ impl OrbitApp {
     /// top-bar history (forward entries are dropped, like browser history).
     ///
     /// Each session gets its own pi process, so switching never interrupts a
-    /// run: the outgoing session is *parked* mid-run (its process and live
-    /// transcript keep going in the background — events drain every tick),
-    /// and a parked target resumes exactly where it left off. Idle sessions
-    /// are torn down and reload from disk when reopened.
+    /// run: the outgoing session is *parked* (its process and live transcript
+    /// keep going in the background — events drain every tick), and a parked
+    /// target resumes exactly where it left off, idle or not. A session with
+    /// no process reloads from disk.
     pub(super) fn switch_to_session(
         &mut self,
         session: SessionInfo,
         push: bool,
         cx: &mut Context<Self>,
     ) {
-        // pi tears the outgoing session down before it applies the incoming
-        // one, and a command landing in that window is what makes an
-        // extension's `session_shutdown` see an already-invalidated ctx. Hold
-        // the click and run it when pi answers: the last one clicked wins.
-        if self.replacement_in_flight.is_some() {
-            self.pending_switch = Some(session);
-            cx.notify();
-            return;
-        }
+        // Each session has its own process, so a `switch_session` /
+        // `new_session` still in flight belongs to the one being left. The
+        // click does not wait for it.
         self.pending_session_rename = None;
         self.session_rename_ready = false;
         // Opening a session means viewing the chat: leave whichever full-page
@@ -2468,29 +3129,23 @@ impl OrbitApp {
         self.ask_focus_pending = false;
 
         // ── activate the target ──
-        // A parked process spawned before the latest MCP configuration change
-        // is stale: drop it and cold-start so it loads the current servers.
-        // The stamp is workspace-specific, so compare against the *target
-        // session's* workspace — the manager is still pointed at the workspace
-        // being left. Using the current fingerprint made every cross-workspace
-        // switch look like a config change and drop (kill) the parked run.
-        // A busy session is never dropped for staleness: the live run wins,
-        // and the new config applies on its next idle reopen.
-        let mcp_stamp = self.mcp.fingerprint_for(Some(&session.cwd));
-        if let Some(parked) = self
-            .lives
-            .remove(&session.path)
-            .filter(|parked| parked.busy || parked.mcp_stamp == mcp_stamp)
-        {
+        // A notice about the session being left must not follow the reader.
+        self.clear_error_from("workspace_missing");
+        // A hot process stays up for the life of this Orbit run. An MCP edit
+        // after it started does not restart it, idle or not; the next process
+        // this app spawns reads the new file. Quitting Orbit is what ends it.
+        let taken = self.lives.remove(&session.path);
+        if let Some(parked) = taken {
             // Resume a background run. The parked transcript is already up
             // to date (its events drain every tick); anything buffered in
             // the process channel streams in from the next tick on.
             let startup_model_pinned = parked.startup_model_pinned;
             self.adopt_client(parked.client);
             self.foreground_events = parked.pending;
+            self.pending_prompt = parked.resume_prompt;
             self.startup_model_pinned = startup_model_pinned;
             self.transcript = parked.transcript;
-            self.transcript.present();
+            self.transcript.present_deferred();
             self.turns = parked.turns;
             self.busy = parked.busy;
             self.execution = parked.execution;
@@ -2544,6 +3199,30 @@ impl OrbitApp {
             // A warm process already reported capabilities; a cheap refresh
             // keeps a long-parked session's auth/quota current.
             self.probe_auth();
+        } else if let Some(shell) = self.take_detached_spawn_for_path(&session.path) {
+            // This session's send is still booting in the background. Bring it
+            // back onto the page instead of showing a cold session: the landing
+            // takes the normal adopt path, a second send is held (the session is
+            // not cold while a send waits), and Stop can cancel the prompt.
+            self.extension_widgets.clear();
+            self.subagents = crate::subagent_status::SubagentBoard::default();
+            self.subagent_scrolls.clear();
+            self.subagent_list_scroll = ScrollHandle::new();
+            self.subagent_scroll_placed = 0;
+            self.subagent_list_rows = 0;
+            self.clear_subagent_folds();
+            self.client = None;
+            self.runtime = RuntimeStatus::default();
+            self.replacement_in_flight = None;
+            self.startup_model_reportable = false;
+            self.default_model_armed = false;
+            self.reset_quota_entries();
+            self.restore_detached_shell(shell);
+            let snapshot = crate::session_snapshot::get(&session.path);
+            self.context = snapshot.as_ref().and_then(orbit_rpc::ContextUsage::from_stats);
+            self.session_usage = snapshot.as_ref().and_then(orbit_rpc::SessionUsage::from_stats);
+            self.context_is_snapshot = self.context.is_some() || self.session_usage.is_some();
+            self.cold_summary = None;
         } else {
             // Cold session (its process was torn down): paint the stored
             // transcript from disk in the same frame so the switch never waits
@@ -2562,53 +3241,40 @@ impl OrbitApp {
                     .unwrap_or_default(),
             );
             self.preview_session_transcript(session.path.clone(), cx);
+            // Opening a session starts no process: the click shows what is on
+            // disk, and the first message sent spawns one that resumes the
+            // file (`SpawnThen::ResumePrompt`), exactly like a New Task. Reset
+            // what a process adoption used to reset, so the page reads as idle
+            // — not as the failure or exit of whatever ran before it.
+            self.client = None;
+            self.runtime = RuntimeStatus::default();
+            self.replacement_in_flight = None;
+            self.startup_model_reportable = false;
+            self.startup_model_pinned = false;
+            self.default_model_armed = false;
+            self.reset_quota_entries();
+            // Show the numbers from its last live moment, dimmed, in place of a
+            // meter that would read empty with no process to ask.
+            let snapshot = crate::session_snapshot::get(&session.path);
+            self.context = snapshot.as_ref().and_then(orbit_rpc::ContextUsage::from_stats);
+            self.session_usage = snapshot.as_ref().and_then(orbit_rpc::SessionUsage::from_stats);
+            self.context_is_snapshot = self.context.is_some() || self.session_usage.is_some();
+            self.cold_summary = None;
+            self.read_cold_summary(session.path.clone(), cx);
             if !session.cwd.is_dir() {
                 // The session's workspace is gone (a removed worktree, a
-                // deleted folder). Never spawn the agent in a fallback
-                // directory and never re-point the session silently (§22) —
-                // show the unavailable notice instead.
-                self.client = None;
-                self.worktree_dialog = Some(WorktreeDialog::Unavailable {
-                    path: session.cwd.clone(),
-                });
+                // deleted folder). Never run the agent in a fallback directory
+                // and never re-point the session silently (§22): the page says
+                // why a message cannot be sent, and the send is refused.
+                self.set_error_from(
+                    "workspace_missing",
+                    tr!(
+                        "session.workspace_missing",
+                        path = session.cwd.display().to_string()
+                    ),
+                );
             } else {
-                // Spawn a dedicated pi process rooted at the session's
-                // workspace and point it at the session file.
-                let secret_env = self.mcp.secret_env();
-                let spawned = self
-                    .extensions
-                    .spawn(&session.cwd, false, &secret_env)
-                    .or_else(|_| {
-                        self.extensions.spawn(
-                            &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                            false,
-                            &secret_env,
-                        )
-                    });
-                match spawned {
-                    Ok(client) => {
-                        self.adopt_client(client);
-                        self.mcp_stamp = mcp_stamp;
-                        self.replacement_in_flight = self.send_tracked(
-                            CommandBody::SwitchSession {
-                                session_path: session.path.to_string_lossy().into_owned(),
-                            },
-                            "switch_session",
-                        );
-                        // `get_state` and the capability probes are sent from
-                        // the switch_session success handler: querying state
-                        // eagerly here races the switch (pi answers with the
-                        // default model), and the probes only get queued after
-                        // the load commands, so a slow auth/quota lookup can't
-                        // delay the transcript.
-                    }
-                    Err(err) => {
-                        let message = tr!("runtime.pi_spawn_failed", error = err);
-                        self.client = None;
-                        self.runtime.error = Some(message.clone());
-                        self.set_status(message);
-                    }
-                }
+                self.clear_error_from("workspace_missing");
             }
         }
         self.current_title = Some(session.title.clone());
@@ -2622,6 +3288,12 @@ impl OrbitApp {
         // on this click.
         self.schedule_turn_records();
         self.current_session_path = Some(session.path.clone());
+        // Show the model a cold session will resume on: what was staged for it,
+        // else the default pi last reported. After the path is current, so the
+        // staged lookup reads this session and not the one just left.
+        if self.cold_session_path().is_some() {
+            self.paint_unsent_model();
+        }
         // The incoming session's own draft (if any) lands in the composer —
         // never the previous session's half-written text.
         self.restore_composer_draft(Some(&session.path.clone()), cx);
@@ -2646,6 +3318,48 @@ impl OrbitApp {
     /// The authoritative snapshot replaces this when it lands; a preview that
     /// is already superseded (snapshot arrived, or the user switched again) is
     /// dropped.
+    /// Read what a cold session last ran on (model, level, context size) off
+    /// the UI thread, then repaint the chips and, when no stored snapshot
+    /// exists, the context meter.
+    fn read_cold_summary(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let summary = cx
+                .background_executor()
+                .spawn({
+                    let path = path.clone();
+                    async move { sessions::cold_summary(&path) }
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if app.current_session_path.as_ref() != Some(&path) || app.client.is_some() {
+                    return;
+                }
+                app.cold_summary = Some((path, summary.clone()));
+                app.paint_unsent_model();
+                if app.context.is_none() {
+                    let tokens = summary.context_tokens;
+                    let window = app
+                        .available_models
+                        .iter()
+                        .find(|m| m.id == app.model_id && (app.model_provider.is_empty() || m.provider == app.model_provider))
+                        .and_then(|m| m.context_window)
+                        .filter(|w| *w > 0);
+                    if let (Some(tokens), Some(window)) = (tokens, window) {
+                        app.context = Some(orbit_rpc::ContextUsage {
+                            tokens: Some(tokens),
+                            context_window: window,
+                            percent: Some(tokens as f64 * 100.0 / window as f64),
+                        });
+                        app.context_is_snapshot = true;
+                    }
+                }
+                app.sync_model_selector(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn preview_session_transcript(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             let payload = cx
@@ -3093,7 +3807,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(tr!("session.session_details")),
             )
@@ -3135,7 +3849,7 @@ impl OrbitApp {
                                 button_frame(div().id("sess-rename"), &theme, ButtonSize::Large)
                                     .border_1()
                                     .cursor_pointer()
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .on_mouse_up(MouseButton::Left, {
                                         let this = this.clone();
                                         move |_, _, cx| {
@@ -3169,7 +3883,7 @@ impl OrbitApp {
                 .pt(DynamicSpacing::Base08.px(&theme))
                 .pb(DynamicSpacing::Base04.px(&theme))
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_muted)
                 .child(label.to_string())
         };
@@ -3382,7 +4096,7 @@ impl OrbitApp {
                         .max_w(px(96.))
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary)
                         .child(providers::provider_display_name(&report.provider)),
                 )
@@ -3551,7 +4265,7 @@ impl OrbitApp {
                     ButtonSize::Default,
                     SegmentPosition::at(index, QuotaPopupTab::ALL.len()),
                 )
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
                 .border_color(theme.border)
                 .when(selected, |chip| {
@@ -3762,7 +4476,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(tr!("session.no_provider_usage")),
             )
@@ -3770,7 +4484,7 @@ impl OrbitApp {
                 button_frame(div().id("quota-empty-mcp"), &theme, ButtonSize::Compact)
                     .debug_selector(|| "quota-empty-mcp".to_string())
                     .cursor_pointer()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .raised(theme.action, &theme)
                     .text_color(theme.action_fg)
                     .hover(|style| style.raised(theme.action_hover, &theme))
@@ -3826,7 +4540,7 @@ impl OrbitApp {
                         div()
                             .flex_1()
                             .text_size(TextSize::XSmall.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_muted)
                             .child(tr!("session.hidden_providers", count = reports.len())),
                     ),
@@ -4629,7 +5343,7 @@ fn quota_provider_card(
                 .min_w_0()
                 .truncate()
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(name),
         );
@@ -4703,7 +5417,7 @@ fn quota_provider_card(
                     div()
                         .flex_none()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(value),
                 ),
@@ -4765,7 +5479,7 @@ fn quota_provider_card(
                     div()
                         .flex_none()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(text),
                 ),

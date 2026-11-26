@@ -261,7 +261,8 @@ fn row(
                 .child(
                     div()
                         .truncate()
-                        .when(selected, |text| text.font_weight(FontWeight::MEDIUM))
+                        .font_weight(FontWeight::NORMAL)
+                        .when(selected, |text| text.font_weight(FontWeight::SEMIBOLD))
                         .text_color(if highlighted || selected {
                             theme.text_primary
                         } else {
@@ -272,6 +273,7 @@ fn row(
                 .children(sub.map(|sub| {
                     div()
                         .truncate()
+                        .font_weight(FontWeight::NORMAL)
                         .text_size(TextSize::Small.px(&theme))
                         .text_color(theme.text_muted)
                         .child(sub.to_string())
@@ -912,7 +914,7 @@ fn calendar(page: &UsagePage, cx: &mut gpui::Context<UsagePage>, theme: Theme) -
                 .flex()
                 .justify_center()
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(dt.format("%B %Y").to_string()),
         )

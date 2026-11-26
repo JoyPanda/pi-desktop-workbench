@@ -241,15 +241,23 @@ impl SubagentBoard {
         self.scroll_epoch
     }
 
-    /// The list stays while any leaf is still running, or while the snapshot
-    /// says more runs were left out. Once every listed run has ended and
-    /// nothing was omitted, the list hides and an open transcript stays put.
-    pub fn list_shown(&self) -> bool {
+    /// A background subagent may still be inside this process: a leaf that has
+    /// not ended, or a snapshot that left runs out. The parent turn can already
+    /// have settled. That is not an idle session — dropping the process would
+    /// kill the runner (on Windows, the whole tree).
+    pub fn work_in_flight(&self) -> bool {
         self.omitted_runs > 0
             || self
                 .order
                 .iter()
                 .any(|id| self.leaves.get(id).is_some_and(|leaf| !leaf.terminal()))
+    }
+
+    /// The list stays while any leaf is still running, or while the snapshot
+    /// says more runs were left out. Once every listed run has ended and
+    /// nothing was omitted, the list hides and an open transcript stays put.
+    pub fn list_shown(&self) -> bool {
+        self.work_in_flight()
     }
 
     pub fn rows(&self) -> Vec<ListRow> {

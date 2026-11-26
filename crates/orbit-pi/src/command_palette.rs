@@ -786,14 +786,17 @@ impl Render for CommandPalette {
                                 .flex_col()
                                 .child(
                                     div()
-                                        .font_weight(FontWeight::MEDIUM)
+                                        .font_weight(FontWeight::SEMIBOLD)
                                         .child(tr!("command_palette.no_results")),
                                 )
-                                .child(div().text_size(picker::SECONDARY_TEXT.px(&theme)).child(
-                                    tr!(
-                                        "command_palette.try_a_session_title_a_command_or_a_setting"
-                                    ),
-                                )),
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::NORMAL)
+                                        .text_size(picker::SECONDARY_TEXT.px(&theme))
+                                        .child(tr!(
+                                            "command_palette.try_a_session_title_a_command_or_a_setting"
+                                        )),
+                                ),
                         ),
                 );
         } else {
@@ -959,7 +962,7 @@ fn render_row(
                         .min_w_0()
                         .truncate()
                         .font_weight(if highlighted {
-                            FontWeight::MEDIUM
+                            FontWeight::SEMIBOLD
                         } else {
                             FontWeight::NORMAL
                         })
@@ -974,6 +977,7 @@ fn render_row(
                     row.child(
                         div()
                             .flex_none()
+                            .font_weight(FontWeight::NORMAL)
                             .text_size(picker::SECONDARY_TEXT.px(&theme))
                             .text_color(if highlighted {
                                 theme.text_secondary
@@ -988,6 +992,7 @@ fn render_row(
             row.child(
                 div()
                     .ml(context_menu::keybinding_gap(&theme) - list_item::content_gap(&theme))
+                    .font_weight(FontWeight::NORMAL)
                     .h(ButtonSize::Default.height(&theme))
                     .min_w(px(28.))
                     .px(DynamicSpacing::Base08.px(&theme))

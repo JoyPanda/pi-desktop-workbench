@@ -47,7 +47,7 @@ use orbit_rpc::{
 };
 use serde_json::Value;
 
-use self::runtime::{SpawnThen, SpawnTicket};
+use self::runtime::{DetachedSpawn, SpawnThen, SpawnTicket};
 use self::session_status::{SessionExecution, SessionStatus};
 
 use crate::access::AccessMode;
@@ -130,21 +130,6 @@ const AGENT_ERROR_SOURCE: &str = "agent_error";
 /// bridge appends only on change, so this is a cheap idempotent read.
 const QUOTA_ENTRY_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
-/// How long pi must have stayed up when it exits for that exit to count as a
-/// fresh failure rather than another lap of a crash loop. An automatic respawn
-/// resets its retry budget only against this: a process that answered commands
-/// for this long was healthy and simply died, while one that dies sooner never
-/// got going.
-const AUTO_RESTART_HEALTHY_UPTIME: Duration = Duration::from_secs(10);
-
-/// Consecutive automatic respawns before the app stops trying and hands
-/// recovery back to the Reconnect button (issue #76).
-const AUTO_RESTART_LIMIT: u8 = 3;
-
-/// Pause before an automatic respawn, so a crash loop backs off instead of
-/// spinning the CPU and the log.
-const AUTO_RESTART_DELAY: Duration = Duration::from_millis(400);
-
 /// How long an `abort` gets to be answered before Orbit stops waiting for pi
 /// and takes the process down itself.
 ///
@@ -173,16 +158,6 @@ const ADD_MENU_ITEMS: [(&str, &str, &str); 3] = [
     ("icons/file.svg", "composer.attach_file", ""),
     ("icons/at-sign.svg", "composer.mention_file", "@"),
 ];
-
-/// Maximum sessions kept alive in the background. Beyond this, the
-/// least-recently parked idle session is evicted (its process torn down);
-/// running ones never are.
-const MAX_LIVE_SESSIONS: usize = 6;
-
-/// How long an idle parked session stays warm before its process is reaped.
-/// Reusing a warm pi process makes re-opening a recent session instant
-/// instead of paying Node startup again; the TTL bounds the memory cost.
-const PARKED_IDLE_TTL: Duration = Duration::from_secs(300);
 
 /// Outstanding queue RPCs on one pi process. Local unqueue (X / Esc /
 /// `AgentSettled`) must not zero these while that process still owes replies.
@@ -336,9 +311,8 @@ struct ParkedSession {
     retry_detail: Option<RetryDetail>,
     added: u64,
     removed: u64,
-    /// MCP config fingerprint this parked process was spawned with. A stale
-    /// process is dropped when the session is next opened, so it reloads the
-    /// current servers instead of running the old ones.
+    /// MCP config fingerprint this process was spawned with. A later edit does
+    /// not drop the process; the next spawn reads the new file.
     mcp_stamp: u64,
     /// Last Turn's clock, parked with the transcript so a warm resume does
     /// not inherit the session that was active in between.
@@ -364,8 +338,6 @@ struct ParkedSession {
     /// `clear_queue` still in flight cannot wipe a follow-up queued after X,
     /// and a stale `queue_update` cannot resurrect a dismissed row on resume.
     queue_wire: QueueWire,
-    /// When this session was last parked; drives idle TTL reaping.
-    parked_at: Instant,
     /// Listed draft this process belongs to, once the user has left it.
     draft: Option<u64>,
     /// The draft was empty when the user left. On rekey, drop the process
@@ -378,6 +350,9 @@ struct ParkedSession {
     /// Events drained from this process and not yet applied. The heartbeat
     /// fills this, then applies the foreground queue first.
     pending: VecDeque<Event>,
+    /// A send that resumed this file and has not been delivered yet. Leaving
+    /// the page parks it with the process instead of wiping the transcript.
+    resume_prompt: Option<PendingPrompt>,
 }
 
 impl ParkedSession {
@@ -406,6 +381,57 @@ impl ParkedSession {
             _ => return None,
         }
         self.flush_deferred()
+    }
+
+    /// Finish a resume that was parked mid-handshake. The prompt goes out only
+    /// after `get_messages` replaces the transcript. A `switch_session` reply
+    /// still requests that load, for a process that was already in flight
+    /// before the spawn started on `--session`.
+    ///
+    /// On failure, returns the unsent composer so the caller can put it back
+    /// on this session. The process is not usable for the send.
+    fn continue_resume(
+        &mut self,
+        command: &str,
+        success: bool,
+        data: Option<&Value>,
+    ) -> Option<ComposerDraft> {
+        if self.resume_prompt.is_none() {
+            return None;
+        }
+        if command == "switch_session" && success {
+            let _ = self.client.send(CommandBody::GetMessages);
+            return None;
+        }
+        if command != "get_messages" && command != "switch_session" {
+            return None;
+        }
+        let Some(prompt) = self.resume_prompt.take() else {
+            return None;
+        };
+        if success && command == "get_messages" {
+            if let Some(data) = data {
+                self.transcript.load_from(data);
+                let images = prompt
+                    .composer
+                    .attachments
+                    .iter()
+                    .filter_map(|attachment| attachment.preview.clone())
+                    .collect();
+                self.transcript
+                    .append_user_message(&prompt.composer.text, images);
+            }
+            if let Ok((id, _)) = self.client.send(prompt.body) {
+                self.execution.prompt_id = Some(id);
+                self.execution.start();
+                self.busy = true;
+                self.transcript.expect_reply();
+                return None;
+            }
+        }
+        self.busy = false;
+        self.execution = SessionExecution::default();
+        Some(prompt.composer)
     }
 
     fn flush_deferred(&mut self) -> Option<String> {
@@ -580,18 +606,23 @@ pub struct OrbitApp {
     /// then; the composer keeps accepting text, but a send is held until there
     /// is a process to send to (see [`OrbitApp::spawn_pi_client_later`]).
     pending_spawn: Option<SpawnTicket>,
+    /// Sends whose process had not landed when the user left the page. The
+    /// child keeps booting; when it does, the handshake runs on this shell
+    /// instead of on whatever session is now on screen.
+    detached_spawns: Vec<DetachedSpawn>,
+    /// Where the shared parked-session time slice starts this tick, so one
+    /// busy session does not take it on every heartbeat.
+    park_budget_cursor: usize,
+    /// Staged choices sent to a fresh process and not yet answered, by command
+    /// id. A staged value leaves the store only on its success reply.
+    staged_acks: Vec<StagedAck>,
+    /// An auxiliary catalog probe is in flight (see start_catalog_probe).
+    catalog_probing: bool,
     /// Test seam: the `pi` launcher a background spawn uses instead of the
     /// bundled-extension spawn, so a test can drive the pending window with a
     /// scripted child instead of a real one. Production never sets it.
     #[cfg(test)]
     spawn_bin: Option<PathBuf>,
-    /// Automatic respawns since the last run that stayed up for
-    /// [`AUTO_RESTART_HEALTHY_UPTIME`]. Counts a crash loop so a pi that dies
-    /// on every start cannot be restarted forever.
-    auto_restarts: u8,
-    /// True while a delayed respawn is queued, so a second exit event cannot
-    /// queue another one behind it.
-    auto_restart_scheduled: bool,
     /// True once the user has asked to stop the current run. pi reports a
     /// cancelled automatic retry as `auto_retry_end { success: false }` — the
     /// same shape an exhausted retry uses — so the request itself, not the
@@ -1082,6 +1113,13 @@ pub struct OrbitApp {
     /// Live context-window usage from `get_session_stats`. `None` when pi
     /// hasn't advertised a window (no model) or the command isn't supported.
     context: Option<ContextUsage>,
+    /// context and session_usage came from the session's stored snapshot,
+    /// not from a live reply (the session has no process).
+    context_is_snapshot: bool,
+    /// What the open cold session's file says about its last run, read off the
+    /// UI thread when it was opened (path-keyed so a late read cannot land on
+    /// another session).
+    cold_summary: Option<(PathBuf, sessions::ColdSummary)>,
     /// Cumulative session token/cost totals from the same `get_session_stats`
     /// response. Unlike `context`, this spans the whole session (all turns,
     /// tools, and compaction summaries), so the popup can show cost + cache.
@@ -1617,6 +1655,10 @@ struct PendingPrompt {
     body: CommandBody,
     label: String,
     composer: ComposerDraft,
+    /// Set when the message resumes an existing session that has no process:
+    /// the file the new process must `switch_session` onto before the prompt
+    /// goes out. `None` for a brand-new task.
+    resume_path: Option<PathBuf>,
 }
 
 /// An image queued to ride along with the next prompt.
@@ -1777,7 +1819,7 @@ impl OrbitApp {
 }
 
 /// A model choice from the pi runtime catalog.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct ModelEntry {
     pub(crate) id: String,
     pub(crate) name: String,
@@ -1996,12 +2038,12 @@ impl OrbitApp {
         // one deferred probe at launch so the status-bar chip and the MCP page
         // start from real state instead of "not checked".
         let mcp_probe_at = (!mcp.is_empty()).then(|| Instant::now() + Duration::from_secs(3));
-        let (client, connect_error) = match extensions.spawn(&workspace, true, &mcp.secret_env()) {
-            Ok(client) => (Some(client), String::new()),
-            Err(err) => (None, tr!("runtime.pi_spawn_failed", error = err)),
-        };
-        let startup_model_reportable =
-            client.is_some() && crate::session_defaults::SessionDefault::load().is_unset();
+        // Launch starts no pi process: the page is a blank task, and the first
+        // message sent starts one (`SpawnThen::Prompt`), exactly like a New
+        // Task. A session opened from the sidebar is the same (D18).
+        let client: Option<PiClient> = None;
+        let connect_error = String::new();
+        let startup_model_reportable = false;
         let mcp_stamp = mcp.fingerprint();
         let runtime = RuntimeStatus {
             started_at: client.as_ref().map(|_| Instant::now()),
@@ -2281,6 +2323,12 @@ impl OrbitApp {
             pending_switch: None,
             pending_prompt: None,
             pending_spawn: None,
+            detached_spawns: Vec::new(),
+            park_budget_cursor: 0,
+            staged_acks: Vec::new(),
+            catalog_probing: false,
+            context_is_snapshot: false,
+            cold_summary: None,
             #[cfg(test)]
             spawn_bin: None,
             rpc_patches,
@@ -2331,8 +2379,6 @@ impl OrbitApp {
             retry_detail: None,
             error: None,
             error_source: None,
-            auto_restarts: 0,
-            auto_restart_scheduled: false,
             abort_requested: false,
             abort_sent_at: None,
             prompt_in_flight: None,
@@ -2665,6 +2711,11 @@ impl OrbitApp {
                 .unwrap_or(false),
         };
 
+        // The last catalog stands in until a process reports; a stale or empty
+        // cache is refreshed by a short-lived auxiliary pi (never a session).
+        app.load_catalog_cache(cx);
+        #[cfg(not(test))]
+        app.start_catalog_probe(cx);
         let app_weak = cx.entity().downgrade();
         // The Git page's per-file actions menu opens a file's diff in Review.
         // (Changed-file rows now expand their diff inline on the Changes tab.)
@@ -2730,16 +2781,8 @@ impl OrbitApp {
         // The theme observer above only fires on a *change*; the first sync
         // happens in `main`, so the initial paint is already themed.
 
-        if app.client.is_some() {
-            app.send(CommandBody::GetState, "get_state");
-            app.send(CommandBody::GetAvailableModels, "get_available_models");
-            app.send(
-                CommandBody::GetAvailableThinkingLevels,
-                "get_available_thinking_levels",
-            );
-            app.send(CommandBody::GetCommands, "get_commands");
-            app.probe_auth();
-        }
+        // No process at launch, so no state or catalog queries either: they
+        // run when the first spawn lands (`admit_spawned_client`).
         // The branch chip tracks the launch workspace even before a session
         // is open, and every listed project gets its branch for the sidebar's
         // metadata line.
@@ -3670,6 +3713,22 @@ struct SessionMenu {
     at: Option<Point<Pixels>>,
 }
 
+/// One staged choice in flight to pi (see [OrbitApp::apply_staged_choices]).
+struct StagedAck {
+    id: String,
+    path: PathBuf,
+    part: StagedPart,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StagedPart {
+    /// The model; clears when no thinking level follows it.
+    Model { clears: bool },
+    /// The thinking level, which completes the model entry.
+    Thinking,
+    Rename,
+}
+
 /// State of the row-actions popup on a workspace group header: which
 /// workspace it belongs to (by group label + cwd).
 #[derive(Clone, PartialEq)]
@@ -4089,7 +4148,6 @@ mod worktrees;
 #[cfg(test)]
 mod attachment_tray_tests;
 #[cfg(test)]
-mod auto_restart_tests;
 #[cfg(test)]
 mod backdrop_layout_tests;
 #[cfg(test)]

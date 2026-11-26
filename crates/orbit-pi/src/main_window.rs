@@ -73,6 +73,29 @@ fn shell(cx: &mut App) -> Entity<OrbitApp> {
     app
 }
 
+/// Quit, asking first when a run is still in flight. Idle processes are not
+/// worth a question; only work that would be cut off is (INTENT D18).
+pub fn request_quit(cx: &mut App) {
+    let parked = cx.default_global::<Shell>().0.borrow().clone();
+    let Some(app) = parked else {
+        cx.quit();
+        return;
+    };
+    app.update(cx, |app, cx| {
+        let running = app.running_session_count();
+        if running == 0 {
+            cx.quit();
+            return;
+        }
+        app.confirm_native(
+            tr!("quit.running_title"),
+            tr!("quit.running_detail", count = running),
+            tr!("quit.confirm"),
+            cx,
+            |_, cx| cx.quit(),
+        );
+    });
+}
 /// Open the main window, rendering the parked shell when there is one.
 pub fn open(cx: &mut App) {
     let app = shell(cx);

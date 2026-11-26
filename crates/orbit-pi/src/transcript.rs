@@ -1202,6 +1202,26 @@ impl Transcript {
         self.flush_dirty_rows();
     }
 
+    /// Back on screen without measuring every row that changed while parked.
+    /// The heartbeat measures a few of those rows per tick.
+    pub(crate) fn present_deferred(&mut self) {
+        self.presented = true;
+    }
+
+    /// Remeasure up to `limit` rows left dirty while this transcript was parked.
+    pub(crate) fn flush_dirty_rows_limited(&mut self, limit: usize) -> bool {
+        let rows: Vec<usize> = self.dirty_rows.borrow().iter().copied().take(limit).collect();
+        if rows.is_empty() {
+            return false;
+        }
+        for ix in rows {
+            self.dirty_rows.borrow_mut().remove(&ix);
+            self.scroller.remeasure_items(ix..ix + 1);
+            self.scroller.note_activity();
+        }
+        true
+    }
+
     fn bump_load_generation(&mut self) {
         self.load_generation = self.load_generation.wrapping_add(1);
     }

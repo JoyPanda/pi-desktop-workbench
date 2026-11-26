@@ -589,7 +589,7 @@ fn render_jump_button(state: MessageScrollerState, theme: Theme) -> impl IntoEle
                 .when(unread, |button| {
                     button.child(
                         div()
-                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("message_scroller.new_activity")),
                     )
@@ -1384,7 +1384,7 @@ mod tests {
         let right = f32::from(super::new_label_padding_right(&theme));
         let ink_gap = pad + icon * (super::ARROW_INK_LEFT / super::ARROW_VIEWBOX);
         assert!((right - ink_gap).abs() < 0.001);
-        assert!((right - 11.5).abs() < 0.001);
+        assert!((right - 15.5).abs() < 0.001);
     }
 
     #[test]

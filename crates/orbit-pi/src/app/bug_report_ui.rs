@@ -267,7 +267,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(input::LABEL.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("bug_report.screenshots")),
                     )
@@ -583,7 +583,7 @@ fn bug_row(theme: Theme, label: String, control: AnyElement) -> AnyElement {
         .child(
             div()
                 .text_size(TextSize::Default.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(label),
         )
@@ -619,7 +619,7 @@ fn bug_field(
                 .child(
                     div()
                         .text_size(input::LABEL.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(label),
                 )

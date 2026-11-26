@@ -2,8 +2,8 @@ use super::helpers::*;
 use super::*;
 use crate::quota::note_should_render;
 use crate::theme::tokens::{
-    button, context_menu, input, modal, panel, picker, popover, BufferLineHeight, ButtonSize,
-    DynamicSpacing, IconSize, Radius, StyledExt, TextSize, BORDER_WIDTH,
+    button, context_menu, input, modal, panel, picker, popover, weight, BufferLineHeight,
+    ButtonSize, DynamicSpacing, IconSize, Radius, StyledExt, TextSize, BORDER_WIDTH,
 };
 use gpui::{canvas, Bounds, DispatchPhase, Hitbox, HitboxBehavior, MouseMoveEvent};
 
@@ -487,7 +487,7 @@ impl OrbitApp {
                                         .rounded(button::RADIUS.px(&theme))
                                         .flex()
                                         .items_center()
-                                        .gap(DynamicSpacing::Base08.px(&theme))
+                                        .gap(DynamicSpacing::Base12.px(&theme))
                                         .cursor_pointer()
                                         .hover(|s| s.bg(theme.surface_hover)),
                                 )
@@ -500,6 +500,7 @@ impl OrbitApp {
                                 .child(
                                     div()
                                         .text_size(TextSize::Default.px(&theme))
+                                        .font_weight(weight::FUNCTIONAL)
                                         .text_color(theme.text_secondary)
                                         .child(tr!("settings.back")),
                                 ),
@@ -568,7 +569,7 @@ impl OrbitApp {
                                         .text_size(TextSize::Default.px(&theme))
                                         .flex()
                                         .items_center()
-                                        .gap(DynamicSpacing::Base08.px(&theme))
+                                        .gap(DynamicSpacing::Base12.px(&theme))
                                         .cursor_pointer()
                                         .when(selected, |row| {
                                             row.bg(theme.surface_selected)
@@ -593,6 +594,7 @@ impl OrbitApp {
                                         ))
                                         .child(
                                             div()
+                                                .font_weight(weight::FUNCTIONAL)
                                                 .text_color(if selected {
                                                     theme.selection_fg
                                                 } else {
@@ -636,7 +638,7 @@ impl OrbitApp {
                             .child(
                                 div()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_muted)
                                     .child(tr!("app.name")),
                             )
@@ -914,7 +916,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Title.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .line_height(BufferLineHeight::Standard.relative())
                     .text_color(theme.text_primary)
                     .child(title.to_string()),
@@ -1158,7 +1160,7 @@ impl OrbitApp {
         ))
         .child(
             div()
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(if self.models_favorites_only {
                     theme.text_primary
                 } else {
@@ -1194,7 +1196,7 @@ impl OrbitApp {
             ))
             .child(
                 div()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_secondary)
                     .child(tr!("settings.models_update")),
             );
@@ -1506,7 +1508,7 @@ impl OrbitApp {
                                     .min_w_0()
                                     .truncate()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_secondary)
                                     .child(crate::providers::provider_display_name(&provider)),
                             )
@@ -1617,7 +1619,7 @@ impl OrbitApp {
                     .flex()
                     .items_center()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(meta_ink)
                     .child(tr!(
                         "settings.n_ctx",
@@ -1644,7 +1646,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::XSmall.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("settings.active")),
                     ),
@@ -1660,7 +1662,7 @@ impl OrbitApp {
                     .opacity(0.)
                     .group_hover("model-card", |s| s.opacity(1.))
                     .text_size(TextSize::XSmall.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
                     .child(tr!("settings.set_active")),
             );
@@ -1713,7 +1715,7 @@ impl OrbitApp {
                             .min_w_0()
                             .truncate()
                             .text_size(TextSize::Default.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(model.name.clone()),
                     )
@@ -1972,7 +1974,7 @@ impl OrbitApp {
                             .child(
                                 div()
                                     .text_size(TextSize::Default.px(&theme))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_primary)
                                     .truncate()
                                     .child(package.name.clone()),
@@ -2154,7 +2156,7 @@ impl OrbitApp {
             ButtonSize::Large,
         )
         .cursor_pointer()
-        .font_weight(FontWeight::MEDIUM);
+        .font_weight(FontWeight::SEMIBOLD);
         chip = if active {
             chip.raised(theme.surface_active, &theme)
                 .text_color(theme.text_primary)
@@ -2196,7 +2198,7 @@ impl OrbitApp {
         let base = button_frame(div().id(ElementId::Name(id.into())), &theme, button_size)
             .group(BUTTON_GROUP)
             .cursor_pointer()
-            .font_weight(FontWeight::MEDIUM);
+            .font_weight(FontWeight::SEMIBOLD);
         let (button, icon_color) = if primary {
             (
                 base.raised(theme.action, &theme)
@@ -2256,7 +2258,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Default.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(title.to_string()),
             )
@@ -2318,7 +2320,7 @@ impl OrbitApp {
             .child(refresh_icon)
             .child(
                 div()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_secondary)
                     .child(tr!("settings.refresh")),
             );
@@ -2341,7 +2343,7 @@ impl OrbitApp {
             ))
             .child(
                 div()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.action_fg)
                     .child(tr!("settings.add_provider")),
             );
@@ -2448,7 +2450,7 @@ impl OrbitApp {
                             .child(
                                 div()
                                     .text_size(TextSize::Small.px(&theme))
-                                    .font_weight(FontWeight::MEDIUM)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_primary)
                                     .child(tr!("settings.credentials_changed")),
                             )
@@ -2509,7 +2511,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("settings.no_providers_match")),
                     )
@@ -2568,7 +2570,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(title.to_string()),
                     )
@@ -2810,7 +2812,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(tint)
                             .child(headline),
                     ),
@@ -3210,7 +3212,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(status_color)
                     .child(status_label),
             );
@@ -3230,7 +3232,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .truncate()
                             .child(view.name.clone()),
@@ -3607,7 +3609,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(fg)
                     .child(label.to_string()),
             )
@@ -3634,7 +3636,7 @@ impl OrbitApp {
         )
         .group(BUTTON_GROUP)
         .cursor_pointer()
-        .font_weight(FontWeight::MEDIUM);
+        .font_weight(FontWeight::SEMIBOLD);
         button = match style {
             ProviderButtonStyle::Primary => button
                 .raised(theme.action, &theme)
@@ -3818,7 +3820,7 @@ impl OrbitApp {
                         div()
                             .text_size(modal::HEADLINE.px(&theme))
                             .line_height(modal::HEADLINE.line_height(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("settings.usage_for", name = view.name)),
                     )
@@ -3908,7 +3910,7 @@ impl OrbitApp {
                     .gap(input::gap(&theme))
                     .child(
                         input_label(field_label, &theme)
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_secondary),
                     )
                     .child(
@@ -4030,7 +4032,7 @@ impl OrbitApp {
                         div()
                             .text_size(modal::HEADLINE.px(&theme))
                             .line_height(modal::HEADLINE.line_height(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("settings.api_key_for", name = editor.provider_name)),
                     )
@@ -4125,7 +4127,7 @@ impl OrbitApp {
                 .gap(input::gap(&theme))
                 .child(
                     input_label(label.to_string(), &theme)
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary),
                 )
                 .child(
@@ -4204,7 +4206,7 @@ impl OrbitApp {
                 .gap(input::gap(&theme))
                 .child(
                     input_label(tr!("settings.provider_id"), &theme)
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary),
                 )
                 .child(
@@ -4254,7 +4256,7 @@ impl OrbitApp {
                     .gap(input::gap(&theme))
                     .child(
                         input_label(tr!("settings.api_type"), &theme)
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_secondary),
                     )
                     .child(api_chips),
@@ -4302,7 +4304,7 @@ impl OrbitApp {
                         div()
                             .text_size(modal::HEADLINE.px(&theme))
                             .line_height(modal::HEADLINE.line_height(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(if editing {
                                 tr!("settings.configure_provider")
@@ -4379,7 +4381,7 @@ impl OrbitApp {
                 })
                 .child(
                     div()
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.action_fg)
                         .child(if editing {
                             tr!("settings.save_changes")
@@ -4469,7 +4471,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::XSmall.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_muted)
                             .child(label.to_uppercase()),
                     )
@@ -4541,7 +4543,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(title.to_string()),
                     )
@@ -4602,7 +4604,7 @@ impl OrbitApp {
             .border_1()
             .border_color(theme.border)
             .raised(theme.surface_elevated, &theme)
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.text_secondary)
             .cursor_pointer()
             .hover(|s| s.raised(theme.surface_hover, &theme))
@@ -5140,7 +5142,7 @@ impl OrbitApp {
                     div()
                         .px(DynamicSpacing::Base04.px(&theme))
                         .text_size(TextSize::XSmall.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_muted)
                         .child(tr!("settings.recent_stderr")),
                 )
@@ -5523,7 +5525,7 @@ impl OrbitApp {
                     ButtonSize::Medium,
                     SegmentPosition::at(index, modes.len()),
                 )
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
                 .when(active, |b| {
                     b.raised_flat(theme.surface_active)
@@ -5575,7 +5577,7 @@ impl OrbitApp {
                             ButtonSize::Medium,
                             SegmentPosition::at(index, count),
                         )
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .cursor_pointer()
                         .when(active, |b| {
                             b.border_color(theme.border)
@@ -5877,7 +5879,11 @@ impl OrbitApp {
             cx.notify();
             return;
         }
-        if !self.send(
+        if let Some(path) = self.cold_session_path() {
+            // No process to tell: stage the name for the first send. Everything
+            // below shows it at once, exactly as for a live rename.
+            crate::session_staging::set_rename(&path, name.clone());
+        } else if !self.send(
             CommandBody::SetSessionName { name: name.clone() },
             "set_session_name",
         ) {
@@ -5924,7 +5930,7 @@ impl OrbitApp {
         let mut button = button_frame(div().id(id), &theme, ButtonSize::Medium)
             .group(BUTTON_GROUP)
             .cursor_pointer()
-            .font_weight(FontWeight::MEDIUM);
+            .font_weight(FontWeight::SEMIBOLD);
         if primary {
             button = button
                 .raised(theme.action, &theme)
@@ -6283,7 +6289,7 @@ impl OrbitApp {
                             ButtonSize::Medium,
                             SegmentPosition::at(index, count),
                         )
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .cursor_pointer()
                         .when(active, |b| {
                             b.border_color(theme.border)
@@ -6329,7 +6335,7 @@ impl OrbitApp {
                 .child(
                     div()
                         .text_size(TextSize::XSmall.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_muted)
                         .child(label.to_uppercase()),
                 )
@@ -6353,7 +6359,7 @@ impl OrbitApp {
                 div()
                     .font_family(theme::ui_font_family())
                     .text_size(TextSize::Title.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(tr!("settings.new_task")),
             )

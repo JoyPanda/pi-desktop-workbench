@@ -1652,6 +1652,7 @@ impl GitPanel {
                             div()
                                 .overflow_hidden()
                                 .whitespace_nowrap()
+                                .font_weight(FontWeight::NORMAL)
                                 .text_size(TextSize::XSmall.px(&theme))
                                 .text_color(theme.text_muted)
                                 .child(template.path.clone()),
@@ -3054,6 +3055,7 @@ impl GitPanel {
                 .flex_none()
                 .max_w(px(120.))
                 .truncate()
+                .font_weight(FontWeight::NORMAL)
                 .text_size(TextSize::Small.px(&theme))
                 .text_color(theme.text_muted)
                 .child(secondary)
@@ -3551,7 +3553,7 @@ impl GitPanel {
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("git_panel.title")),
                     ),
@@ -3604,7 +3606,7 @@ impl GitPanel {
                                 .max_w(px(180.))
                                 .overflow_hidden()
                                 .whitespace_nowrap()
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .child(branch),
                         )
@@ -3640,7 +3642,7 @@ impl GitPanel {
                     .items_center()
                     .gap(DynamicSpacing::Base08.px(&theme))
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(
                         div()
                             .text_color(theme.success)
@@ -3744,7 +3746,7 @@ impl GitPanel {
                 ))
                 .cursor_pointer()
                 .font_weight(if selected {
-                    FontWeight::MEDIUM
+                    FontWeight::SEMIBOLD
                 } else {
                     FontWeight::NORMAL
                 })
@@ -3858,7 +3860,7 @@ impl GitPanel {
                 button_frame(div().id("git-sync"), &theme, ButtonSize::Medium)
                     .h_full()
                     .rounded_r_none()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(if busy {
                         theme.text_muted
                     } else {
@@ -4157,7 +4159,7 @@ impl GitPanel {
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .child(failure.title.clone()),
                         )
@@ -4330,7 +4332,7 @@ impl GitPanel {
                         .child(
                             div()
                                 .text_size(TextSize::Small.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .child(tr!(op.label_key())),
                         )
@@ -4537,7 +4539,7 @@ impl GitPanel {
                                         .when(!self.generating, |button| {
                                             button.raised(theme.surface_elevated, &theme)
                                         })
-                                        .font_weight(FontWeight::MEDIUM)
+                                        .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(if self.generating {
                                             theme.text_muted
                                         } else {
@@ -4759,7 +4761,7 @@ impl GitPanel {
                     .border_color(theme.border)
                     .raised(theme.surface_elevated, &theme)
                     .cursor_pointer()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_secondary)
                     .hover(|s| {
                         s.raised(theme.surface_hover, &theme)
@@ -5698,7 +5700,7 @@ impl GitPanel {
                     .child(
                         div()
                             .text_size(TextSize::XSmall.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_muted)
                             .child(tr!("git_panel.assignees").to_uppercase()),
                     )
@@ -5855,7 +5857,7 @@ impl GitPanel {
                     .child(
                         div()
                             .text_size(TextSize::Title.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("git_panel.new_issue_title")),
                     )
@@ -6232,7 +6234,7 @@ impl GitPanel {
                         .child(
                             div()
                                 .text_size(TextSize::Title.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .whitespace_normal()
                                 .child(pull.title.clone()),
@@ -6815,7 +6817,7 @@ impl GitPanel {
                     .child(
                         div()
                             .text_size(TextSize::Title.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("git_panel.new_pull_title")),
                     )
@@ -7176,7 +7178,7 @@ impl GitPanel {
                 div()
                     .flex_none()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.accent_text)
                     .child(tr!("git_panel.current")),
             );
@@ -7209,6 +7211,7 @@ impl GitPanel {
             row = row.child(
                 div()
                     .flex_none()
+                    .font_weight(FontWeight::NORMAL)
                     .text_size(picker::SECONDARY_TEXT.px(&theme))
                     .text_color(if selected {
                         theme.text_secondary
@@ -7368,7 +7371,7 @@ impl GitPanel {
             .child(
                 div()
                     .text_size(TextSize::Default.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(title),
             )
@@ -7451,7 +7454,7 @@ impl GitPanel {
             .child(
                 div()
                     .text_size(TextSize::Default.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(if staged_empty {
                         tr!("git_panel.stage_prompt_title_generate")
@@ -7587,7 +7590,7 @@ impl GitPanel {
             .child(
                 div()
                     .text_size(TextSize::Default.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(title),
             )
@@ -7987,7 +7990,7 @@ fn dropdown_chip(
                 .max_w(px(180.))
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(label.to_string()),
         )
@@ -8062,7 +8065,7 @@ fn label_summary(labels: &[gh::GhLabel], take: usize, theme: Theme) -> Vec<AnyEl
                 .flex()
                 .items_center()
                 .text_size(TextSize::XSmall.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_muted)
                 .child(format!("+{}", labels.len() - take))
                 .into_any_element(),
@@ -8136,7 +8139,7 @@ fn issue_row(issue: &gh::GhIssue, theme: Theme, cx: &Context<GitPanel>) -> AnyEl
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_size(TextSize::Small.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(if open {
                                     theme.text_primary
                                 } else {
@@ -8215,7 +8218,7 @@ fn issue_label_chip(label: &gh::GhLabel, theme: Theme) -> AnyElement {
         .flex()
         .items_center()
         .text_size(TextSize::XSmall.px(&theme))
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(fg)
         .child(label.name.clone())
         .into_any_element()
@@ -8258,7 +8261,7 @@ fn state_chip(label: &str, color: Hsla, glyph: Option<&'static str>, theme: Them
         .items_center()
         .gap(DynamicSpacing::Base04.px(&theme))
         .text_size(TextSize::XSmall.px(&theme))
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(color)
         .children(glyph.map(|path| icon(path, IconSize::Indicator.px(&theme), color)))
         .child(label.to_string())
@@ -8364,7 +8367,7 @@ fn issue_comment_card(comment: &gh::GhComment, theme: Theme) -> AnyElement {
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary)
                         .child(author),
                 )
@@ -8451,7 +8454,7 @@ fn pr_row(pull: &gh::GhPull, theme: Theme, cx: &Context<GitPanel>) -> AnyElement
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_size(TextSize::Small.px(&theme))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(if pull.is_open() {
                                     theme.text_primary
                                 } else {
@@ -8622,7 +8625,7 @@ fn review_card(review: &gh::GhReview, theme: Theme) -> AnyElement {
                 .child(
                     div()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_secondary)
                         .child(author),
                 )
@@ -8656,7 +8659,7 @@ fn section_label(theme: Theme, label: &str) -> AnyElement {
         .border_b_1()
         .border_color(theme.border)
         .text_size(TextSize::XSmall.px(&theme))
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme.text_muted)
         .child(label.to_uppercase())
         .into_any_element()
@@ -9277,7 +9280,7 @@ fn section_title(label: &str, count: usize, theme: Theme) -> AnyElement {
         .child(
             div()
                 .text_size(TextSize::Small.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(label.to_string()),
         )

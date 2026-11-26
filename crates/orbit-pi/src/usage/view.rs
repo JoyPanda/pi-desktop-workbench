@@ -190,7 +190,7 @@ impl UsagePage {
                     .child(
                         div()
                             .text_size(TextSize::Default.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(tr!("view.usage")),
                     ),
@@ -577,7 +577,7 @@ impl UsagePage {
                     div()
                         .pr(DynamicSpacing::Base02.px(&theme))
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_muted)
                         .child(tr!("view.filters")),
                 )
@@ -1061,7 +1061,7 @@ impl UsagePage {
                 div()
                     .text_size(TextSize::Title.px(&theme))
                     .line_height(theme.ui_px(20.))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(title.to_string()),
             )
             .child(
@@ -1131,7 +1131,7 @@ impl UsagePage {
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_muted)
                             .child(cell.label.clone()),
                     )
@@ -1836,7 +1836,7 @@ impl UsagePage {
             .child(
                 div()
                     .text_color(theme.text_muted)
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(tr!("view.response_time")),
             )
             .children(items.into_iter().map(|(label, value)| {
@@ -3722,7 +3722,7 @@ fn card(
                             div()
                                 .text_size(TextSize::Title.px(&theme))
                                 .line_height(theme.ui_px(20.))
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_primary)
                                 .child(title.to_string()),
                         )
@@ -3811,7 +3811,7 @@ where
                 .when(is_active, |tab| {
                     tab.raised_flat(theme.surface_active)
                         .text_color(theme.text_primary)
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .cursor_pointer()
                 })
                 .when(!is_active && is_enabled, |tab| {

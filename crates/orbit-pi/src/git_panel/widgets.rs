@@ -66,7 +66,7 @@ pub fn action_button(
     listener: impl Fn(&ClickEvent, &mut Window, &mut gpui::App) + 'static,
 ) -> AnyElement {
     let mut button = button_frame(div().id(id), &theme, ButtonSize::Medium)
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .border_1();
     if disabled {
         button = button
@@ -155,7 +155,7 @@ pub fn ref_badge(name: &str, kind: RefKind, theme: Theme) -> AnyElement {
         .flex()
         .items_center()
         .text_size(TextSize::XSmall.px(&theme))
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .text_color(fg)
         .child(name.to_string())
         .into_any_element()
@@ -209,7 +209,7 @@ pub fn empty_note(
             div()
                 .mt(DynamicSpacing::Base16.px(&theme))
                 .text_size(TextSize::Default.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(title.to_string()),
         );

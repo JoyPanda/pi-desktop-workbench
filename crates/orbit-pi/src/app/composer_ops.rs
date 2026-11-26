@@ -53,9 +53,8 @@ impl OrbitApp {
     /// rendering, so the same query is scored several times per keystroke; the
     /// memo is what keeps a redraw from re-scanning the whole workspace.
     fn at_paths(&mut self, query: &str, cx: &mut Context<Self>) -> Vec<String> {
-        if self.current_workspace.is_none() {
-            return Vec::new();
-        }
+        // No workspace gate: the launch page and its draft have none yet, and
+        // their first message runs in the same fallback folder the index walks.
         self.ensure_mention_index(false, cx);
         let generation = self.mention_index_generation;
         if let Some((memo_generation, memo_query, hits)) = &self.mention_query_memo {
@@ -344,6 +343,9 @@ impl OrbitApp {
                 this.project_panel.update(cx, |panel, cx| {
                     panel.set_index(Arc::new(snapshot), badges, cx);
                 });
+                // An `@` typed while the first walk ran found nothing; reopen
+                // the popup now that the index is there.
+                this.sync_autocomplete(cx);
                 this.log_resident("index");
                 // A save during the walk re-armed the flag; land it now.
                 if this.mention_index_stale {
@@ -565,7 +567,10 @@ impl OrbitApp {
                 AcEntry::File { path } => path.rsplit('/').next().unwrap_or(path).to_string(),
             };
             let subtitle = match &entry {
-                AcEntry::Command { description, .. } => description.clone(),
+                // Descriptions come from YAML frontmatter and can carry literal
+                // newlines; gpui hard-breaks on '\n' even under nowrap, so
+                // collapse to one line before the row's truncate applies.
+                AcEntry::Command { description, .. } => super::helpers::one_line(description),
                 // The directory part, shown dimmed after the basename.
                 AcEntry::File { path } => match path.rsplit_once('/') {
                     Some((dir, _)) if !dir.is_empty() => format!("{dir}/"),
@@ -584,6 +589,7 @@ impl OrbitApp {
                     &theme,
                 )
                 .h(row_h)
+                .overflow_hidden()
                 .cursor_pointer()
                 .when(selected, |row| row.bg(theme.surface_selected))
                 .hover(|style| style.bg(theme.surface_hover))
@@ -607,7 +613,7 @@ impl OrbitApp {
                                 .flex_none()
                                 .max_w(px(CONTENT_MAX_W / 2.))
                                 .truncate()
-                                .font_weight(FontWeight::MEDIUM)
+                                .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(if selected {
                                     theme.text_primary
                                 } else {
@@ -621,6 +627,7 @@ impl OrbitApp {
                                     .min_w_0()
                                     .flex_1()
                                     .truncate()
+                                    .font_weight(FontWeight::NORMAL)
                                     .text_size(picker::SECONDARY_TEXT.px(&theme))
                                     .text_color(theme.text_muted)
                                     .child(subtitle),
@@ -1196,10 +1203,17 @@ impl OrbitApp {
         // A manual choice supersedes the session-birth default push. The push
         // itself sends `SetModel` directly so it doesn't disarm itself.
         self.default_model_armed = false;
+        self.ensure_blank_launch_draft(cx);
         // A new task has no process yet. Remember the choice on the row and
         // show it; the first message starts pi with these args.
         if self.model_choice_is_local() {
             self.stage_draft_model(id, provider, cx);
+            return;
+        }
+        // A session opened without a process has the same problem and a file
+        // of its own to resume: stage the choice for the first send.
+        if let Some(path) = self.cold_session_path() {
+            self.stage_cold_model(&path, Some((id, provider)), None, cx);
             return;
         }
         // A process that has not taken a message yet can still be restarted
@@ -1220,8 +1234,16 @@ impl OrbitApp {
     pub(super) fn set_thinking_level(&mut self, level: String, cx: &mut Context<Self>) {
         // A manual level choice likewise supersedes the pending default.
         self.default_model_armed = false;
+        // A level needs a model to ride on; without one nothing would be kept.
+        if !self.model_id.is_empty() {
+            self.ensure_blank_launch_draft(cx);
+        }
         if self.model_choice_is_local() {
             self.stage_draft_thinking(level, cx);
+            return;
+        }
+        if let Some(path) = self.cold_session_path() {
+            self.stage_cold_model(&path, None, Some(level), cx);
             return;
         }
         if self.live_unsent_draft() {
@@ -1232,6 +1254,32 @@ impl OrbitApp {
             "set_thinking_level",
         );
         cx.notify();
+    }
+
+    /// The page the app launches on has no row to hold a choice, and no process
+    /// to tell. Give it an empty draft row so the pick has somewhere to live and
+    /// the first send starts pi with it.
+    pub(super) fn ensure_blank_launch_draft(&mut self, cx: &mut Context<Self>) {
+        if !self.is_blank_launch_task() {
+            return;
+        }
+        let id = self.alloc_draft_id();
+        let cwd = self.task_cwd();
+        // The sidebar groups by workspace; a row in an unlisted folder is
+        // invisible.
+        self.add_workspace(cwd.clone(), cx);
+        self.listed_drafts.push(ListedDraft {
+            id,
+            path: crate::app::drafts::draft_placeholder(id),
+            bound: false,
+            cwd,
+            created: SystemTime::now(),
+            composer: None,
+            promoted: false,
+            sent_title: None,
+            model: None,
+        });
+        self.current_draft_id = Some(id);
     }
 
     /// The composer can change model and thinking before pi exists. Sending
@@ -1354,6 +1402,67 @@ impl OrbitApp {
             && entry.thinking_levels.iter().any(|candidate| candidate == level)
     }
 
+    /// The model a cold session will resume on: what the user staged, else
+    /// nothing (the session file's own model applies).
+    pub(super) fn staged_model_for_current(&self) -> Option<crate::session_defaults::SessionDefault> {
+        let path = self.cold_session_path()?;
+        crate::session_staging::get(&path)?
+            .model
+            .filter(|model| !model.is_unset())
+    }
+
+    /// Stage a model and/or thinking level picked on a cold session, show it
+    /// on the chips at once, and keep it for the process the first send starts.
+    /// Either part may be absent: picking a model keeps a still-valid level,
+    /// picking a level keeps the staged (or shown) model.
+    fn stage_cold_model(
+        &mut self,
+        path: &std::path::Path,
+        model: Option<(String, String)>,
+        thinking: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut choice = crate::session_staging::get(path)
+            .and_then(|staging| staging.model)
+            .unwrap_or_default();
+        if let Some((id, provider)) = model {
+            if id.is_empty() {
+                return;
+            }
+            let changed = choice.model_id.as_deref() != Some(id.as_str());
+            choice.provider = (!provider.is_empty()).then_some(provider);
+            choice.model_id = Some(id);
+            if changed {
+                // A level belongs to its model; keep it only if the new one
+                // still offers it.
+                if let Some(level) = choice.thinking.clone() {
+                    if !self.thinking_level_fits(&choice, &level) {
+                        choice.thinking = None;
+                    }
+                }
+            }
+        }
+        if let Some(level) = thinking {
+            if choice.model_id.as_deref().is_none_or(str::is_empty) {
+                // No staged model yet: the level rides on the one shown.
+                if self.model_id.is_empty() {
+                    return;
+                }
+                choice.model_id = Some(self.model_id.clone());
+                if !self.model_provider.is_empty() {
+                    choice.provider = Some(self.model_provider.clone());
+                }
+            }
+            if !self.thinking_level_fits(&choice, &level) {
+                return;
+            }
+            choice.thinking = Some(level);
+        }
+        crate::session_staging::set_model(path, choice.clone());
+        self.apply_model_choice_to_chips(&choice);
+        self.sync_model_selector(cx);
+        cx.notify();
+    }
     /// Write the choice onto the open row and onto the chips.
     fn store_draft_model(
         &mut self,
@@ -1379,6 +1488,14 @@ impl OrbitApp {
         }
         let mut choice = self
             .current_draft_model()
+            .or_else(|| self.staged_model_for_current())
+            // A cold session resumes on what it last ran on, not on the
+            // default a new task would get.
+            .or_else(|| {
+                let path = self.cold_session_path()?;
+                let (summary_path, summary) = self.cold_summary.as_ref()?;
+                (*summary_path == path).then(|| summary.choice.clone()).flatten()
+            })
             .unwrap_or_else(|| self.session_default.clone());
         // No draft choice and no configured default: keep the name pi last
         // reported. Clearing it to "…" hides the model the first message
@@ -1413,15 +1530,23 @@ impl OrbitApp {
         if !self.startup_model_reportable {
             return;
         }
+        if self.apply_reported_model(data) {
+            crate::catalog_cache::store_state(data);
+        }
+    }
+
+    /// Record the model a get_state body names as pi's own default, whether
+    /// it came from a live process or from the cache. Returns whether it named one.
+    pub(super) fn apply_reported_model(&mut self, data: &serde_json::Value) -> bool {
         let Some(model) = data.get("model").filter(|model| model.is_object()) else {
-            return;
+            return false;
         };
         let Some(id) = model
             .get("id")
             .and_then(serde_json::Value::as_str)
             .filter(|id| !id.is_empty())
         else {
-            return;
+            return false;
         };
         let name = model
             .get("name")
@@ -1447,6 +1572,7 @@ impl OrbitApp {
         if self.model_label.is_empty() || self.model_label == "…" {
             self.model_label = name.to_string();
         }
+        true
     }
 
     /// Point the composer chips at `choice`. An unset model clears them, so a

@@ -44,8 +44,8 @@ use crate::providers::provider_display_name;
 use crate::recent_models::Recents;
 use crate::theme::tokens::RaisedExt;
 use crate::theme::tokens::{
-    context_menu, input, list, picker, BufferLineHeight, ButtonSize, DynamicSpacing, IconSize,
-    Radius, TextSize,
+    context_menu, input, list, picker, weight, BufferLineHeight, ButtonSize, DynamicSpacing,
+    IconSize, Radius, TextSize,
 };
 use crate::theme::{self, Theme};
 
@@ -1111,38 +1111,20 @@ fn thinking_hint(level: &str) -> String {
     }
 }
 
-/// Leading tile shared by the model and thinking rows — sized like sidebar
-/// session chips so HugeIcons glyphs read clearly (some levels use small
-/// artwork in the 24×24 viewBox, e.g. minimal's dot). The glyph inside is a
-/// picker-row icon (`context_menu::ICON`).
-const LEADING_TILE: f32 = 28.;
-
+/// The reserved trailing check column, shared with the mode menus so every
+/// picker reserves the same slot (see [`crate::app::helpers::menu_check_slot`]).
 fn trailing_check(selected: bool, theme: Theme) -> impl IntoElement + use<> {
-    div()
-        .w(context_menu::ICON.px(&theme))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(if selected {
-            icon(
-                "icons/check.svg",
-                context_menu::ICON.px(&theme),
-                theme.accent_text,
-            )
-            .into_any_element()
-        } else {
-            div().into_any_element()
-        })
+    crate::app::helpers::menu_check_slot(selected, &theme)
 }
 
-/// The one neutral tile both pickers lead every row with: a 28px raised square
-/// with an 8px corner. It stays neutral in every state — selection is carried
-/// by the row's own fill and the trailing accent check, so the tile never adds
-/// a second accent mark to the same row (the One Accent Rule).
+/// The one neutral tile both pickers lead every row with: a raised square as
+/// tall as the two-line label column beside it, with an 8px corner. It stays
+/// neutral in every state — selection is carried by the row's own fill and
+/// the trailing accent check, so the tile never adds a second accent mark to
+/// the same row (the One Accent Rule).
 fn leading_tile(theme: Theme, glyph: AnyElement) -> impl IntoElement + use<> {
     div()
-        .size(px(LEADING_TILE))
+        .size(picker::two_line_text_height(&theme))
         .flex_none()
         .rounded(Radius::Large.px(&theme))
         .bg(theme.surface_elevated)
@@ -1158,7 +1140,7 @@ fn thinking_chip(level: &str, theme: Theme) -> impl IntoElement + use<> {
     let (path, color) = thinking_icon(level, &theme);
     leading_tile(
         theme,
-        icon(path, context_menu::ICON.px(&theme), color).into_any_element(),
+        icon(path, IconSize::Medium.px(&theme), color).into_any_element(),
     )
 }
 
@@ -1169,7 +1151,7 @@ fn provider_chip(provider: &str, selected: bool, theme: Theme) -> impl IntoEleme
         theme,
         icon_dyn(
             provider_icon(provider),
-            context_menu::ICON.px(&theme),
+            IconSize::Medium.px(&theme),
             provider_mark_color(
                 provider,
                 &theme,
@@ -1291,7 +1273,7 @@ fn group_header(
                 )
                 .child(
                     div()
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .child(label.to_string()),
                 )
                 .child(div().flex_1())
@@ -1329,9 +1311,10 @@ fn empty_state(kind: PickerKind, theme: Theme) -> impl IntoElement + use<> {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(div().font_weight(FontWeight::MEDIUM).child(title))
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
                     .child(
                         div()
+                            .font_weight(FontWeight::NORMAL)
                             .text_size(picker::SECONDARY_TEXT.px(&theme))
                             .child(hint),
                     ),
@@ -1385,6 +1368,7 @@ fn label_column<P: IntoElement, S: IntoElement>(
     let secondary_text = div()
         .w_full()
         .truncate()
+        .font_weight(FontWeight::NORMAL)
         .text_size(picker::SECONDARY_TEXT.px(&theme))
         .line_height(line_box(picker::SECONDARY_TEXT))
         .text_color(if selected || highlighted {
@@ -1409,11 +1393,7 @@ fn label_column<P: IntoElement, S: IntoElement>(
                 .w_full()
                 .truncate()
                 .line_height(line_box(picker::TEXT))
-                .font_weight(if selected {
-                    FontWeight::MEDIUM
-                } else {
-                    FontWeight::NORMAL
-                })
+                .font_weight(weight::FUNCTIONAL)
                 .text_color(if selected {
                     theme.text_primary
                 } else {

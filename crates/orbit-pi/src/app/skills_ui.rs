@@ -188,7 +188,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
                     .child(scope.label().to_uppercase()),
             )
@@ -234,7 +234,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(TextSize::Small.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(if selected {
                                 theme.selection_fg
                             } else {
@@ -249,7 +249,7 @@ impl OrbitApp {
                                 .text_size(TextSize::Small.px(&theme))
                                 .text_color(theme.text_muted)
                                 .truncate()
-                                .child(description.to_string()),
+                                .child(super::helpers::one_line(description)),
                         )
                     }),
             )
@@ -309,7 +309,7 @@ impl OrbitApp {
                 .child(
                     div()
                         .text_size(TextSize::Default.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(tr!("skills_ui.select_a_skill")),
                 )
@@ -355,7 +355,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .text_size(theme.heading_px(3).0)
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .truncate()
                             .child(skill.name.clone()),
@@ -461,7 +461,7 @@ impl OrbitApp {
             .child(
                 div()
                     .text_size(TextSize::XSmall.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
                     .child(tr!("skills_ui.skill_md")),
             )
@@ -648,7 +648,7 @@ impl OrbitApp {
         )
         .group(BUTTON_GROUP)
         .cursor_pointer()
-        .font_weight(FontWeight::MEDIUM);
+        .font_weight(FontWeight::SEMIBOLD);
         let (button, icon_color) = if danger {
             (
                 base.border_1()

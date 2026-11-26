@@ -347,7 +347,7 @@ impl OrbitApp {
             .raised(theme.action, &theme)
             .text_color(theme.action_fg)
             .text_size(button::label_size(ButtonSize::Compact).px(&theme))
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()
             .hover(|s| s.opacity(0.9))
             .tooltip({
@@ -532,7 +532,7 @@ impl OrbitApp {
                 &theme,
                 ButtonSize::Medium,
             )
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .border_1()
             .border_color(theme.border)
             .bg(theme.surface_elevated)
@@ -545,7 +545,7 @@ impl OrbitApp {
                 &theme,
                 ButtonSize::Medium,
             )
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(FontWeight::SEMIBOLD)
             .border_1()
             .border_color(theme.border)
             .raised(theme.surface_elevated, &theme)
@@ -603,7 +603,7 @@ impl OrbitApp {
                     .flex_none()
                     .text_size(modal::HEADLINE.px(&theme))
                     .line_height(modal::HEADLINE.line_height(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(title),
             );
@@ -981,7 +981,7 @@ fn version_history_view(
                     .rounded_full()
                     .bg(theme.surface_hover)
                     .text_size(TextSize::XSmall.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
                     .child(tr!("updater_ui.current")),
             );
@@ -1025,7 +1025,7 @@ fn dialog_button(
     let button = button_frame(div().id(id), &theme, ButtonSize::Large)
         .group(BUTTON_GROUP)
         .cursor_pointer()
-        .font_weight(FontWeight::MEDIUM)
+        .font_weight(FontWeight::SEMIBOLD)
         .on_mouse_up(MouseButton::Left, on_mouse_up);
     let button = if primary {
         button

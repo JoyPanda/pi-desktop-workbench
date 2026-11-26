@@ -299,7 +299,7 @@ fn header_cell(ix: usize, column: &Column, theme: Theme, handlers: TableHandlers
                 .min_w_0()
                 .truncate()
                 .text_size(TextSize::Default.px(&theme))
-                .font_weight(FontWeight::MEDIUM)
+                .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_primary)
                 .child(column.label.clone()),
         );

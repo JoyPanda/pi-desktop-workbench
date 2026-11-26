@@ -16,7 +16,7 @@ use gpui::{
 
 use crate::app::{icon, menu_header, picker_entry, picker_search_frame, picker_surface};
 use crate::composer::ComposerInput;
-use crate::theme::tokens::{context_menu, input, list, picker, DynamicSpacing};
+use crate::theme::tokens::{context_menu, input, list, picker, weight, DynamicSpacing};
 use crate::theme::{self, Theme};
 
 /// The field caps at this width; the popover matches it exactly. Feeds
@@ -323,11 +323,7 @@ impl Render for WorkspacePicker {
                                 .flex_none()
                                 .max_w(px(170.))
                                 .truncate()
-                                .font_weight(if highlighted || is_current {
-                                    FontWeight::MEDIUM
-                                } else {
-                                    FontWeight::NORMAL
-                                })
+                                .font_weight(weight::FUNCTIONAL)
                                 .text_color(if highlighted {
                                     theme.text_primary
                                 } else if is_current {
@@ -342,6 +338,7 @@ impl Render for WorkspacePicker {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
+                                .font_weight(FontWeight::NORMAL)
                                 // Paths are machine text — mono, like the
                                 // model picker's id line.
                                 .font_family(theme::code_font_family())
@@ -358,6 +355,7 @@ impl Render for WorkspacePicker {
                     row.child(
                         div()
                             .flex_none()
+                            .font_weight(FontWeight::NORMAL)
                             .text_size(picker::SECONDARY_TEXT.px(&theme))
                             .text_color(if highlighted || is_current {
                                 theme.text_secondary
@@ -436,11 +434,12 @@ impl Render for WorkspacePicker {
                                     .flex_col()
                                     .child(
                                         div()
-                                            .font_weight(FontWeight::MEDIUM)
+                                            .font_weight(FontWeight::SEMIBOLD)
                                             .child(tr!("workspace_picker.no_folders_match")),
                                     )
                                     .child(
                                         div()
+                                            .font_weight(FontWeight::NORMAL)
                                             .text_size(picker::SECONDARY_TEXT.px(&theme))
                                             .child(tr!(
                                                 "workspace_picker.try_another_name_or_choose_a_folder_below"

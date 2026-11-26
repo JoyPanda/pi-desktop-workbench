@@ -257,7 +257,6 @@ fn shortcut_switch_to_a_warm_session_keeps_the_running_process(cx: &mut gpui::Te
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     queue_wire: QueueWire::default(),
-                    parked_at: Instant::now(),
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
@@ -265,6 +264,7 @@ fn shortcut_switch_to_a_warm_session_keeps_the_running_process(cx: &mut gpui::Te
                     discard: false,
                     startup_model_pinned: false,
                     pending: std::collections::VecDeque::new(),
+                    resume_prompt: None,
                 },
             );
 
@@ -352,7 +352,6 @@ exec cat >/dev/null
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     queue_wire: QueueWire::default(),
-                    parked_at: Instant::now(),
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
@@ -360,6 +359,7 @@ exec cat >/dev/null
                     discard: false,
                     startup_model_pinned: false,
                     pending: std::collections::VecDeque::new(),
+                    resume_prompt: None,
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -517,7 +517,6 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     queue_wire: QueueWire::default(),
-                    parked_at: Instant::now(),
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
@@ -525,6 +524,7 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                     discard: false,
                     startup_model_pinned: false,
                     pending: std::collections::VecDeque::new(),
+                    resume_prompt: None,
                 },
             );
 
@@ -545,6 +545,91 @@ fn cross_workspace_switch_back_resumes_the_running_session(cx: &mut gpui::TestAp
                 "A resumes its own warm process"
             );
             assert!(child_alive(running_pid), "A's run was not killed");
+        });
+    });
+}
+
+/// A stale MCP stamp must not drop a parked process, including one whose
+/// parent turn has settled while a subagent is still running. On Windows that
+/// drop kills the process tree, so the runner disappears.
+#[gpui::test]
+fn a_running_subagent_keeps_a_stale_park(cx: &mut gpui::TestAppContext) {
+    let app = test_app(cx);
+    let ws = PathBuf::from("/tmp/orbit-park-tests/subagent-ws");
+    std::fs::create_dir_all(&ws).expect("ws");
+    let running_path = ws.join("running.jsonl");
+    let other_path = ws.join("other.jsonl");
+    let running = FakePi::start("subagent-running");
+    let mut running_pid = 0;
+    let running_session = SessionInfo {
+        path: running_path.clone(),
+        id: "running".into(),
+        cwd: ws.clone(),
+        title: "Running".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+        draft: None,
+    };
+    let other_session = SessionInfo {
+        path: other_path.clone(),
+        id: "other".into(),
+        cwd: ws.clone(),
+        title: "Other".into(),
+        first_message: "hi".into(),
+        modified: SystemTime::UNIX_EPOCH,
+        draft: None,
+    };
+
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let client = spawn_fake(app, &running);
+            running_pid = client.child_pid();
+            app.adopt_client(client);
+            app.current_session_path = Some(running_path.clone());
+            app.current_workspace = Some(ws.clone());
+            app.busy = false;
+            // Not this workspace's config. An idle park would be dropped.
+            app.mcp_stamp = 1;
+            app.subagents.apply_snapshot_value(&serde_json::json!({
+                "omitted": { "runs": 0 },
+                "runs": [{
+                    "id": "run-1",
+                    "label": "reviewer",
+                    "state": "running",
+                    "startedAt": 1,
+                    "updatedAt": 2,
+                    "children": []
+                }]
+            }));
+            assert!(app.subagents.work_in_flight());
+            app.switch_to_session(other_session, true, cx);
+            assert!(child_alive(running_pid), "leaving parks the process");
+        });
+    });
+    cx.update(|cx| {
+        app.update(cx, |app, cx| app.tick(cx));
+    });
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            let parked = app
+                .lives
+                .get(&running_path)
+                .expect("the subagent's process is still parked after a tick");
+            assert!(
+                parked.busy,
+                "a running subagent keeps the parked session busy"
+            );
+            app.switch_to_session(running_session, true, cx);
+            assert_eq!(
+                app.client.as_ref().map(PiClient::child_pid),
+                Some(running_pid),
+                "switching back resumes the same process"
+            );
+            assert!(child_alive(running_pid), "the runner's parent was not killed");
+            assert!(
+                app.subagents.work_in_flight(),
+                "the subagent strip comes back with the process"
+            );
         });
     });
 }
@@ -607,7 +692,6 @@ fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext)
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     queue_wire: QueueWire::default(),
-                    parked_at: Instant::now(),
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
@@ -615,6 +699,7 @@ fn queued_messages_survive_a_switch_away_and_back(cx: &mut gpui::TestAppContext)
                     discard: false,
                     startup_model_pinned: false,
                     pending: std::collections::VecDeque::new(),
+                    resume_prompt: None,
                 },
             );
 
@@ -696,7 +781,6 @@ exec cat >/dev/null
                     subagent_list_scroll: ScrollHandle::new(),
                     queue: PendingQueue::default(),
                     queue_wire: QueueWire::default(),
-                    parked_at: Instant::now(),
                     execution: SessionExecution::default(),
                     interaction: ParkedInteraction::default(),
                     retry_detail: None,
@@ -704,6 +788,7 @@ exec cat >/dev/null
                     discard: false,
                     startup_model_pinned: false,
                     pending: std::collections::VecDeque::new(),
+                    resume_prompt: None,
                 },
             );
             app.switch_to_session(target_session.clone(), true, cx);
@@ -864,7 +949,6 @@ fn parked_shell(client: PiClient, stamp: u64) -> ParkedSession {
         subagent_list_scroll: ScrollHandle::new(),
         queue: PendingQueue::default(),
         queue_wire: QueueWire::default(),
-        parked_at: Instant::now(),
         execution: SessionExecution::default(),
         interaction: ParkedInteraction::default(),
         retry_detail: None,
@@ -872,39 +956,8 @@ fn parked_shell(client: PiClient, stamp: u64) -> ParkedSession {
         discard: false,
         startup_model_pinned: false,
         pending: std::collections::VecDeque::new(),
+                    resume_prompt: None,
     }
-}
-
-/// An idle park past the TTL still keeps events the budget has not applied.
-/// The reap runs before the drain, so an empty-queue check is what lets the
-/// next tick finish them.
-#[gpui::test]
-fn an_idle_park_keeps_events_the_budget_has_not_applied(cx: &mut gpui::TestAppContext) {
-    let app = test_app(cx);
-    let fake = FakePi::start("ttl-queue");
-    let path = PathBuf::from("/tmp/orbit-park-tests/ttl-queue.jsonl");
-    cx.update(|cx| {
-        app.update(cx, |app, _| {
-            let mut parked = parked_shell(spawn_fake(app, &fake), 0);
-            parked
-                .pending
-                .push_back(Event::Unknown(serde_json::json!("still-queued")));
-            app.park(path.clone(), parked);
-            app.lives.get_mut(&path).expect("parked").parked_at =
-                Instant::now() - super::PARKED_IDLE_TTL - Duration::from_secs(1);
-            app.reap_idle_parked();
-            assert!(
-                app.lives.contains_key(&path),
-                "queued events outlive the idle TTL"
-            );
-            app.lives.get_mut(&path).expect("parked").pending.clear();
-            app.reap_idle_parked();
-            assert!(
-                !app.lives.contains_key(&path),
-                "an idle park with an empty queue is reaped"
-            );
-        });
-    });
 }
 
 fn session_file_response(path: &str) -> Event {
@@ -972,57 +1025,30 @@ fn foreground_queue_spends_the_budget_before_parked(cx: &mut gpui::TestAppContex
     });
 }
 
-/// The warm-pool cap evicts the oldest idle park with an empty queue. A park
-/// that still has events stays, even when it is the oldest and not yet marked
-/// busy. If every park is busy or queued, the pool grows instead of dropping one.
+/// The warm pool has no cap: parking many idle sessions never evicts one, so
+/// pi's own `cacheWarming` keeps running in every parked process.
 #[gpui::test]
-fn cap_eviction_keeps_a_park_whose_queue_is_not_empty(cx: &mut gpui::TestAppContext) {
+fn parking_never_evicts_an_idle_session(cx: &mut gpui::TestAppContext) {
+    const COUNT: usize = 12;
     let app = test_app(cx);
-    let fakes: Vec<_> = (0..=super::MAX_LIVE_SESSIONS)
-        .map(|i| FakePi::start(&format!("cap-{i}")))
+    let fakes: Vec<_> = (0..COUNT)
+        .map(|i| FakePi::start(&format!("nocap-{i}")))
         .collect();
     cx.update(|cx| {
         app.update(cx, |app, _| {
-            let now = Instant::now();
-            let path_of = |i: usize| PathBuf::from(format!("/tmp/orbit-park-tests/cap-{i}.jsonl"));
-            for i in 0..super::MAX_LIVE_SESSIONS {
-                let path = path_of(i);
-                let mut parked = parked_shell(spawn_fake(app, &fakes[i]), 0);
-                if i == 0 {
-                    parked
-                        .pending
-                        .push_back(Event::Unknown(serde_json::json!("settle-later")));
-                }
-                app.park(path.clone(), parked);
-                app.lives.get_mut(&path).expect("parked").parked_at =
-                    now - Duration::from_secs((super::MAX_LIVE_SESSIONS - i) as u64);
+            let path_of =
+                |i: usize| PathBuf::from(format!("/tmp/orbit-park-tests/nocap-{i}.jsonl"));
+            for (i, fake) in fakes.iter().enumerate() {
+                let parked = parked_shell(spawn_fake(app, fake), 0);
+                app.park(path_of(i), parked);
             }
-            let seventh = path_of(super::MAX_LIVE_SESSIONS);
-            let seventh_parked =
-                parked_shell(spawn_fake(app, &fakes[super::MAX_LIVE_SESSIONS]), 0);
-            app.park(seventh.clone(), seventh_parked);
-            assert!(
-                app.lives.contains_key(&path_of(0)),
-                "the oldest park still has events, so it stays"
-            );
-            assert!(
-                !app.lives.contains_key(&path_of(1)),
-                "the oldest idle park with an empty queue is the one evicted"
-            );
-            assert!(app.lives.contains_key(&seventh));
-            assert_eq!(app.lives.len(), super::MAX_LIVE_SESSIONS);
-
-            for parked in app.lives.values_mut() {
-                parked
-                    .pending
-                    .push_back(Event::Unknown(serde_json::json!("held")));
+            assert_eq!(app.lives.len(), COUNT, "no idle park is evicted");
+            for i in 0..COUNT {
+                assert!(
+                    app.lives.contains_key(&path_of(i)),
+                    "idle park {i} stays warm"
+                );
             }
-            let eighth = PathBuf::from("/tmp/orbit-park-tests/cap-extra.jsonl");
-            let extra = FakePi::start("cap-extra");
-            let extra_parked = parked_shell(spawn_fake(app, &extra), 0);
-            app.park(eighth.clone(), extra_parked);
-            assert!(app.lives.contains_key(&eighth));
-            assert_eq!(app.lives.len(), super::MAX_LIVE_SESSIONS + 1);
         });
     });
 }

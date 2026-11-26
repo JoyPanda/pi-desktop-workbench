@@ -330,7 +330,7 @@ impl OrbitApp {
                             .min_w_0()
                             .truncate()
                             .text_size(TextSize::Small.px(&theme))
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_primary)
                             .child(label),
                     )
@@ -439,7 +439,7 @@ impl OrbitApp {
                     .min_w_0()
                     .truncate()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(label.to_string()),
             )
@@ -838,7 +838,7 @@ fn subagent_message(
                     div()
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(if pending {
                             theme.accent_text
                         } else {

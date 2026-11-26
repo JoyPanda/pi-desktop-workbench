@@ -39,6 +39,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Control typography and spacing pass.** Functional text (buttons, chips,
+  menu rows, tab/status labels, settings nav) renders SemiBold: the bundled UI
+  face ships only Regular/SemiBold, so the earlier Medium request silently fell
+  back to Regular. Icon-to-label gaps in buttons, chips and picker rows widen to
+  12px and button padding to
+  8/12px; two-line picker rows (model, thinking) and the New Task workspace
+  field lead with a mark as tall as the label column. Composer mode pickers span
+  the composer box as single-line rows with a reserved check slot; slash/skill
+  descriptions collapse to one line instead of bleeding across fixed-height
+  rows. Sidebar cards and the Projects eyebrow tighten to an 8px outer inset,
+  the eyebrow aligned to the icon ink edge; secondary metadata stays Regular so
+  labels keep the hierarchy.
+
+- **pi starts only when you send.** Launching the app, clicking an old session,
+  and clicking New Task no longer spawn pi. The first send does: a new task
+  starts an empty process, and a cold session starts pi with `--session` on
+  that file, loads pi's own message snapshot, then delivers the prompt.
+  Leaving the page while that process is still booting does not cancel the
+  send. A process that exits while idle goes cold quietly and the automatic
+  restart is gone; an exit mid-run still shows Reconnect. Model, thinking
+  level, and rename picked on a cold session are kept and applied when that
+  process is up. The model list and `/` commands come from a cached copy
+  refreshed in the background. A cold session's context ring shows its last
+  live numbers, dimmed. Quitting or removing a project with a run in flight
+  now asks first; deleting a session stops its parked process. Settings →
+  Apply, Reconnect, and Restart still restart the process on screen, and that
+  process opens the current file with `--session`.
+
+- **Background sessions are no longer reaped.** The warm pool used to keep at
+  most six parked sessions and tore an idle one down after five minutes, which
+  stalled switching, dropped per-session state, and cut short pi's own
+  `cacheWarming` (up to 30 minutes of prompt-cache refresh between runs). A
+  parked pi process now stays until its session is deleted, you stop it, the
+  process exits, or Orbit quits. An MCP edit does not restart a process that
+  is already up. Idle sessions that keep warming the cache cost tokens for up
+  to 30 minutes after their last run.
+
+- **Switching onto a running session paints on the click.** The click no
+  longer waits for the session you are leaving to finish `switch_session` or
+  `new_session`, and it does not remeasure every row that changed while that
+  session was parked. The session on screen and the parked sessions each get
+  a short slice of the heartbeat, so a busy foreground cannot pile the whole
+  backlog onto the click.
+
 - **Sidebar session rows no longer spell out their status.** A failed run, a
   wait for approval or input, and a disconnected session keep the icon and the
   tooltip. The words ("Failed", "Waiting for approval", and the rest) are gone,
@@ -89,14 +133,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Stop while it is starting, the text comes back to the composer and the optimistic
   message goes with it, with the usual banner explaining why.
 
-- **Switching sessions no longer races pi's teardown.** While a replacement
-  (`new_session` / `switch_session`) is unanswered, a click on another session
-  waits for pi and then runs, instead of sending a second replacement into the
-  window where pi has already invalidated the outgoing session — the window that
-  made extensions report *"This extension ctx is stale after session
-  replacement"*. Name reports are held for the same window, so the header (and the
-  open sidebar row) no longer flashes the session being left before settling on
-  `New task`.
+- **Switching sessions no longer races one shared pi.** Each session has its
+  own process, so a click is not held behind `new_session` or `switch_session`
+  on the session you are leaving. That reply stays with its process. Name
+  reports from a process that is still being born stay off the header, so a
+  New Task page no longer flashes the session you just left.
 
 - **Stop and Esc now interrupt a stuck pi.** They sent `abort` and then waited
   for `agent_settled`, which a pi whose event loop is wedged never sends — one

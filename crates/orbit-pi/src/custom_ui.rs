@@ -329,7 +329,7 @@ impl Render for CustomUi {
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
                     .child(SharedString::from("Extension UI")),
             );
@@ -351,7 +351,7 @@ impl Render for CustomUi {
                         .min_w_0()
                         .truncate()
                         .text_size(TextSize::Small.px(&theme))
-                        .font_weight(FontWeight::MEDIUM)
+                        .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_primary)
                         .child(SharedString::from(title.to_string())),
                 );

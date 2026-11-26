@@ -1087,3 +1087,123 @@ fn model_and_thinking_pickers_stay_shut_while_running(cx: &mut gpui::TestAppCont
         "an idle turn opens the model picker"
     );
 }
+
+// ── mode pickers: composer-wide, reflow-free ──────────────────────────
+
+/// The access/workflow pickers span the composer box (Cursor's composer
+/// menu), and their rows keep a constant geometry: highlight and selection
+/// change ink only — the reserved check slot means even the check appearing
+/// on another row never moves a row.
+#[gpui::test]
+fn mode_popups_span_the_composer_and_rows_never_reflow(cx: &mut gpui::TestAppContext) {
+    use crate::access::AccessMode;
+    use crate::theme::tokens::popover;
+    use crate::theme::{Theme, ThemeKey};
+
+    cx.update(|cx| cx.set_global(Theme::for_id(ThemeKey::ORBIT)));
+    let cx = cx.add_empty_window();
+    let app = cx.update(|_, cx| cx.new(OrbitApp::new));
+    let space = gpui::size(px(1200.), px(820.));
+    let redraw = |cx: &mut gpui::VisualTestContext| {
+        let _ = cx.draw(point(px(0.), px(0.)), space, |_, _| app.clone());
+    };
+    redraw(cx);
+
+    // Start from a non-default mode (default is FullAccess = row 2) so row 0
+    // is the selected + highlighted row: both later mutations (highlight
+    // 0->1, selection off row 0) then genuinely change row 0's state.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.access_mode = AccessMode::Supervised;
+            cx.notify();
+        });
+    });
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| app.toggle_access_menu(window, cx));
+    });
+    redraw(cx);
+
+    let composer = cx
+        .debug_bounds("composer-box")
+        .expect("composer box laid out");
+    let popup = cx
+        .debug_bounds("access-popup")
+        .expect("access popup laid out");
+    // left_0/right_0 resolve against the padding box: the menu spans the box
+    // minus its two 1px borders.
+    assert_eq!(popup.size.width, composer.size.width - px(2.));
+    assert_eq!(popup.left(), composer.left() + px(1.));
+    // bottom_full + the menu-offset margin, measured from the padding box:
+    // the visible gap above the composer's border is MENU_OFFSET - 1px.
+    assert_eq!(
+        composer.top() - popup.bottom(),
+        popover::MENU_OFFSET - px(1.)
+    );
+
+    let row = cx
+        .debug_bounds("access-row-0")
+        .expect("first mode row laid out");
+    // The row's outer frame is stretched to the popup width and cannot move;
+    // the reserved check slot is the inner element that would shift if the
+    // slot were not reserved, so probe it too.
+    let check = cx
+        .debug_bounds("access-row-0-check")
+        .expect("check slot laid out");
+
+    // Highlight moves to another row: no geometry may change.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.access_menu_highlight = 1;
+            cx.notify();
+        });
+    });
+    redraw(cx);
+    assert_eq!(
+        cx.debug_bounds("access-row-0"),
+        Some(row),
+        "highlight reflowed row 0"
+    );
+    assert_eq!(
+        cx.debug_bounds("access-popup"),
+        Some(popup),
+        "highlight reflowed the popup"
+    );
+    assert_eq!(
+        cx.debug_bounds("access-row-0-check"),
+        Some(check),
+        "highlight reflowed the check slot"
+    );
+
+    // Selection moves off row 0 (its check disappears): still no reflow.
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            app.access_mode = AccessMode::FullAccess;
+            cx.notify();
+        });
+    });
+    redraw(cx);
+    assert_eq!(
+        cx.debug_bounds("access-row-0"),
+        Some(row),
+        "selection reflowed row 0"
+    );
+    assert_eq!(
+        cx.debug_bounds("access-row-0-check"),
+        Some(check),
+        "selection reflowed the check slot"
+    );
+
+    // The workflow picker shares the mount: same span.
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.close_access_menu(window, cx);
+            app.toggle_workflow_menu(window, cx);
+        });
+    });
+    redraw(cx);
+    let workflow = cx
+        .debug_bounds("workflow-popup")
+        .expect("workflow popup laid out");
+    assert_eq!(workflow.size.width, composer.size.width - px(2.));
+    assert_eq!(workflow.left(), composer.left() + px(1.));
+}

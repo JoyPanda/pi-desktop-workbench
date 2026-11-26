@@ -88,7 +88,12 @@ fn load_sessions_in(dir: &Path) -> Vec<SessionInfo> {
         for file in files.flatten() {
             let path = file.path();
             if path.extension().is_some_and(|e| e == "jsonl") {
-                if let Some(info) = read_session(&path) {
+                if let Some(mut info) = read_session(&path) {
+                    // A name chosen while the session had no process is not in the
+                    // file yet; the list must already show it.
+                    if let Some(name) = crate::session_staging::rename_for(&path) {
+                        info.title = name;
+                    }
                     out.push(info);
                 }
             }
@@ -741,6 +746,95 @@ fn timestamp_millis(value: Option<&Value>) -> Option<i64> {
     i64::try_from(millis).ok()
 }
 
+/// What a cold session's file says about its last run: the model and thinking
+/// level it was on, and how many tokens its context held after the last reply.
+#[derive(Debug, Clone, Default)]
+pub struct ColdSummary {
+    pub choice: Option<crate::session_defaults::SessionDefault>,
+    pub context_tokens: Option<u64>,
+}
+
+/// The model and thinking level a session last ran on, read from its file.
+pub fn last_model_choice(path: &Path) -> Option<crate::session_defaults::SessionDefault> {
+    cold_summary(path).choice
+}
+
+/// Read a session file once for what a cold page shows before any process
+/// exists: the final `model_change` / `thinking_level_change` entries and the
+/// last assistant reply's token usage. Blocking and linear in the file size:
+/// run it off the UI thread. Lines are pre-filtered by substring so the rest
+/// of a long transcript is not parsed.
+pub fn cold_summary(path: &Path) -> ColdSummary {
+    let Ok(file) = fs::File::open(path) else {
+        return ColdSummary::default();
+    };
+    let mut provider: Option<String> = None;
+    let mut model_id: Option<String> = None;
+    let mut thinking: Option<String> = None;
+    let mut context_tokens: Option<u64> = None;
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else { break };
+        let is_model = line.contains("\"model_change\"");
+        let is_level = line.contains("\"thinking_level_change\"");
+        let is_reply = line.contains("\"usage\"") && line.contains("\"assistant\"");
+        if !is_model && !is_level && !is_reply {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("model_change") => {
+                let id = value.get("modelId").and_then(Value::as_str).filter(|s| !s.is_empty());
+                if let Some(id) = id {
+                    model_id = Some(id.to_string());
+                    provider = value
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
+                }
+            }
+            Some("thinking_level_change") => {
+                thinking = value
+                    .get("thinkingLevel")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+            }
+            Some("message") => {
+                let Some(message) = value.get("message") else {
+                    continue;
+                };
+                if message.get("role").and_then(Value::as_str) != Some("assistant") {
+                    continue;
+                }
+                let Some(usage) = message.get("usage") else {
+                    continue;
+                };
+                let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+                let total = match field("totalTokens") {
+                    0 => field("input") + field("output") + field("cacheRead") + field("cacheWrite"),
+                    total => total,
+                };
+                // An aborted or failed reply reports nothing; keep the last
+                // real figure.
+                if total > 0 {
+                    context_tokens = Some(total);
+                }
+            }
+            _ => {}
+        }
+    }
+    ColdSummary {
+        choice: model_id.is_some().then(|| crate::session_defaults::SessionDefault {
+            provider,
+            model_id,
+            thinking,
+        }),
+        context_tokens,
+    }
+}
 /// Build a `get_messages`-shaped payload (`{"messages":[…]}`) from a session
 /// file's message entries. Lets the transcript render an old session straight
 /// from disk — before pi has booted and answered `switch_session` — so

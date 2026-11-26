@@ -450,8 +450,8 @@ impl ButtonSize {
 
     pub fn padding_x(self, theme: &Theme) -> Pixels {
         match self {
-            Self::Large | Self::Medium => DynamicSpacing::Base08.px(theme),
-            Self::Default | Self::Compact => DynamicSpacing::Base04.px(theme),
+            Self::Large | Self::Medium => DynamicSpacing::Base12.px(theme),
+            Self::Default | Self::Compact => DynamicSpacing::Base08.px(theme),
             // Zed's `px_px()`: one unscaled pixel.
             Self::None => px(1.),
         }
@@ -483,7 +483,7 @@ pub mod button {
 
     /// Between a button's icon and its label.
     pub fn gap(theme: &Theme) -> Pixels {
-        DynamicSpacing::Base04.px(theme)
+        DynamicSpacing::Base12.px(theme)
     }
 
     /// Between a button's label and its keybinding.
@@ -512,6 +512,40 @@ pub mod button {
             ButtonSize::Large | ButtonSize::Medium => TextSize::Default,
             ButtonSize::Default | ButtonSize::Compact | ButtonSize::None => TextSize::Small,
         }
+    }
+}
+
+// ── Composer chips ─────────────────────────────────────────────────────
+
+/// Composer chips (access / workflow / model / thinking / MCP): Cursor's
+/// footer pills. The frame stays dense — the breathing room is horizontal
+/// (8px padding, 12px gaps), not vertical: 22px tall, Large corners, 12px label.
+pub mod chip {
+    use super::*;
+
+    pub fn height(theme: &Theme) -> Pixels {
+        theme.ui_px(22.)
+    }
+
+    pub fn padding_x(theme: &Theme) -> Pixels {
+        DynamicSpacing::Base08.px(theme)
+    }
+
+    pub fn gap(theme: &Theme) -> Pixels {
+        DynamicSpacing::Base12.px(theme)
+    }
+
+    pub const RADIUS: Radius = Radius::Large;
+    pub const LABEL: TextSize = TextSize::Small;
+    pub const ICON: IconSize = IconSize::Small;
+    pub const CARET: IconSize = IconSize::XSmall;
+
+    /// The read-only lock beside a mode label.
+    pub const LOCK: IconSize = IconSize::XSmall;
+
+    /// Inside the label+lock group, tighter than the chip's own gap.
+    pub fn label_gap(theme: &Theme) -> Pixels {
+        DynamicSpacing::Base04.px(theme)
     }
 }
 
@@ -570,7 +604,7 @@ pub mod list_item {
 
     /// Inside the content slot.
     pub fn content_gap(theme: &Theme) -> Pixels {
-        DynamicSpacing::Base06.px(theme)
+        DynamicSpacing::Base12.px(theme)
     }
 
     /// `.rounded()` / `.outlined()` / inset items — the same corner as a
@@ -670,6 +704,19 @@ pub mod picker {
     /// A row's secondary line (description, path, metadata).
     pub const SECONDARY_TEXT: TextSize = TextSize::Small;
 
+    /// A menu row's leading icon column: fixed so labels align regardless of
+    /// glyph weight, the entry icon centered inside. Scales with the UI font
+    /// like the glyph it holds.
+    pub fn icon_slot(theme: &Theme) -> Pixels {
+        theme.ui_px(16.)
+    }
+
+    /// A menu row's trailing check column: always reserved, so showing or
+    /// hiding the check never changes a row's content width.
+    pub fn trailing_slot(theme: &Theme) -> Pixels {
+        theme.ui_px(16.)
+    }
+
     /// A one-line row: one Comfortable line of Default text plus `Sparse`
     /// padding — 29px at the default size.
     pub fn entry_height(theme: &Theme) -> Pixels {
@@ -681,6 +728,22 @@ pub mod picker {
         let line = |size: TextSize| BufferLineHeight::Comfortable.resolve(size.px(theme));
         ROW_SPACING.row_height(line(TEXT) + line(SECONDARY_TEXT), theme)
     }
+
+    /// Just the two Comfortable line boxes (no row padding): the height a
+    /// leading mark must match to stand as tall as a two-line label column.
+    pub fn two_line_text_height(theme: &Theme) -> Pixels {
+        let line = |size: TextSize| BufferLineHeight::Comfortable.resolve(size.px(theme));
+        line(TEXT) + line(SECONDARY_TEXT)
+    }
+}
+
+/// Functional text weight: controls read a step heavier than body prose so
+/// buttons, chips, menu rows and titles scan as controls, not paragraph text.
+/// SemiBold, not Medium: the bundled UI face (IBMPlexSans) ships only 400/600,
+/// so a 500 request falls back to Regular and the bold would be invisible.
+pub mod weight {
+    /// Buttons, chips, menu rows, tab labels, status items.
+    pub const FUNCTIONAL: gpui::FontWeight = gpui::FontWeight::SEMIBOLD;
 }
 
 // ── Popovers + menus (`popover.rs`, `popover_menu.rs`, `context_menu.rs`) ─
@@ -1386,9 +1449,29 @@ mod tests {
     #[test]
     fn button_padding_follows_size() {
         let theme = default_theme();
-        assert!(close(ButtonSize::Large.padding_x(&theme), 8.));
-        assert!(close(ButtonSize::Default.padding_x(&theme), 4.));
+        assert!(close(ButtonSize::Large.padding_x(&theme), 12.));
+        assert!(close(ButtonSize::Medium.padding_x(&theme), 12.));
+        assert!(close(ButtonSize::Default.padding_x(&theme), 8.));
+        assert!(close(ButtonSize::Compact.padding_x(&theme), 8.));
         assert_eq!(ButtonSize::None.padding_x(&theme), px(1.));
+        // Icon-to-label breathing room is uniform across buttons, chips and
+        // menu rows.
+        assert!(close(button::gap(&theme), 12.));
+        assert!(close(chip::gap(&theme), 12.));
+        assert!(close(list_item::content_gap(&theme), 12.));
+    }
+
+    #[test]
+    fn two_line_tile_matches_the_label_column() {
+        let theme = default_theme();
+        // The leading mark stands exactly as tall as the two line boxes: the
+        // row height minus its Sparse padding above and below.
+        assert_eq!(
+            picker::two_line_text_height(&theme),
+            picker::two_line_entry_height(&theme)
+                - picker::ROW_SPACING.padding_y(&theme)
+                - picker::ROW_SPACING.padding_y(&theme)
+        );
     }
 
     #[test]

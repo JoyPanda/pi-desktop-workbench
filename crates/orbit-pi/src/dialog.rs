@@ -353,7 +353,7 @@ impl Render for Dialog {
             .child(
                 div()
                     .text_size(TextSize::Small.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
                     .child(SharedString::from("Question")),
             )
@@ -362,7 +362,7 @@ impl Render for Dialog {
                     .whitespace_normal()
                     .text_size(modal::HEADLINE.px(&theme))
                     .line_height(modal::HEADLINE.line_height(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text_primary)
                     .child(SharedString::from(self.request.title.clone())),
             );
@@ -574,7 +574,7 @@ impl Dialog {
                     .justify_center()
                     .cursor_pointer()
                     .text_size(TextSize::Default.px(&theme))
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .on_hover({
                         let this = this.clone();
                         move |hovering, _, cx| {
