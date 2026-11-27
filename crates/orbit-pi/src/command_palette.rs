@@ -1018,6 +1018,7 @@ pub fn layer(palette: Entity<CommandPalette>) -> impl IntoElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_harness::type_keys;
     use gpui::size;
 
     #[test]
@@ -1087,20 +1088,23 @@ mod tests {
         bind_picker_arrows(cx);
         let cx = cx.add_empty_window();
         let palette = open_test_palette(cx);
-        let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(700.)), |_, _| {
-            palette.clone().into_any_element()
-        });
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(700.)), |_, _| {
+                palette.clone().into_any_element()
+            });
+        };
+        draw(cx);
 
         assert_eq!(cx.update(|_, cx| palette.read(cx).highlighted), 0);
-        cx.simulate_keystrokes("down");
+        type_keys(cx, "down", &draw);
         assert_eq!(
             cx.update(|_, cx| palette.read(cx).highlighted),
             1,
             "↓ moves the highlight"
         );
-        cx.simulate_keystrokes("down");
+        type_keys(cx, "down", &draw);
         assert_eq!(cx.update(|_, cx| palette.read(cx).highlighted), 2);
-        cx.simulate_keystrokes("up");
+        type_keys(cx, "up", &draw);
         assert_eq!(
             cx.update(|_, cx| palette.read(cx).highlighted),
             1,

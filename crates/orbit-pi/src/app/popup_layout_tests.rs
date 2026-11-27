@@ -491,6 +491,7 @@ fn modal_card_uses_zeds_header_and_footer_metrics(cx: &mut gpui::TestAppContext)
 /// what a user actually sees.
 #[gpui::test]
 fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
+    use crate::test_harness::type_keys;
     use crate::theme::{Theme, ThemeKey};
 
     cx.update(|cx| {
@@ -499,11 +500,14 @@ fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
     });
     let cx = cx.add_empty_window();
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
-    let _ = cx.draw(
-        point(px(0.), px(0.)),
-        gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone().into_any_element(),
-    );
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        let _ = cx.draw(
+            point(px(0.), px(0.)),
+            gpui::size(px(1200.), px(820.)),
+            |_, _| app.clone().into_any_element(),
+        );
+    };
+    draw(cx);
 
     // A catalog big enough to be keyboard-navigable, then open the popup the
     // way the model chip does.
@@ -524,11 +528,7 @@ fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
             app.open_picker(PickerKind::Model, window, cx);
         });
     });
-    let _ = cx.draw(
-        point(px(0.), px(0.)),
-        gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone().into_any_element(),
-    );
+    draw(cx);
 
     let highlighted = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_, cx| {
@@ -552,7 +552,7 @@ fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
     assert!(filter_focused, "the popup's filter holds focus");
 
     let before = highlighted(cx).expect("model picker open");
-    cx.simulate_keystrokes("down");
+    type_keys(cx, "down", &draw);
     let after = highlighted(cx).expect("model picker open");
     assert!(
         after > before,
@@ -561,14 +561,14 @@ fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
 
     // It must keep moving on every press, not just the first.
     for expected in after + 1..after + 5 {
-        cx.simulate_keystrokes("down");
+        type_keys(cx, "down", &draw);
         assert_eq!(
             highlighted(cx),
             Some(expected),
             "↓ kept moving to row {expected}"
         );
     }
-    cx.simulate_keystrokes("up");
+    type_keys(cx, "up", &draw);
     assert_eq!(highlighted(cx), Some(after + 3), "↑ moved back");
 }
 

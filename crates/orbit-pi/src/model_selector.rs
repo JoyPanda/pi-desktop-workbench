@@ -1567,6 +1567,7 @@ fn render_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_harness::type_keys;
 
     fn model_rows(n: usize) -> Vec<Row> {
         (0..n)
@@ -2289,19 +2290,22 @@ mod tests {
         let selector = open_test_selector(cx);
         let host = cx.update(|_, cx| cx.new(|_| Host(selector.clone())));
 
-        let _ = cx.draw(
-            point(px(0.), px(0.)),
-            gpui::size(px(900.), px(700.)),
-            |_, _| host.clone().into_any_element(),
-        );
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            let _ = cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(900.), px(700.)),
+                |_, _| host.clone().into_any_element(),
+            );
+        };
+        draw(cx);
         assert_eq!(cx.update(|_, cx| selector.read(cx).highlighted), 1);
-        cx.simulate_keystrokes("down");
+        type_keys(cx, "down", &draw);
         assert_eq!(
             cx.update(|_, cx| selector.read(cx).highlighted),
             2,
             "↓ resolves to the Picker binding inside the anchored popup"
         );
-        cx.simulate_keystrokes("up");
+        type_keys(cx, "up", &draw);
         assert_eq!(
             cx.update(|_, cx| selector.read(cx).highlighted),
             1,
@@ -2322,19 +2326,22 @@ mod tests {
         });
         let cx = cx.add_empty_window();
         let selector = open_test_selector(cx);
-        let _ = cx.draw(
-            point(px(0.), px(0.)),
-            gpui::size(px(360.), px(700.)),
-            |_, _| selector.clone().into_any_element(),
-        );
+        let draw = |cx: &mut gpui::VisualTestContext| {
+            let _ = cx.draw(
+                point(px(0.), px(0.)),
+                gpui::size(px(360.), px(700.)),
+                |_, _| selector.clone().into_any_element(),
+            );
+        };
+        draw(cx);
         assert_eq!(cx.update(|_, cx| selector.read(cx).highlighted), 1);
-        cx.simulate_keystrokes("down");
+        type_keys(cx, "down", &draw);
         assert_eq!(
             cx.update(|_, cx| selector.read(cx).highlighted),
             2,
             "↓ with the real keymap"
         );
-        cx.simulate_keystrokes("up");
+        type_keys(cx, "up", &draw);
         assert_eq!(
             cx.update(|_, cx| selector.read(cx).highlighted),
             1,

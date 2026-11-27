@@ -108,6 +108,8 @@ mod skills;
 mod subagent_status;
 mod temp_files;
 mod terminal;
+#[cfg(test)]
+mod test_harness;
 mod text_measure;
 mod theme;
 mod thinking_display;

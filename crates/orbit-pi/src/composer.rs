@@ -2510,6 +2510,7 @@ mod tests {
 #[cfg(test)]
 mod geometry_tests {
     use super::*;
+    use crate::test_harness::type_keys;
     use gpui::{
         point, size, FocusHandle, KeyBinding, Modifiers, MouseButton, TestAppContext,
         VisualTestContext,
@@ -2679,14 +2680,18 @@ mod geometry_tests {
         cx.update(|window, cx| focus_input(&input, window, cx));
         draw(cx, &harness);
 
+        let keys = |cx: &mut VisualTestContext, keystrokes: &str| {
+            type_keys(cx, keystrokes, |cx| draw(cx, &harness));
+        };
+
         // Caret starts at the end (byte 7); two lefts land on byte 5.
-        cx.simulate_keystrokes("left left");
+        keys(cx, "left left");
         assert_eq!(
             cx.update(|_, cx| input.read(cx).selected_range.start),
             5,
             "left arrow moves the caret"
         );
-        cx.simulate_keystrokes("right");
+        keys(cx, "right");
         assert_eq!(
             cx.update(|_, cx| input.read(cx).selected_range.start),
             6,
@@ -2696,13 +2701,13 @@ mod geometry_tests {
         // Byte 1 is on the first line; Down drops to the same column on the
         // second line (byte 5), and Up returns.
         cx.update(|_, cx| input.update(cx, |input, cx| input.move_to(1, cx)));
-        cx.simulate_keystrokes("down");
+        keys(cx, "down");
         assert_eq!(
             cx.update(|_, cx| input.read(cx).selected_range.start),
             5,
             "down arrow moves to the line below"
         );
-        cx.simulate_keystrokes("up");
+        keys(cx, "up");
         assert_eq!(
             cx.update(|_, cx| input.read(cx).selected_range.start),
             1,
@@ -2778,6 +2783,9 @@ mod geometry_tests {
         assert!(focused, "the input is focused after clicking it");
 
         cx.update(|_, cx| input.update(cx, |input, cx| input.move_to(1, cx)));
+        let _ = cx.draw(point(px(0.), px(0.)), size(px(500.), px(400.)), |_, _| {
+            harness.clone().into_any_element()
+        });
         cx.dispatch_action(Left);
         assert_eq!(
             cx.update(|_, cx| input.read(cx).selected_range.start),
@@ -2786,7 +2794,11 @@ mod geometry_tests {
         );
 
         cx.update(|_, cx| input.update(cx, |input, cx| input.move_to(7, cx)));
-        cx.simulate_keystrokes("left left");
+        type_keys(cx, "left left", |cx| {
+            let _ = cx.draw(point(px(0.), px(0.)), size(px(500.), px(400.)), |_, _| {
+                harness.clone().into_any_element()
+            });
+        });
         assert_eq!(
             cx.update(|_, cx| input.read(cx).selected_range.start),
             5,
@@ -2820,16 +2832,20 @@ mod geometry_tests {
         let caret =
             |cx: &mut VisualTestContext| cx.update(|_, cx| input.read(cx).selected_range.start);
 
+        let keys = |cx: &mut VisualTestContext, keystrokes: &str| {
+            type_keys(cx, keystrokes, |cx| draw(cx, &harness));
+        };
+
         cx.update(|_, cx| input.update(cx, |input, cx| input.move_to(3, cx)));
-        cx.simulate_keystrokes("alt-left");
+        keys(cx, "alt-left");
         assert_eq!(caret(cx), 0, "alt-left moves to the word start");
 
         cx.update(|_, cx| input.update(cx, |input, cx| input.move_to(0, cx)));
-        cx.simulate_keystrokes("alt-right");
+        keys(cx, "alt-right");
         assert_eq!(caret(cx), 5, "alt-right moves past the word");
 
         cx.update(|_, cx| input.update(cx, |input, cx| input.move_to(15, cx)));
-        cx.simulate_keystrokes("secondary-left");
+        keys(cx, "secondary-left");
         assert_eq!(
             caret(cx),
             12,
@@ -2837,7 +2853,7 @@ mod geometry_tests {
         );
 
         cx.update(|_, cx| input.update(cx, |input, cx| input.move_to(0, cx)));
-        cx.simulate_keystrokes("secondary-right");
+        keys(cx, "secondary-right");
         assert_eq!(
             caret(cx),
             11,
@@ -3157,3 +3173,4 @@ mod geometry_tests {
         });
     }
 }
+
