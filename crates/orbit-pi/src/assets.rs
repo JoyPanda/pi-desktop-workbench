@@ -2,7 +2,15 @@
 //! and the Zed-bundled typefaces (IBM Plex Sans for UI, Lilex for code).
 //!
 //! `Assets` implements gpui's `AssetSource` over a compile-time-embedded
-//! directory so packaged builds don't depend on filesystem layout.
+//! directory so packaged builds don't depend on filesystem layout. It also
+//! carries gpui-component's Lucide icon set (`gpui_kit_assets::Assets`), the
+//! one `IconName` draws from — an app has a single `AssetSource`, so the two
+//! trees are multiplexed here rather than chosen at the application.
+//!
+//! The app's tree wins: 28 file names exist in both (`copy.svg`, `check.svg`,
+//! `chevron-*.svg`, …) and they are different artwork, so a path this app
+//! ships always resolves to the app's file. Nothing renders a
+//! gpui-component icon yet; if one does, this precedence is what to revisit.
 //!
 //! A second, debug-only directory (`dev-assets/`) overlays the main one on
 //! macOS debug builds for the Alpha app mark. Keeping it outside `assets/`
@@ -40,19 +48,32 @@ impl Assets {
 
 impl gpui::AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
-        Ok(Self::dirs()
+        if let Some(bytes) = Self::dirs()
             .into_iter()
             .find_map(|dir| dir.get_file(path))
-            .map(|file| Cow::Owned(file.contents().to_vec())))
+            .map(|file| Cow::Owned(file.contents().to_vec()))
+        {
+            return Ok(Some(bytes));
+        }
+        // Not ours: gpui-component's `IconName` icons live in the same
+        // `gpui_kit_assets::Assets` tree. Its `load` reports a miss as an
+        // error where gpui callers expect `Ok(None)`, so a miss is normalized.
+        Ok(gpui_kit_assets::Assets.load(path).ok().flatten())
     }
 
     fn list(&self, path: &str) -> anyhow::Result<Vec<gpui::SharedString>> {
-        Ok(Self::dirs()
+        let mut paths: Vec<gpui::SharedString> = Self::dirs()
             .into_iter()
             .filter_map(|dir| dir.get_dir(path))
             .flat_map(|dir| dir.files())
             .map(|file| gpui::SharedString::from(file.path().to_string_lossy().to_string()))
-            .collect())
+            .collect();
+        for path in gpui_kit_assets::Assets.list(path)? {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+        Ok(paths)
     }
 }
 
@@ -199,5 +220,43 @@ mod tests {
         // TrueType sfnt version — a cheap sanity check that the file is a
         // font, not an empty or placeholder asset.
         assert_eq!(&bytes[..4], &[0x00, 0x01, 0x00, 0x00]);
+    }
+
+    /// The multiplexed source: the app's own files must keep resolving to the
+    /// app's artwork (a shared name would otherwise swap in Lucide's), while
+    /// an icon only `gpui-kit-assets` carries still resolves — that is what
+    /// gpui-component's `IconName` renders through.
+    #[test]
+    fn asset_source_multiplexes_the_app_tree_and_gpui_kit_assets() {
+        use gpui::AssetSource as _;
+
+        use super::Assets;
+
+        // A name both trees carry: the app's file wins.
+        let ours = super::ASSETS.get_file("icons/copy.svg").unwrap();
+        let loaded = Assets.load("icons/copy.svg").unwrap().unwrap();
+        assert_eq!(loaded.as_ref(), ours.contents());
+
+        // A name only gpui-kit-assets carries (Lucide): served from there.
+        let theirs = gpui_kit_assets::Assets
+            .load("icons/battery-full.svg")
+            .expect("gpui-kit-assets carries battery-full");
+        assert_eq!(Assets.load("icons/battery-full.svg").unwrap(), theirs);
+        assert!(super::ASSETS.get_file("icons/battery-full.svg").is_none());
+
+        // A miss is still a miss, not an error.
+        assert!(Assets.load("icons/no-such-icon.svg").unwrap().is_none());
+
+        // `list` merges both trees without repeating a shared name.
+        let listed = Assets.list("icons").unwrap();
+        assert!(listed.iter().any(|path| path == "icons/copy.svg"));
+        assert!(listed.iter().any(|path| path == "icons/battery-full.svg"));
+        for path in ["icons/copy.svg", "icons/check.svg"] {
+            assert_eq!(
+                listed.iter().filter(|listed| *listed == path).count(),
+                1,
+                "{path} is listed once"
+            );
+        }
     }
 }
