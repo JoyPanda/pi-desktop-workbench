@@ -30,7 +30,11 @@ impl SilentPi {
         ));
         std::fs::create_dir_all(&dir).expect("create silent-pi dir");
         let bin = dir.join("silent-pi");
-        std::fs::write(&bin, "#!/bin/sh\nexec cat >/dev/null\n").expect("write silent pi");
+        // Drain stdin, keep stdout open: `exec cat >/dev/null` closes the
+        // stdout pipe at birth and the client reads EOF as ProcessExited
+        // (see fake_pi.rs).
+        std::fs::write(&bin, "#!/bin/sh\nwhile IFS= read -r line; do :; done\n")
+            .expect("write silent pi");
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
             .expect("chmod silent pi");
         Self { dir, bin }

@@ -33,7 +33,13 @@ impl FakePi {
         let log = dir.join("stdin.log");
         std::fs::write(
             &bin,
-            format!("#!/bin/sh\nexec cat >> \"{}\"\n", log.display()),
+            // Log stdin line by line without redirecting stdout: `exec cat >>`
+            // closes the stdout pipe at birth, which the client reads as
+            // ProcessExited (see fake_pi.rs).
+            format!(
+                "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{}\"; done\n",
+                log.display()
+            ),
         )
         .expect("write fake pi");
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))

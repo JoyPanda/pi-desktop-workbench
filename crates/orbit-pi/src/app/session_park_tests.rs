@@ -19,7 +19,12 @@ struct FakePi {
 
 impl FakePi {
     fn start(tag: &str) -> Self {
-        Self::install(tag, "#!/bin/sh\nexec cat >/dev/null\n".to_string())
+        // Drain stdin, keep stdout open (see fake_pi.rs): a closed stdout
+        // pipe reads as ProcessExited while the child is still alive.
+        Self::install(
+            tag,
+            "#!/bin/sh\nwhile IFS= read -r line; do :; done\n".to_string(),
+        )
     }
 
     /// A pi that is slow to answer `new_session` (the boot window where the
@@ -308,7 +313,7 @@ sleep 1
 emit '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":" world"}}'
 emit '{"type":"agent_end","willRetry":false}'
 emit '{"type":"agent_settled"}'
-exec cat >/dev/null
+while IFS= read -r line; do :; done
 "#;
     let running = FakePi::install("stream-running", script.to_string());
     let target = FakePi::start("stream-target");
@@ -418,7 +423,7 @@ fn parked_session_cancels_custom_ui_with_a_top_level_flag(cx: &mut gpui::TestApp
 printf '%s\n' '{{"type":"extension_ui_request","id":"req-1","method":"custom"}}'
 IFS= read -r line
 printf '%s\n' "$line" > "{out}"
-exec cat >/dev/null
+while IFS= read -r line; do :; done
 "#,
         out = out.display()
     );
@@ -744,7 +749,7 @@ fn parked_queue_tracks_updates_while_away(cx: &mut gpui::TestAppContext) {
     let script = r#"#!/bin/sh
 sleep 1
 printf '%s\n' '{"type":"queue_update","steering":[],"followUp":[]}'
-exec cat >/dev/null
+while IFS= read -r line; do :; done
 "#;
     let running = FakePi::install("queue-drain", script.to_string());
     let target = FakePi::start("queue-drain-target");
@@ -918,7 +923,7 @@ fn background_completion_survives_process_reaping_and_reading(cx: &mut gpui::Tes
     let app = test_app(cx);
     let fake = FakePi::install("completed-status", r#"#!/bin/sh
 printf '%s\n' '{"type":"agent_start"}' '{"type":"message_start","message":{"role":"assistant","content":[]}}' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"stopReason":"stop"}}' '{"type":"agent_end","willRetry":false}' '{"type":"agent_settled","aborted":false}'
-exec cat >/dev/null
+while IFS= read -r line; do :; done
 "#.to_string());
     let path = fake.dir.join("session.jsonl");
     cx.update(|cx| {
