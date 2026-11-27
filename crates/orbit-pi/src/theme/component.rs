@@ -80,7 +80,16 @@ fn apply(cx: &mut App) {
 /// Each field is the closest role the app already names; where the palette has
 /// no separate step for a role (the status hovers, for one) the field repeats
 /// its base color rather than falling back to a bundled default.
+///
+/// Roles the palette has no counterpart for (the raw chart and badge ramps,
+/// the tile grid) keep gpui-component's mode-appropriate set, so a component
+/// adopted before its role is mapped renders in a neutral palette instead of
+/// an invisible one.
 fn colors(theme: &Theme) -> ThemeColor {
+    let base = match theme.mode {
+        ThemeMode::Dark => *ThemeColor::dark(),
+        ThemeMode::Light => *ThemeColor::light(),
+    };
     ThemeColor {
         // ── Canvas, ink, hairlines ───────────────────────────────────────────
         background: theme.background,
@@ -211,7 +220,7 @@ fn colors(theme: &Theme) -> ThemeColor {
         scrollbar: theme.background,
         scrollbar_thumb: theme.text_muted,
         scrollbar_thumb_hover: theme.text_secondary,
-        ..ThemeColor::default()
+        ..base
     }
 }
 
