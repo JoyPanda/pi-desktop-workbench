@@ -18,16 +18,30 @@ icon = [
 osx_minimum_system_version = "13.0"
 
 [dependencies]
-# `windows-manifest` is a gpui default feature that links gpui's own
+# Zed's GPU-accelerated UI framework, the `gpui-pre` re-publish of
+# zed@5b055fa pinned to `=0.3.3` exactly — never float it (see the note in the
+# workspace `Cargo.toml` and `third_party/gpui-pre/UPSTREAM.md`).
+# `windows-manifest` is a gpui-pre default feature that embeds gpui's own
 # `RT_MANIFEST` resource into every binary. This crate embeds its own manifest
 # (see `build.rs`), and two manifests of the same type/id/language make CVTRES
-# fail the Windows link with `CVT1100: duplicate resource`. So it is turned off
-# here and the app's manifest — the superset, with per-monitor-v2 DPI, long
-# paths, `asInvoker`, and the supportedOS list — is the one that ships. The
-# remaining defaults are re-listed because `default-features = false` clears all
-# of them; `font-kit`/`wayland`/`x11` gate Linux/FreeBSD-only dependencies, so
-# they stay no-ops on Windows and macOS.
-gpui = { version = "0.2.2", default-features = false, features = [
+# fail the Windows link with `CVT1100: duplicate resource`. The fork makes that
+# embed a no-op instead of turning the feature off (`gpui-pre-platform` enables
+# it unconditionally for Windows), so the app's manifest — the superset, with
+# per-monitor-v2 DPI, long paths, `asInvoker`, and the supportedOS list — is the
+# one that ships. The remaining defaults are re-listed because
+# `default-features = false` clears all of them; `font-kit`/`wayland`/`x11` gate
+# Linux/FreeBSD-only dependencies, so they stay no-ops on Windows and macOS.
+gpui = { package = "gpui-pre", version = "=0.3.3", default-features = false, features = [
+    "font-kit",
+    "wayland",
+    "x11",
+] }
+# The platform backends moved out of `gpui`: macOS/Metal, Windows/DirectX, and
+# Linux/Blade each live in their own gpui-pre crate, and this one picks the
+# current target's. `runtime_shaders` compiles Metal shaders at launch (the
+# macOS shader source is not embedded) and `font-kit` selects the platform
+# font backend, exactly as they did on the monolithic gpui dependency.
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.3", features = [
     "font-kit",
     "runtime_shaders",
     "wayland",
@@ -98,8 +112,9 @@ alacritty_terminal = { version = "0.26", default-features = false }
 crossbeam-channel = "0.5.17"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# Match gpui 0.2.2 so we can set the Dock icon from the embedded PNG
-# when running without a bundled .app (cargo run).
+# The Dock icon without a bundled .app (`cargo run`) is drawn through the
+# Objective-C runtime. Pinned to the same `=0.26.0` that gpui-pre-macos pins, so
+# `cocoa::id` stays one crate instance here and in the backend.
 cocoa = "=0.26.0"
 # Detect installed editors/terminals and open workspace folders in them.
 objc2 = "0.6"
@@ -159,14 +174,14 @@ tar = "0.4"
 libc = "0.2"
 
 # The app's own window caption on Windows (see `platform::start_window_drag`)
-# needs the window's native handle. Already in the graph through gpui, so this
-# adds no package — it only names the version gpui itself uses.
+# needs the window's native handle. `raw-window-handle` is the same major as
+# gpui-pre's, so the trait and the `Window` impl are one crate instance.
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
 # Enumerate installed editors/terminals and extract their icons for the
-# header's "open in" menu. Already in the graph through gpui, so this adds no
-# package — it names the version and the Win32 surface (shell, GDI, windows &
-# messaging) the icon extraction needs.
+# header's "open in" menu. gpui-pre-windows binds the Win32 surface through the
+# `windows` 0.62 crate instead, so this is an independent dependency now; the
+# feature list is the minimum the icon extraction and shell integration need.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -181,14 +196,14 @@ windows-sys = { version = "0.61", features = [
 
 [build-dependencies]
 # Embeds the Windows icon, version metadata, and per-monitor-DPI manifest into
-# `orbit-pi.exe` (see `build.rs`). Already in the dependency graph through
-# gpui, so it pulls in no new packages. A no-op on non-Windows targets.
+# `orbit-pi.exe` (see `build.rs`). This is the only manifest the binary carries:
+# gpui-pre's manifest embed is a no-op in the fork. A no-op on non-Windows
+# targets.
 embed-resource = "3"
 
 [dev-dependencies]
-gpui = { version = "0.2.2", default-features = false, features = [
+gpui = { package = "gpui-pre", version = "=0.3.3", default-features = false, features = [
     "font-kit",
-    "runtime_shaders",
     "test-support",
     "wayland",
     "x11",

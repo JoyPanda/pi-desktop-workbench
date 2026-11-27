@@ -4,10 +4,17 @@ members = [
     "crates/orbit-pi",
     "crates/orbit-rpc",
 ]
-exclude = ["third_party/gpui"]
+exclude = ["third_party/gpui-pre", "third_party/gpui-pre-windows"]
 
+# The gpui-pre family is pinned to `=0.3.3` on purpose. 0.3.14 deleted the
+# ClearType/subpixel rasterizer that 0.3.3 still carries, so a routine
+# `cargo update` would silently return Windows text to grayscale. A bump is a
+# migration project (see third_party/gpui-pre/UPSTREAM.md), never an update.
+# Only the two crates that need local patches are vendored; the rest of the
+# family (platform, macOS, Windows, Linux backends) comes from crates.io.
 [patch.crates-io]
-gpui = { path = "third_party/gpui" }
+gpui-pre = { path = "third_party/gpui-pre" }
+gpui-pre-windows = { path = "third_party/gpui-pre-windows" }
 
 [workspace.package]
 edition = "2021"
