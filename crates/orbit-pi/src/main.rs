@@ -668,8 +668,19 @@ fn main() {
         // Rename the process before the menu bar is built so macOS labels the
         // application menu "Orbit" instead of the executable (`orbit-pi`).
         platform::set_process_name("Orbit");
-        bind_keys(cx);
         theme::init(cx);
+        // gpui-component comes up over the app's own palette: its `Root` is the
+        // window's top-level view (see `main_window::open`) and its theme is
+        // the `ActiveTheme` global components will read. Nothing is rendered
+        // from it yet — the bridge exists so the two never disagree about a
+        // token once something is.
+        theme::install_component_theme(cx);
+        // The app's keymap is installed *after* the component library's: a
+        // binding whose context matches at the same depth as another is
+        // resolved in favor of the one added later, and `Root` carries its own
+        // Tab/Shift-Tab bindings in a context every surface sits inside (see
+        // `main_window`'s keymap test).
+        bind_keys(cx);
         // Adopt the persisted interface language before the first paint (and
         // before the menu bar below reads its labels).
         i18n::set_language(theme::get(cx).ui.language);

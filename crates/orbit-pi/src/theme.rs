@@ -26,6 +26,9 @@ pub use registry::{bundled_keys, keys_for, load_install_themes, Chrome, ThemeKey
 /// resolved through this theme.
 pub mod tokens;
 
+mod component;
+pub use component::install as install_component_theme;
+
 /// Dark or light appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThemeMode {

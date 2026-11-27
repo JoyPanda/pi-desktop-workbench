@@ -50,6 +50,29 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.3", features = 
 # Compile-time locale loading (YAML) and the global `t!` lookup used by the
 # `tr!`/`tr_cow!` macros. Locales live in `crates/orbit-pi/locales/`.
 rust-i18n = "4.2"
+# The GPUI Kit component library: its `Root` is the window's top-level view (it
+# owns text selection, dialogs, sheets, notifications) and its `Theme` is the
+# `ActiveTheme` global. Pinned `=0.6.0` alongside the gpui-pre family (see the
+# workspace `Cargo.toml`): a bump is a porting project, never a routine update.
+# Only the window root and the theme bridge are used — no components yet.
+gpui-component = "=0.6.0"
+# gpui-component's behavior layer (window-level text selection, scrollbar and
+# resize machinery). Named directly so its version is pinned exactly with the
+# rest of the family — gpui-component asks for `^0.6.0`, which would otherwise
+# float to the next 0.6.x patch on any `cargo update`. The one call site is the
+# text-selection suppression hatch in `main_window`.
+gpui-base = "=0.6.0"
+# The icon set behind gpui-component's `IconName` enum, multiplexed into this
+# crate's `AssetSource` (see `assets.rs`). A *regular* dependency on purpose:
+# its `build.rs` publishes `links = "gpui-kit-default-icons"`, and cargo forwards
+# that to `gpui-component`'s build script only through regular dependencies.
+# Pinned with the family.
+gpui-kit-assets = "=0.6.0"
+# gpui-component's derive macros, split into their own crate. Named directly for
+# the same reason as gpui-base: `^0.6.0` floats the macros to the newest 0.6.x,
+# and 0.6.6's `IntoPlot` derive no longer matches 0.6.0's `Plot` trait — the
+# published pair only compiles at matching versions.
+gpui-component-macros = "=0.6.0"
 # Native open/folder dialogs (NSOpenPanel on macOS) for folder selection
 rfd = "0.15"
 orbit-rpc = { path = "../orbit-rpc" }

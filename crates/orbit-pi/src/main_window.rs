@@ -19,6 +19,23 @@ use gpui::{
 
 use crate::{app::OrbitApp, platform, theme};
 
+/// Hand a mouse-down to the app's own selection stack instead of the native
+/// one gpui-component's [`Root`](gpui_component::Root) installs.
+///
+/// `Root` renders a `gpui_base::TextSelectionLayer`, whose capture-phase mouse
+/// handlers would start a window-level selection next to the app's own
+/// (`transcript_view::register_text_selection`, `diff_select`). The app owns
+/// selection on every surface — its grains, its right-click menu, its copy
+/// assembly — so the native layer is suppressed on each press rather than left
+/// to run alongside. Call sites: the shell's root element in `app::view`.
+///
+/// Suppression survives the press because the layer resets it in *its* capture
+/// handler, which is registered when `Root` paints the layer — before the app
+/// view, and so before this runs.
+pub(crate) fn suppress_native_text_selection(cx: &mut App) {
+    gpui_base::GlobalState::suppress_text_selection(cx);
+}
+
 /// The shell model, parked while no window is open.
 ///
 /// A window only *views* this entity — the pi child process behind it, the
@@ -139,7 +156,13 @@ pub fn open(cx: &mut App) {
                 window.focus(&handle, cx);
             });
 
-            app
+            // The window's top-level view, as gpui-component requires: `Root`
+            // owns the window-level overlay stack (dialogs, sheets,
+            // notifications, tooltips) and the native text-selection layer.
+            // `bordered(false)` keeps the platform decoration the app already
+            // ships — `Root`'s Linux client-side border would add a shadow
+            // inset this window has never had.
+            cx.new(|cx| gpui_component::Root::new(app, window, cx).bordered(false))
         },
     ) else {
         eprintln!("Orbit: could not open the main window");
@@ -185,7 +208,10 @@ fn spawn_heartbeat(cx: &mut App, app: &Entity<OrbitApp>) {
 mod tests {
     use super::*;
     use crate::theme::{Theme, ThemeKey};
-    use gpui::TestAppContext;
+    use gpui::{
+        div, point, KeyContext, Keystroke, Modifiers, MouseButton, Render, TestAppContext,
+        VisualTestContext, Window,
+    };
 
     /// Regression for #63: after the window closes the app is still alive, so
     /// the next window has to render the parked shell — same `OrbitApp`, same
@@ -214,6 +240,148 @@ mod tests {
                 Some(first),
                 "the shell stays parked for the next window"
             );
+        });
+    }
+
+    /// The shell's root element with or without the native-selection
+    /// suppression the real shell installs, over one selectable run.
+    struct NativeTextProbe {
+        suppress: bool,
+    }
+
+    impl Render for NativeTextProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let probe = div()
+                .size_full()
+                .child(gpui_base::SelectableText::new(
+                    "native-text-probe",
+                    "alpha beta gamma",
+                ));
+            if self.suppress {
+                probe.capture_any_mouse_down(|_, _, cx| suppress_native_text_selection(cx))
+            } else {
+                probe
+            }
+        }
+    }
+
+    /// Drag across the probe painted under `gpui_component::Root` and report
+    /// what the native window selection holds afterwards.
+    fn drag_under_root(cx: &mut TestAppContext, suppress: bool) -> String {
+        let cx = cx.add_empty_window();
+        cx.update(|_, cx| {
+            cx.set_global(Theme::for_id(ThemeKey::ORBIT));
+            theme::install_component_theme(cx);
+        });
+        let root = cx.update(|window, cx| {
+            cx.new(|cx| {
+                let probe = cx.new(|_| NativeTextProbe { suppress });
+                gpui_component::Root::new(probe, window, cx).bordered(false)
+            })
+        });
+        // The mouse listeners are registered while the view paints, so redraw
+        // between input events like a real window does between frames.
+        let paint = |cx: &mut VisualTestContext| {
+            let root = root.clone();
+            cx.draw(point(px(0.), px(0.)), size(px(600.), px(400.)), move |_, _| {
+                root.clone().into_any_element()
+            });
+        };
+        paint(cx);
+        let start = point(px(2.), px(6.));
+        let end = point(px(90.), px(6.));
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        paint(cx);
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+        paint(cx);
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        paint(cx);
+        cx.update(gpui_base::TextSelection::selected_text)
+    }
+
+    /// Plan §5, last row: `Root` installs a capture-phase text-selection layer
+    /// and the app's own selection uses capture-phase handlers too. Only the
+    /// app's may act — suppressing the native layer is what keeps it inert even
+    /// over text that does participate in native selection.
+    #[gpui::test]
+    fn root_native_selection_stays_inert_while_the_app_owns_selection(
+        cx: &mut TestAppContext,
+    ) {
+        // Control: painted under `Root` without the suppression, the same drag
+        // selects — so the layer really is live and the test can fail.
+        let live = drag_under_root(cx, false);
+        assert!(
+            !live.is_empty(),
+            "the native layer must select when nothing suppresses it"
+        );
+        let suppressed = drag_under_root(cx, true);
+        assert!(
+            suppressed.is_empty(),
+            "the native layer selected {suppressed:?} despite the suppression"
+        );
+    }
+
+    /// `Root` carries the app's whole view, so everything it binds can be
+    /// reached from every surface: `tab` / `shift-tab` in its `Root` context
+    /// (which ties with the shell's global `FocusNext`/`FocusPrev`), `cmd-c`
+    /// for its native selection, and — in debug builds — an inspector shortcut
+    /// with no context at all. None of it may outrank the app: focus traversal
+    /// stays with the shell's handlers, which honor its focus-traversal blocks.
+    ///
+    /// Ties are broken by insertion order, which is why `main` installs the
+    /// component library before the app's keymap. This test pins that order.
+    #[gpui::test]
+    fn root_key_bindings_do_not_outrank_the_app_keymap(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::for_id(ThemeKey::ORBIT));
+            theme::install_component_theme(cx);
+            crate::bind_keys(cx);
+            let keymap = cx.key_bindings();
+            let root_context = [KeyContext::parse("Root").unwrap()];
+            let resolve = |keys: &str, context: &[KeyContext]| {
+                let stroke = Keystroke::parse(keys).expect("a valid keystroke");
+                let (bindings, _) = keymap.borrow().bindings_for_input(&[stroke], context);
+                bindings.first().cloned()
+            };
+
+            let tab = resolve("tab", &root_context).expect("tab stays bound under Root");
+            assert!(
+                tab.action().as_any().is::<crate::FocusNext>(),
+                "Root's Tab outranked the shell's FocusNext: {}",
+                tab.action().name()
+            );
+            let shift_tab =
+                resolve("shift-tab", &root_context).expect("shift-tab stays bound under Root");
+            assert!(
+                shift_tab.action().as_any().is::<crate::FocusPrev>(),
+                "Root's TabPrev outranked the shell's FocusPrev: {}",
+                shift_tab.action().name()
+            );
+            // In the composer, cmd-c must still reach the app's own copy.
+            let composer_context = [
+                KeyContext::parse("Root").unwrap(),
+                KeyContext::parse("Composer").unwrap(),
+            ];
+            let copy = resolve("secondary-c", &composer_context).expect("cmd-c stays bound");
+            assert!(
+                copy.action().as_any().is::<crate::Copy>(),
+                "Root's Copy outranked the composer's: {}",
+                copy.action().name()
+            );
+            // `gpui-component` binds its element inspector in debug builds; the
+            // `NoAction` binding the bridge adds back leaves the key unbound.
+            #[cfg(debug_assertions)]
+            {
+                let inspector = if cfg!(target_os = "macos") {
+                    "cmd-alt-i"
+                } else {
+                    "ctrl-shift-i"
+                };
+                assert!(
+                    resolve(inspector, &root_context).is_none(),
+                    "{inspector} must not open gpui-component's inspector"
+                );
+            }
         });
     }
 }

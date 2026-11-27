@@ -599,6 +599,14 @@ impl Render for OrbitApp {
             .bg(theme.background)
             .text_color(theme.text_primary)
             .font_family(theme::ui_font_family())
+            // Selection on every surface in this shell is the app's own, so
+            // the window root's native selection layer is kept inert for each
+            // press (see `main_window::suppress_native_text_selection`). The
+            // app's capture handlers register after `Root`'s layer, so this
+            // runs after the layer's own capture pass and before its bubble.
+            .capture_any_mouse_down(|_, _, cx| {
+                crate::main_window::suppress_native_text_selection(cx)
+            })
             // Dropping files anywhere in the window attaches them (the
             // composer highlights when the drag passes over it).
             .on_drop(cx.listener(Self::on_file_drop))
