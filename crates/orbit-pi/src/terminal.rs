@@ -2206,6 +2206,7 @@ fn abbreviate_home(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_harness::type_keys;
     use alacritty_terminal::vte::ansi::Processor;
 
     fn stroke(key: &str) -> Keystroke {
@@ -2597,7 +2598,14 @@ mod tests {
             size(px(400.), px(160.)),
             move |_, _| element.clone().into_any_element(),
         );
-        cx.simulate_keystrokes("o r b i t");
+        type_keys(cx, "o r b i t", |cx| {
+            let element = view.clone();
+            cx.draw(
+                point(px(0.), px(0.)),
+                size(px(400.), px(160.)),
+                move |_, _| element.clone().into_any_element(),
+            );
+        });
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let mut screen = String::new();
@@ -2655,6 +2663,20 @@ mod tests {
         let terminal = cx
             .update(|_, cx| panel.read(cx).active_terminal().cloned())
             .expect("terminal created");
+        // `TerminalView::new` builds the autostart shell off the UI thread and
+        // assigns it when that task lands. Swapping `cat` in first would be
+        // undone by the task's own assignment a moment later, so wait for it.
+        for _ in 0..200 {
+            if cx.update(|_, cx| terminal.read(cx).session.is_some()) {
+                break;
+            }
+            cx.background_executor.run_until_parked();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            cx.update(|_, cx| terminal.read(cx).session.is_some()),
+            "the panel's autostart shell came up"
+        );
         let cat = TerminalSession::with_shell(
             &std::env::temp_dir(),
             40,
@@ -2673,7 +2695,14 @@ mod tests {
             size(px(400.), px(200.)),
             move |_, _| p.clone().into_any_element(),
         );
-        cx.simulate_keystrokes("o r b i t");
+        type_keys(cx, "o r b i t", |cx| {
+            let p = panel.clone();
+            cx.draw(
+                point(px(0.), px(0.)),
+                size(px(400.), px(200.)),
+                move |_, _| p.clone().into_any_element(),
+            );
+        });
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let mut screen = String::new();
