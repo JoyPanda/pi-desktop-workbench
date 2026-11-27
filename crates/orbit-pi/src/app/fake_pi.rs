@@ -23,7 +23,14 @@ impl FakePi {
         {
             use std::os::unix::fs::PermissionsExt;
             let bin = dir.join("fake-pi");
-            std::fs::write(&bin, "#!/bin/sh\nexec cat >/dev/null\n").expect("fake pi");
+            // Drain stdin and never write to stdout, while keeping the stdout
+            // pipe open for as long as the client holds its end: the reader
+            // thread reports EOF on stdout as `ProcessExited`, so a `cat
+            // >/dev/null` (which closes the pipe the moment it starts) announced
+            // the death of a child that was still running, and a test that
+            // pumped the event stream saw its client dropped underneath it.
+            std::fs::write(&bin, "#!/bin/sh\nwhile IFS= read -r line; do :; done\n")
+                .expect("fake pi");
             std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         }
         #[cfg(windows)]
@@ -76,4 +83,41 @@ pub(super) fn adopt_alive(app: &mut OrbitApp, fake: &FakePi) {
         .unwrap_or_else(|| std::env::temp_dir());
     let client = spawn_client(fake, &workspace);
     app.adopt_client(client);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The promise the tests above lean on: a client adopted from the fake is
+    /// still there when the test pumps the heartbeat. The reader thread reads
+    /// EOF on the child's stdout as `ProcessExited` and the app then drops the
+    /// client, so the keep-alive script has to hold that pipe open — a fake
+    /// that closes it drops the client underneath any test that ticks.
+    #[gpui::test]
+    fn a_keep_alive_client_outlives_a_tick_taken_after_the_child_started(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let fake = FakePi::start("keep-alive");
+        prepare(cx);
+        let cx = cx.add_empty_window();
+        let app = cx.update(|_, cx| cx.new(OrbitApp::new));
+
+        cx.update(|_, cx| {
+            app.update(cx, |app, _cx| adopt_alive(app, &fake));
+        });
+        // Long enough for the reader thread to have published an exit the
+        // child did not have.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        cx.update(|_, cx| {
+            app.update(cx, |app, cx| {
+                app.tick(cx);
+                assert!(
+                    app.client.is_some(),
+                    "the keep-alive child exited on its own while the test still held it"
+                );
+                app.drop_client();
+            });
+        });
+    }
 }
