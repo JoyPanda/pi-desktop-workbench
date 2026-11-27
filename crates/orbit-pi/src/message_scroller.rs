@@ -11,9 +11,11 @@
 //! also resumes it when a shrink no longer fills the viewport and the list
 //! drops its anchor; a gap that merely falls inside the band does not.
 //!
-//! GPUI 0.2.2 has no `FollowMode::Tail`; [`ListAlignment::Bottom`] plus a
-//! past-the-end `scroll_to` is the equivalent: the last row's bottom stays
-//! against the viewport while it grows.
+//! GPUI's own tail following ([`gpui::FollowMode::Tail`]) re-pins the list on
+//! every layout, which cannot express the [`TAIL_SLACK`] band this scroller
+//! keeps. The pin therefore stays app-owned: [`ListAlignment::Bottom`] plus a
+//! past-the-end `scroll_to` keeps the last row's bottom against the viewport
+//! while it grows.
 
 use std::{cell::Cell, ops::Range, rc::Rc};
 
@@ -84,22 +86,34 @@ impl MessageScrollerState {
         let unread = Rc::new(Cell::new(false));
         let overflowing = Rc::new(Cell::new(false));
         {
+            // A clone for the handler: handing `list` itself to the closure
+            // would keep the receiver borrowed while the closure moves it.
+            let list_state = list.clone();
             let following_tail = following_tail.clone();
             let visible_start = visible_start.clone();
             let unread = unread.clone();
             let overflowing = overflowing.clone();
             list.set_scroll_handler(move |event: &ListScrollEvent, _, cx| {
                 visible_start.set(event.visible_range.start);
-                // The list is already borrowed for this gesture, so the gap
-                // comes from the event instead of a second read. Scrollbar
-                // drags and chained deltas update the pin themselves. Content
+                // The list holds its own state mutably for the whole gesture, so
+                // the tail distance cannot be read inside this handler. Read it
+                // back once the gesture is over: a deferred task runs at the end
+                // of this update — before the next draw and before any later
+                // event — which is where the pin used to be written. Scrollbar
+                // drags and chained deltas update the pin themselves; content
                 // growth does not come through here.
-                note_tail_distance(
-                    f32::from(event.offset_from_bottom),
-                    &following_tail,
-                    &unread,
-                    &overflowing,
-                );
+                let list = list_state.clone();
+                let following_tail = following_tail.clone();
+                let unread = unread.clone();
+                let overflowing = overflowing.clone();
+                cx.defer(move |_| {
+                    note_tail_distance(
+                        tail_gap(&list),
+                        &following_tail,
+                        &unread,
+                        &overflowing,
+                    );
+                });
                 cx.refresh_windows();
             });
         }
@@ -158,7 +172,7 @@ impl MessageScrollerState {
         if self.is_following_tail() {
             return false;
         }
-        let overflow = self.list.max_offset_for_scrollbar().height > px(0.);
+        let overflow = self.list.max_offset_for_scrollbar().y > px(0.);
         if overflow {
             self.overflowing.set(true);
             return true;
@@ -193,7 +207,7 @@ impl MessageScrollerState {
     /// True when the transcript holds more content than the viewport shows
     /// (drives the navigation-rail visibility).
     pub fn is_scrollable(&self) -> bool {
-        self.list.max_offset_for_scrollbar().height > px(0.)
+        self.list.max_offset_for_scrollbar().y > px(0.)
     }
 
     pub fn is_following_tail(&self) -> bool {
@@ -236,15 +250,16 @@ impl MessageScrollerState {
 
     /// Mark rows in `range` for remeasurement (streaming growth).
     ///
-    /// The last measured height stays in the scroll extent until layout, so a
-    /// wheel event in that window still has somewhere to go. The reader's
-    /// offset inside the row is left alone. While following, the tail is
-    /// pinned after the invalidation.
+    /// The row keeps its last measured height as a size hint, so the scroll
+    /// extent — and a wheel event in the window before layout — still has
+    /// somewhere to go. The reader's offset inside the row is preserved by the
+    /// list's absolute anchor. While following, the tail is pinned after the
+    /// remeasure.
     pub fn remeasure_items(&self, range: Range<usize>) -> bool {
         if !self.valid_range(&range) || range.start == range.end {
             return false;
         }
-        self.list.invalidate(range);
+        self.list.remeasure_items(range);
         self.stick_if_following();
         true
     }
@@ -258,9 +273,9 @@ impl MessageScrollerState {
     /// a reader already inside the slack already has a real row, and moving
     /// them would jump a full screen.
     ///
-    /// The row is invalidated in place: its last height and the reader's
-    /// offset stay until layout measures the new one, so opening a card in
-    /// the message on screen does not snap that row to the viewport top.
+    /// The row is remeasured in place: its last height stays as a size hint and
+    /// the reader's offset inside it is re-anchored, so opening a card in the
+    /// message on screen does not snap that row to the viewport top.
     pub fn remeasure_toggle(&self, ix: usize) -> bool {
         if ix >= self.item_count() {
             return false;
@@ -285,7 +300,7 @@ impl MessageScrollerState {
                 self.visible_start.set(anchor.item_ix);
             }
         }
-        self.list.invalidate(ix..ix + 1);
+        self.list.remeasure_items(ix..ix + 1);
         // A run that still fits, or a freeze that did not land on a row,
         // stays pinned. Detached readers are left on the anchor they have.
         self.stick_if_following();
@@ -333,7 +348,7 @@ impl MessageScrollerState {
         // below the actual scroll top. Clamp that sentinel to the real pixel
         // range before applying a chained wheel delta; otherwise small upward
         // gestures over a Thought card get clamped straight back to the tail.
-        let max = self.list.max_offset_for_scrollbar().height;
+        let max = self.list.max_offset_for_scrollbar().y;
         // Nothing to scroll. An upward flick must not snap a reader who just
         // left the tail back onto it — `target == max` below means "at the
         // live edge", and a zero extent is that edge for both directions.
@@ -350,7 +365,7 @@ impl MessageScrollerState {
     /// releases. Programmatic offsets do not fire the list's scroll handler,
     /// so the pin and the rail hint are written here.
     fn apply_scrollbar_offset(&self, target: Pixels) {
-        let max = self.list.max_offset_for_scrollbar().height;
+        let max = self.list.max_offset_for_scrollbar().y;
         let target = target.clamp(px(0.), max);
         if max <= px(SCROLLBAR_EDGE) || target >= max - px(SCROLLBAR_EDGE) {
             self.scroll_to_end();
@@ -372,7 +387,7 @@ impl MessageScrollerState {
     /// scrollbar reports. At the tail the logical offset is a past-the-end
     /// sentinel; without the clamp the thumb would paint below the track.
     fn scrolled_px(&self) -> (f32, f32) {
-        let max = f32::from(self.list.max_offset_for_scrollbar().height);
+        let max = f32::from(self.list.max_offset_for_scrollbar().y);
         let scrolled = (-f32::from(self.list.scroll_px_offset_for_scrollbar().y)).clamp(0., max);
         (scrolled, max)
     }
@@ -413,7 +428,7 @@ impl MessageScrollerState {
             return;
         };
         let viewport = self.list.viewport_bounds();
-        let max = f32::from(self.list.max_offset_for_scrollbar().height);
+        let max = f32::from(self.list.max_offset_for_scrollbar().y);
         let Some(next) = scrollbar_dragged(
             drag.start_scrolled,
             y - drag.start_y,
@@ -459,6 +474,21 @@ impl MessageScrollerState {
 
 fn within_tail_slack(distance: f32) -> bool {
     distance <= TAIL_SLACK
+}
+
+/// Pixels between the viewport's bottom edge and the end of the content — the
+/// distance [`TAIL_SLACK`] measures. Zero when the content fits or the reader
+/// is on the tail.
+///
+/// [`ListScrollEvent`] reports the visible range but not this distance any
+/// more, and the list holds its state mutably while its scroll handler runs, so
+/// it is read back from the scroll extent afterwards (see the deferred call in
+/// [`MessageScrollerState::new`]). `ListState::is_scrolled_to_end` derives the
+/// same two numbers as a bool; the slack needs the pixels.
+fn tail_gap(list: &ListState) -> f32 {
+    let max = list.max_offset_for_scrollbar().y;
+    let scrolled = (-list.scroll_px_offset_for_scrollbar().y).clamp(px(0.), max);
+    f32::from((max - scrolled).max(px(0.)))
 }
 
 /// Lock following when `distance` is inside the slack, and release it past that.
@@ -1099,7 +1129,7 @@ mod tests {
         });
         draw_probe(cx, &probe);
         let content = (rows - 1) as f32 * 40. + live_height;
-        let max = f32::from(state.list_state().max_offset_for_scrollbar().height);
+        let max = f32::from(state.list_state().max_offset_for_scrollbar().y);
         let expected = (content - 400.).max(0.);
         assert!(
             (max - expected).abs() < 1.,
@@ -1122,11 +1152,11 @@ mod tests {
         let top = cx.debug_bounds("probe-row-12").unwrap().top();
 
         for height in [1100., 1400., 1800.] {
-            let max_before = state.list_state().max_offset_for_scrollbar().height;
+            let max_before = state.list_state().max_offset_for_scrollbar().y;
             heights.borrow_mut().insert(12, height);
             assert!(state.remeasure_items(12..13));
             assert_eq!(
-                state.list_state().max_offset_for_scrollbar().height,
+                state.list_state().max_offset_for_scrollbar().y,
                 max_before,
                 "invalidate keeps the last measured height until layout"
             );
@@ -1159,11 +1189,11 @@ mod tests {
         assert!(cx.debug_bounds("probe-row-20").is_none());
         let top = cx.debug_bounds("probe-row-9").unwrap().top();
 
-        let max_before = state.list_state().max_offset_for_scrollbar().height;
+        let max_before = state.list_state().max_offset_for_scrollbar().y;
         heights.borrow_mut().insert(20, 1200.);
         assert!(state.remeasure_items(20..21));
         assert_eq!(
-            state.list_state().max_offset_for_scrollbar().height,
+            state.list_state().max_offset_for_scrollbar().y,
             max_before
         );
         state.note_activity();
@@ -1201,7 +1231,7 @@ mod tests {
         // that request had been dropped.
         assert!(cx.debug_bounds("message-scroller-jump").is_some());
         let redraw_scheduled = cx.update(|window, cx| {
-            let scheduled = window.flush_next_frame(cx);
+            let scheduled = window.simulate_next_frame(cx) > 0;
             scheduled && window.is_dirty()
         });
         assert!(
@@ -1231,7 +1261,7 @@ mod tests {
             })
         });
         draw_probe(cx, &probe);
-        let max = f32::from(state.list_state().max_offset_for_scrollbar().height);
+        let max = f32::from(state.list_state().max_offset_for_scrollbar().y);
         assert!(
             (max - 500.).abs() < 1.,
             "rows above the live row stay unmeasured; max {max}"
@@ -1240,7 +1270,7 @@ mod tests {
         state.scroll_by(px(-60.));
         draw_probe(cx, &probe);
         assert!(!state.is_following_tail());
-        let max = f32::from(state.list_state().max_offset_for_scrollbar().height);
+        let max = f32::from(state.list_state().max_offset_for_scrollbar().y);
         assert!((max - 500.).abs() < 1., "the scroll must not measure history; max {max}");
 
         heights.borrow_mut().insert(12, 100.);
