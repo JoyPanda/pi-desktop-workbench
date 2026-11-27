@@ -412,11 +412,19 @@ fn band_height(geometry: &Geometry) -> f32 {
     MONTH_STRIP_H + 7. * geometry.h + 6. * geometry.gap
 }
 
+/// Vertical anchor of the readout card inside the calendar band.
+enum BandAnchor {
+    /// Offset from the band's top edge.
+    Top(f32),
+    /// Flush with the band's bottom edge.
+    Bottom,
+}
+
 /// Where the readout card goes, in the band's coordinates.
 ///
 /// The card sits **beside** the hovered cell — to the right when the grid has
 /// room, else to the left — so the cell the pointer is on is never hidden by
-/// the card, and it is clamped inside the band so it can never paint over the
+/// the card, and it stays inside the band so it can never paint over the
 /// legend below the grid.
 fn place_readout(
     week: usize,
@@ -425,7 +433,7 @@ fn place_readout(
     geometry: &Geometry,
     card_w: f32,
     card_h: f32,
-) -> (f32, f32) {
+) -> (f32, BandAnchor) {
     let cell_x = ROW_LABEL_W + week as f32 * (geometry.w + geometry.gap);
     let cell_y = MONTH_STRIP_H + row as f32 * (geometry.h + geometry.gap);
     let grid_w = grid_width(geometry, weeks);
@@ -443,9 +451,20 @@ fn place_readout(
         (cell_x + geometry.w / 2. - card_w / 2.).clamp(0., (grid_w - card_w).max(0.))
     };
 
-    // Vertically centred on the cell, then clamped into the band.
-    let top = (cell_y + geometry.h / 2. - card_h / 2.).clamp(0., (band_h - card_h).max(0.));
-    (left, top)
+    // Vertically centred on the cell, then kept inside the band. The cells are
+    // snapped to whole device pixels at layout time, so the band's painted
+    // height is only approximately `band_height`: a card with no room above the
+    // legend is anchored to the band's own bottom edge instead of to an offset,
+    // and the layout — not this arithmetic — then holds it out of the legend.
+    let top = cell_y + geometry.h / 2. - card_h / 2.;
+    let anchor = if top < 0. {
+        BandAnchor::Top(0.)
+    } else if top + card_h > band_h {
+        BandAnchor::Bottom
+    } else {
+        BandAnchor::Top(top)
+    };
+    (left, anchor)
 }
 
 /// The hover readout, anchored beside the hovered cell and clamped to the
@@ -531,9 +550,9 @@ fn day_readout(
     let grid_w = grid_width(geometry, weeks);
     let card_w = TOOLTIP_W.min(grid_w.max(1.));
     let card_h = pad + HEADER_H + shown.len() as f32 * (LINE_H + gap);
-    let (left, top) = place_readout(week, row, weeks, geometry, card_w, card_h);
+    let (left, anchor) = place_readout(week, row, weeks, geometry, card_w, card_h);
 
-    div()
+    let card = div()
         .absolute()
         .debug_selector(|| "usage-heatmap-readout".into())
         .w(px(card_w))
@@ -544,9 +563,11 @@ fn day_readout(
         .flex_col()
         .child(body)
         .occlude()
-        .left(px(left))
-        .top(px(top))
-        .into_any_element()
+        .left(px(left));
+    match anchor {
+        BandAnchor::Top(top) => card.top(px(top)).into_any_element(),
+        BandAnchor::Bottom => card.bottom(px(0.)).into_any_element(),
+    }
 }
 
 /// "Less ▢▢▢▢▢ More", the shade key.
@@ -652,7 +673,7 @@ mod tests {
                 for card_h in [50f32, 92., 130.] {
                     for week in 0..weeks {
                         for row in 0..7 {
-                            let (left, top) = place_readout(
+                            let (left, anchor) = place_readout(
                                 week,
                                 row,
                                 weeks,
@@ -660,11 +681,15 @@ mod tests {
                                 TOOLTIP_W.min(grid_w),
                                 card_h.min(band_h),
                             );
-                            assert!(top >= 0., "above the band: {top}");
-                            assert!(
-                                top + card_h.min(band_h) <= band_h + 0.01,
-                                "past the band: {top} + {card_h} > {band_h}"
-                            );
+                            // An anchored card is held by the band's own bottom
+                            // edge, so only an offset can be out of bounds.
+                            if let BandAnchor::Top(top) = anchor {
+                                assert!(top >= 0., "above the band: {top}");
+                                assert!(
+                                    top + card_h.min(band_h) <= band_h + 0.01,
+                                    "past the band: {top} + {card_h} > {band_h}"
+                                );
+                            }
                             assert!(left >= 0., "left of the grid: {left}");
                             assert!(
                                 left + TOOLTIP_W.min(grid_w) <= grid_w + 0.01,
@@ -687,7 +712,7 @@ mod tests {
         let card_w = TOOLTIP_W;
         for week in [0usize, 1, 26, weeks - 1] {
             for row in 0..7 {
-                let (left, _top) = place_readout(week, row, weeks, &geometry, card_w, 92.);
+                let (left, _anchor) = place_readout(week, row, weeks, &geometry, card_w, 92.);
                 let cell_x = ROW_LABEL_W + week as f32 * (geometry.w + geometry.gap);
                 let cell_right = cell_x + geometry.w;
                 // Either the card starts after the cell, or it ends before it.
