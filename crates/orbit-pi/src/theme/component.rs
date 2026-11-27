@@ -36,6 +36,12 @@ pub fn install(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         gpui::KeyBinding::new("ctrl-shift-i", gpui::NoAction, None),
     ]);
+    // Its `i18n!` macro builds a *crate-local* backend (`t!` expands to
+    // `crate::_rust_i18n_try_translate`), so `locales/ui.yml` keys live in
+    // gpui-component's own key space: the app's locale files cannot collide
+    // with them, and the only shared state is rust-i18n's active locale, where
+    // the library's locales are a subset of the app's (plus zh-HK/zh-TW) and
+    // anything else falls back to its own `en`.
     apply(cx);
     cx.observe_global::<Theme>(apply).detach();
 }
