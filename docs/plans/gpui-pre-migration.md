@@ -1,7 +1,8 @@
 # Plan — Migrate the UI foundation to gpui-pre 0.3.3, then adopt gpui-ai card components
 
-**Status:** Approved plan (grill session 2026-11-27). Not started. Implementation happens
-on a dedicated branch, in a separate session.
+**Status:** Phase 1 steps 1–6 implemented on `feat/gpui-pre-foundation` (commits
+`4580f4e`..`14bc665`, suite 1552/0/7 on macOS). Step 7 pending: Windows regression (D10)
+and the D11 stop-loss judgment. Phase 2 not started.
 **Owner:** TBD
 **Scope:** `crates/orbit-pi` (the only crate that depends on gpui), `third_party/`,
 workspace `Cargo.toml`. `crates/orbit-rpc` is untouched.
@@ -59,7 +60,11 @@ CodeDiff) as a Phase 2 polish layer.
 - **D4 — Version lock.** A gpui-pre version bump is its own project, never a routine
   `cargo update`: **0.3.14 has deleted the ClearType/subpixel code** that 0.3.3 carries.
   Semver says 0.3.3 → 0.3.x is safe; it is not. Record this in the new
-  `third_party/*/UPSTREAM.md` and in Cargo.toml comments.
+  `third_party/*/UPSTREAM.md` and in Cargo.toml comments. The lock extends to the
+  gpui-component family: `gpui-component`, `gpui-base`, `gpui-kit-assets`, and
+  `gpui-component-macros` are all pinned `=0.6.0` — a floated macros crate resolves to
+  0.6.6, whose `IntoPlot` derive no longer matches 0.6.0's `Plot` trait (found during
+  step 5; the app names the three transitive crates solely to hold their versions).
 - **D5 — 1:1 behavior is a hard requirement; the checklist is the merge gate.**
   Native mechanisms are preferred, but a hand-rolled behavior is only deleted when its
   checklist item passes on the new foundation. Items that fail stay as app code
