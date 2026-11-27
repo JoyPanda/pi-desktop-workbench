@@ -2674,19 +2674,36 @@ impl OrbitApp {
                 app.pi_install = pi_install;
                 app.refreshing = false;
                 app.sync_terminal_active(cx);
-                if ready && app.client.is_none() {
+                // A send that started pi while the probe ran owns the child
+                // it is waiting for: adopting Setup's own spawn here would
+                // invalidate that ticket and lose the reader's message.
+                if ready && app.client.is_none() && !app.spawn_pending() {
                     let workspace = app
                         .current_workspace
                         .clone()
                         .or_else(|| std::env::current_dir().ok())
                         .unwrap_or_else(|| PathBuf::from("."));
+                    // Read before the spawn: the child's model registry comes
+                    // from these files as they are now.
+                    let sources_stamp = crate::catalog_cache::sources_stamp();
                     match app
                         .extensions
                         .spawn(&workspace, true, &app.mcp.secret_env())
                     {
                         Ok(client) => {
-                            app.client = Some(client);
+                            // `adopt_client`, not a bare assignment: it resets
+                            // the runtime status, the event queue, and the
+                            // per-process model state this child owns.
+                            app.adopt_client(client);
                             app.mcp_stamp = app.mcp.fingerprint_for(Some(&workspace));
+                            app.process_sources_stamp = sources_stamp;
+                            // `spawn(.., true)` puts the configured default on
+                            // the argv, so it is a request to check like any
+                            // other — and not pi's own untouched startup model.
+                            let slot = app.session_default.clone();
+                            app.startup_model_expected =
+                                (!slot.is_unset()).then_some(slot);
+                            app.startup_model_reportable = app.session_default.is_unset();
                             app.send(CommandBody::GetState, "get_state");
                             app.refresh_catalogs();
                             app.toast_success(tr!("view.connected"));
@@ -3234,12 +3251,24 @@ impl OrbitApp {
             )
     }
 
+    /// Whether the context card offers Compact. Manual compaction needs a
+    /// process — or a session file to start one on. A cold session's Compact
+    /// starts pi with `--session` and runs once the transcript is loaded; a
+    /// draft with no file has nothing to compact, so it offers nothing.
+    /// A queued Compact keeps the control on screen through the start it
+    /// asked for: `cold_session_path` goes None while the spawn is pending,
+    /// and dropping the action here would hide the "Compacting…" state.
+    pub(super) fn compact_offered(&self) -> bool {
+        self.client.is_some()
+            || self.cold_session_path().is_some()
+            || self.pending_compact.is_some()
+    }
+
     pub(super) fn context_button(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         let entity = cx.entity();
         let theme = *theme::get(cx);
-        // Manual compaction is offered only while pi is connected: without a
-        // session process there is nothing to compact.
-        let on_compact = self.client.is_some().then(|| {
+        let compactable = self.compact_offered();
+        let on_compact = compactable.then(|| {
             Rc::new(
                 |app: &mut OrbitApp, _window: &mut Window, cx: &mut Context<OrbitApp>| {
                     app.compact_now(cx);
@@ -3284,7 +3313,9 @@ impl OrbitApp {
                 }
                 cx.notify();
             },
-            self.is_compacting,
+            // A queued Compact reads as in-flight too: pi is being started
+            // for it, and a second click must not queue another.
+            self.is_compacting || self.pending_compact.is_some(),
             on_compact,
             |app, _, cx| {
                 app.menu_dismissed_at = Some(Instant::now());

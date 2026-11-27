@@ -563,6 +563,68 @@ impl OrbitApp {
         cx.notify();
     }
 
+    /// Compact a session that has no process. The click starts pi on the file
+    /// exactly the way a send does (`--session`, then `get_messages`), and the
+    /// compaction is owed until that snapshot lands
+    /// ([`Self::deliver_pending_compact`]) — compacting a session pi has not
+    /// loaded yet would compact nothing.
+    pub(super) fn queue_compact_for_cold_session(
+        &mut self,
+        path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        // What the dialog names when the start is refused: the folder the
+        // session belongs to, never the pi store directory the *file* lives
+        // in — that one always exists, so naming it would explain nothing.
+        let refused = self
+            .sessions
+            .iter()
+            .find(|session| session.path == path)
+            .map(|session| session.cwd.clone())
+            .or_else(|| {
+                (self.current_session_path.as_ref() == Some(&path))
+                    .then(|| self.current_workspace.clone())
+                    .flatten()
+            })
+            .unwrap_or_else(|| self.task_cwd());
+        let Some(cwd) = self.cold_session_cwd(&path) else {
+            // §22: nothing is started and no folder is guessed. The same
+            // dialog a refused send shows says which folder is missing.
+            self.worktree_dialog = Some(WorktreeDialog::Unavailable { path: refused });
+            cx.notify();
+            return;
+        };
+        self.pending_compact = Some(path.clone());
+        self.spawn_pi_client_to_resume(cwd, path, cx);
+        cx.notify();
+    }
+
+    /// The folder a cold session's process runs in: the one its listing was
+    /// scanned in, else the one the open view was opened in. `None` when
+    /// neither is known or the folder is gone — §22 refuses to guess one,
+    /// because the agent would run somewhere it was never opened.
+    ///
+    /// Deliberately stricter than the send path's own inline rule
+    /// ([`Self::queue_prompt_to_resume_session`]), which checks the folder of
+    /// a *listed* session only and so can start pi in a directory that was
+    /// deleted since. Sharing one rule would change tested send behaviour, so
+    /// the divergence is recorded here instead.
+    fn cold_session_cwd(&self, path: &Path) -> Option<PathBuf> {
+        if self.cold_session_workspace_missing() {
+            return None;
+        }
+        self.sessions
+            .iter()
+            .find(|session| session.path == *path)
+            .map(|session| session.cwd.clone())
+            .or_else(|| {
+                (self.current_session_path.as_deref() == Some(path))
+                    .then(|| self.current_workspace.clone())
+                    .flatten()
+            })
+            .filter(|cwd| cwd.is_dir())
+    }
+
     /// A sent message is still waiting for its process: either the spawn is
     /// on its way, or (for a resume) the process is up but has not yet
     /// attached to the session and loaded it.
@@ -667,6 +729,24 @@ impl OrbitApp {
             }
         }
         cx.notify();
+    }
+
+    /// A Compact clicked while this session had no process: pi has now loaded
+    /// the file (`get_messages` answered), so the compaction it was owed can
+    /// run. Called on the same reply that delivers a resumed send's prompt.
+    pub(super) fn deliver_pending_compact(&mut self, cx: &mut Context<Self>) {
+        let Some(owed) = self.pending_compact.clone() else {
+            return;
+        };
+        // Only the file it was clicked on. A fork, clone, or switch that
+        // landed during the boot asks for its own `get_messages`, and
+        // compacting whichever session pi happens to be on would compact the
+        // wrong conversation.
+        if self.current_session_path != Some(owed) {
+            return;
+        }
+        self.pending_compact = None;
+        self.compact_now(cx);
     }
 
     /// Hand what the user staged on this session while it had no process to
@@ -1196,6 +1276,7 @@ impl OrbitApp {
     pub(super) fn park_detached_client(&mut self, client: PiClient, shell: DetachedSpawn) {
         let resume = matches!(shell.ticket.then, SpawnThen::ResumePrompt);
         let mcp_stamp = shell.ticket.mcp_stamp;
+        let sources_stamp = shell.ticket.sources_stamp;
         let path = shell.session_path.clone();
         let mut parked = ParkedSession {
             client,
@@ -1214,6 +1295,7 @@ impl OrbitApp {
             added: shell.added,
             removed: shell.removed,
             mcp_stamp,
+            sources_stamp,
             turns: shell.turns,
             widgets: Vec::new(),
             subagents: crate::subagent_status::SubagentBoard::default(),
@@ -1224,6 +1306,10 @@ impl OrbitApp {
             draft: shell.draft,
             discard: shell.discard,
             startup_model_pinned: shell.startup_model_pinned,
+            startup_model_expected: shell.ticket.requested_model.clone(),
+            // No correction is out yet: the check runs on the first
+            // `get_state` this process answers, parked or resumed.
+            startup_model_fix: None,
             pending: VecDeque::new(),
             resume_prompt: None,
         };
@@ -1305,18 +1391,49 @@ impl OrbitApp {
     /// leaving it active would let the incoming `adopt_client` overwrite — and
     /// kill — a live run on the next switch (issue #46).
     pub(super) fn park_active_session(&mut self) {
+        // A compaction this page was owed does not travel: the process it
+        // waited for is either given up below or dropped, and the click can
+        // be repeated on the way back.
+        let owed_compact = self.pending_compact.take();
         // Take the pin before invalidating: that call clears it, and the
         // parked process may still be waiting on `new_session`.
         let startup_model_pinned = std::mem::take(&mut self.startup_model_pinned);
+        // The argv-model check rides with the process, not with the page: a
+        // child that came up on a fuzzy neighbour of the pick is still put
+        // right when the reader comes back to it.
+        let startup_model_expected = std::mem::take(&mut self.startup_model_expected);
+        // The correction pi has not answered rides with the process too: D17
+        // keeps the child alive, so its reply lands on the parked drain.
+        let startup_model_fix = std::mem::take(&mut self.startup_model_fix);
         let Some(client) = self.client.take() else {
-            // No process yet. A send still booting keeps going in the
-            // background; anything else must not land on the next page.
-            if !self.detach_send_spawn(startup_model_pinned) {
+            // No process yet. A *message* still booting keeps going in the
+            // background — the reader is owed that send. A start that owes
+            // nothing else (a cold Compact walked away from) is given up
+            // instead: parking it would keep a process alive for the rest of
+            // the run that nobody asked to keep, and D17 never reaps one.
+            if self.pending_prompt.is_none() || !self.detach_send_spawn(startup_model_pinned) {
                 self.invalidate_pending_spawn();
                 self.foreground_events.clear();
             }
             return;
         };
+        // A process admitted for an owed Compact that never ran is given up,
+        // not parked: no message and no run justified keeping it, and D17
+        // never reaps a parked child. A real pending send or any work in
+        // flight keeps the process as usual.
+        if owed_compact.is_some()
+            && self.pending_prompt.is_none()
+            && !self.busy
+            && !self.transcript.is_streaming()
+            && !self.retrying
+            && !self.is_compacting
+            && !self.execution.status().is_in_progress()
+            && !self.subagents.work_in_flight()
+        {
+            self.invalidate_pending_spawn();
+            self.drop_client();
+            return;
+        }
         // The live process is what we park. A different spawn still in flight
         // would otherwise be adopted onto the page we are about to show.
         self.invalidate_pending_spawn();
@@ -1370,6 +1487,7 @@ impl OrbitApp {
             added: self.added,
             removed: self.removed,
             mcp_stamp: self.mcp_stamp,
+            sources_stamp: self.process_sources_stamp,
             widgets,
             subagents,
             subagent_scrolls,
@@ -1380,6 +1498,8 @@ impl OrbitApp {
             draft: self.parking_draft.take(),
             discard: std::mem::take(&mut self.parking_discard),
             startup_model_pinned,
+            startup_model_expected,
+            startup_model_fix,
             // Events the budget has not applied yet belong to this process.
             pending: std::mem::take(&mut self.foreground_events),
             resume_prompt: self
@@ -1475,7 +1595,7 @@ impl OrbitApp {
     pub(super) fn on_send_click(
         &mut self,
         _: &MouseUpEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.input.read(cx).is_composing() {
@@ -1484,6 +1604,11 @@ impl OrbitApp {
         if self.commit_autocomplete_if_open(CompletionIntent::Send, cx) {
             return;
         }
+        // The send button is clickable with the model or thinking popup open,
+        // and from the first message on those picks are locked until pi is up.
+        // Close it here — where there is a window to hand focus back to the
+        // composer — so a row clicked afterwards cannot be silently dropped.
+        self.close_model_selector(window, cx);
         let text = self.input.read(cx).text();
         self.submit(text, cx);
     }
@@ -1813,7 +1938,12 @@ impl OrbitApp {
         if matches!(self.fork_pending, Some(ForkPending::Holding { .. })) {
             self.fork_pending = None;
         }
-        self.send(CommandBody::CloneSession, "clone");
+        if self.send(CommandBody::CloneSession, "clone") {
+            // pi switches onto the copy the moment it handles this — before
+            // Orbit drains the replies. An owed Compact still waiting on the
+            // *source's* snapshot would otherwise be delivered onto the copy.
+            self.pending_compact = None;
+        }
         cx.notify();
     }
 
@@ -2088,6 +2218,9 @@ impl OrbitApp {
         let Some(command_id) = self.send_tracked(CommandBody::Fork { entry_id }, "fork") else {
             return;
         };
+        // Same as clone: pi may switch before the source snapshot is drained,
+        // and the owed Compact belongs to the session being left.
+        self.pending_compact = None;
         self.fork_pending = Some(ForkPending::Switching { command_id, title });
         cx.notify();
     }
@@ -2191,6 +2324,12 @@ impl OrbitApp {
         // push armed for the session just left must not follow it.
         self.default_model_armed = false;
         self.startup_model_pinned = false;
+        // Nor may a check of the process that just left: it would hold the
+        // new page's chips on a model nothing here asked for.
+        self.startup_model_expected = None;
+        self.startup_model_fix = None;
+        // A compaction the old page was owed is not this page's.
+        self.pending_compact = None;
         self.model_selector = None;
         self.paint_unsent_model();
     }
@@ -2613,6 +2752,8 @@ impl OrbitApp {
         // Paint while there is still no client: once the parked process is
         // adopted, the chips belong to it and `paint_unsent_model` no-ops.
         let startup_model_pinned = parked.startup_model_pinned;
+        let startup_model_expected = parked.startup_model_expected.clone();
+        let startup_model_fix = parked.startup_model_fix.clone();
         self.note_session_switch();
         self.clear_review_records_for_switch(cx);
         self.current_draft_id = Some(id);
@@ -2657,6 +2798,8 @@ impl OrbitApp {
         self.queue = parked.queue;
         self.queue_wire = parked.queue_wire;
         self.mcp_stamp = parked.mcp_stamp;
+        // The catalog this process reports is the one it booted with.
+        self.process_sources_stamp = parked.sources_stamp;
         // The park does not carry the previous view's title or ids.
         self.current_title = title;
         self.reset_session_name(cx);
@@ -2667,6 +2810,12 @@ impl OrbitApp {
         // `adopt_client` cleared this. Put back a pin whose `new_session`
         // is still unanswered, so that reply does not push the default.
         self.startup_model_pinned = startup_model_pinned;
+        // And the argv-model check, so a child that came up on a fuzzy
+        // neighbour of the pick is still put right. A correction still out
+        // comes back with it — the parked drain owns its reply, and only an
+        // unanswered one may be waited on here.
+        self.startup_model_expected = startup_model_expected;
+        self.startup_model_fix = startup_model_fix;
         // The parked process is the authority for model, thinking, and the
         // session id. `get_state` does not restore the thinking ladder, which
         // the paint above may have cleared.
@@ -3140,10 +3289,17 @@ impl OrbitApp {
             // to date (its events drain every tick); anything buffered in
             // the process channel streams in from the next tick on.
             let startup_model_pinned = parked.startup_model_pinned;
+            let startup_model_expected = parked.startup_model_expected.clone();
+            let startup_model_fix = parked.startup_model_fix.clone();
             self.adopt_client(parked.client);
             self.foreground_events = parked.pending;
             self.pending_prompt = parked.resume_prompt;
             self.startup_model_pinned = startup_model_pinned;
+            // The argv-model check comes back with the process, correction
+            // included when pi has not answered it yet (the parked drain
+            // consumes the answer while the reader is elsewhere).
+            self.startup_model_expected = startup_model_expected;
+            self.startup_model_fix = startup_model_fix;
             self.transcript = parked.transcript;
             self.transcript.present_deferred();
             self.turns = parked.turns;
@@ -3193,6 +3349,10 @@ impl OrbitApp {
             // restores the pending bar from the drained mirror instead.
             self.queue = parked.queue;
             self.queue_wire = parked.queue_wire;
+            // The catalog this process reports is the one it booted with, so
+            // the cache it fills keeps that stamp and an edit to pi's model
+            // files still reads as stale on the next launch.
+            self.process_sources_stamp = parked.sources_stamp;
             self.send(CommandBody::GetState, "get_state");
             self.refresh_catalogs();
             self.refresh_context_stats();
@@ -3251,7 +3411,11 @@ impl OrbitApp {
             self.replacement_in_flight = None;
             self.startup_model_reportable = false;
             self.startup_model_pinned = false;
+            self.startup_model_expected = None;
+            self.startup_model_fix = None;
             self.default_model_armed = false;
+            // The process that was going to compact is gone.
+            self.pending_compact = None;
             self.reset_quota_entries();
             // Show the numbers from its last live moment, dimmed, in place of a
             // meter that would read empty with no process to ask.

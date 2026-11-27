@@ -122,6 +122,8 @@ impl OrbitApp {
         };
         match client.send(body) {
             Ok((id, _)) => {
+                #[cfg(test)]
+                self.sent_commands.push(label.to_string());
                 // A model or session change means later `get_state` answers
                 // describe this session, not the model an empty argv boots.
                 if matches!(
@@ -135,6 +137,18 @@ impl OrbitApp {
                         | "clone"
                 ) {
                     self.startup_model_reportable = false;
+                }
+                // A manual level change supersedes the level the argv carried.
+                // Without this, a correction accepted afterwards would re-ask
+                // the *argv* level over the reader's explicit choice. The
+                // correction's own re-ask is a different command id, so it
+                // does not disarm itself.
+                if matches!(label, "set_thinking_level" | "cycle_thinking_level")
+                    && self.startup_model_fix.as_deref() != Some(id.as_str())
+                {
+                    if let Some(slot) = self.startup_model_expected.as_mut() {
+                        slot.thinking = None;
+                    }
                 }
                 Some(id)
             }
@@ -163,7 +177,15 @@ impl OrbitApp {
 
     /// Re-fetch the current context-window estimate. Cheap; call after
     /// settle, session switch, compaction, and model changes — never per tick.
+    ///
+    /// A session with no process has nothing to ask: its ring shows the last
+    /// live snapshot, and the "pi is not running" toast a probe would raise is
+    /// noise for something the reader never asked for (opening the context
+    /// card on a cold session, a Compact that is still starting pi).
     pub(super) fn refresh_context_stats(&mut self) {
+        if self.client.is_none() {
+            return;
+        }
         self.send(CommandBody::GetSessionStats, "get_session_stats");
     }
 
@@ -201,6 +223,9 @@ impl OrbitApp {
         // A pin belonged to the process being replaced. The caller sets a new
         // one only after this process has accepted `new_session`.
         self.startup_model_pinned = false;
+        // So did the argv model check: a replaced process answers for itself.
+        self.startup_model_expected = None;
+        self.startup_model_fix = None;
         // A new process has no in-flight queue RPCs. Resume paths restore
         // `queue_wire` from the parked session after this.
         self.queue_wire = QueueWire::default();
@@ -242,7 +267,8 @@ impl OrbitApp {
     ///   listed the row and showed the page without starting anything; the
     ///   message went on screen and is delivered here once pi is up.
     /// - [`SpawnThen::NewSession`] — the Settings restarts that reload
-    ///   credentials or a catalog onto an empty draft (`resume_after_drop`).
+    ///   credentials or a catalog onto an empty draft
+    ///   (`resume_after_process_drop`).
     ///
     /// [`Self::runtime_start`] and the session-switch paths still spawn in
     /// place — they send a command the moment the client exists, and their
@@ -298,6 +324,11 @@ impl OrbitApp {
         // a sent session, and `current_draft_model` would no longer mean
         // "this child's argv was a composer choice".
         let pinned_model = chosen.is_some();
+        // The slot the child boots on: the draft's own choice, else the
+        // configured default. Kept as a value because it is needed twice —
+        // once as argv, and once as the model pi is *asked* for, which is not
+        // necessarily the one its fuzzy `--model` pattern resolves to.
+        let startup_slot = chosen.unwrap_or_else(|| self.session_default.clone());
         let startup_args = if resuming {
             // Boot straight into the file. `--session` with a path opens it
             // before RPC starts, so the prompt never lands on an empty session.
@@ -309,10 +340,12 @@ impl OrbitApp {
                 None => Vec::new(),
             }
         } else {
-            chosen
-                .unwrap_or_else(|| self.session_default.clone())
-                .cli_args()
+            startup_slot.cli_args()
         };
+        let requested_model = (!resuming).then_some(startup_slot).filter(|slot| !slot.is_unset());
+        // The model files as they are now: the child reads them at boot, so
+        // the catalog it reports cannot be newer than this.
+        let sources_stamp = crate::catalog_cache::sources_stamp();
         #[cfg(test)]
         let test_bin = self.spawn_bin.clone();
         #[cfg(not(test))]
@@ -328,6 +361,8 @@ impl OrbitApp {
             then,
             startup_args,
             pinned_model,
+            requested_model,
+            sources_stamp,
             session_path,
         };
         self.pending_spawn = Some(ticket.clone());
@@ -433,6 +468,10 @@ impl OrbitApp {
                 .startup_args()
                 .iter()
                 .any(|arg| arg == "--model");
+            // A detached send is checked against its own argv like any other.
+            self.startup_model_expected = shell.ticket.requested_model.clone();
+            self.startup_model_fix = None;
+            self.process_sources_stamp = shell.ticket.sources_stamp;
             match shell.ticket.then {
                 SpawnThen::Prompt => {
                     if let Some(pending) = self.pending_prompt.take() {
@@ -453,6 +492,7 @@ impl OrbitApp {
                 }
                 SpawnThen::ResumePrompt => {
                     if !self.begin_resumed_session(cx) {
+                        self.pending_compact = None;
                         self.unwind_pending_prompt(cx);
                     }
                 }
@@ -504,6 +544,13 @@ impl OrbitApp {
                 // a later switch, is this session only.
                 self.startup_model_reportable =
                     !ticket.startup_args.iter().any(|arg| arg == "--model");
+                // The argv model is a request, not a fact: pi resolves
+                // `--model` as a fuzzy pattern, so what the process actually
+                // came up on is checked against it (see
+                // [`Self::reconcile_startup_model`]).
+                self.startup_model_expected = ticket.requested_model.clone();
+                self.startup_model_fix = None;
+                self.process_sources_stamp = ticket.sources_stamp;
                 match ticket.then {
                     SpawnThen::Prompt => {
                         // Argv already selected the model, and this path does
@@ -553,6 +600,9 @@ impl OrbitApp {
                         // `--session` already opened the file. Load pi's view,
                         // then deliver the prompt once that snapshot lands.
                         if !self.begin_resumed_session(cx) {
+                            // No snapshot will land, so nothing waiting on one
+                            // can be delivered: drop the owed compaction too.
+                            self.pending_compact = None;
                             self.unwind_pending_prompt(cx);
                         }
                     }
@@ -564,6 +614,12 @@ impl OrbitApp {
             }
             Err(err) => {
                 self.startup_model_pinned = false;
+                // Nothing landed, so there is no process to check a request
+                // against — and no reply that could ever release the hold.
+                self.startup_model_expected = None;
+                self.startup_model_fix = None;
+                // A compaction this start owed goes with it.
+                self.pending_compact = None;
                 // Nothing is adopted, so only what this ticket owed is undone:
                 // a waiting message goes back into the composer, and the banner
                 // explains why nothing sent. Tagged with the command the spawn
@@ -623,6 +679,12 @@ impl OrbitApp {
         self.startup_model_pinned = false;
         self.default_model_armed = false;
         self.startup_model_reportable = false;
+        // A correction still in flight died with the process; the chips must
+        // not stay held on a model nothing is running.
+        self.startup_model_expected = None;
+        self.startup_model_fix = None;
+        // So did a compaction waiting on it.
+        self.pending_compact = None;
         // Extension widgets belonged to the departing process.
         self.extension_widgets.clear();
         self.subagents = crate::subagent_status::SubagentBoard::default();
@@ -801,6 +863,158 @@ impl OrbitApp {
             }
         }
         self.default_model_armed = false;
+    }
+
+    /// Whether the composer chips must stay on the model the argv asked for:
+    /// pi booted a different one and the exact correction has not answered
+    /// yet. Painting pi's answer in that window is what read as "the model
+    /// changed by itself" — the correction's own `get_state` repaints.
+    pub(super) fn startup_model_held(&self, data: &serde_json::Value) -> bool {
+        let Some(expected) = self.startup_model_expected.as_ref().and_then(|slot| slot.as_pair())
+        else {
+            return false;
+        };
+        // Without a provider there is nothing exact to ask for (`set_model`
+        // matches provider *and* id), so pi's resolution stands and the chips
+        // follow it rather than holding a pick nothing can move pi to.
+        if expected.0.is_empty() {
+            return false;
+        }
+        // A reply that names no model has nothing to contradict the pick.
+        let Some(reported) = reported_model_pair(data) else {
+            return false;
+        };
+        !same_model(&reported, &expected)
+    }
+
+    /// Ask pi for the model its argv named when the process came up on
+    /// another one.
+    ///
+    /// pi resolves `--model` as a *pattern* — an exact id first, then a fuzzy
+    /// match — so a catalog entry its registry no longer lists exactly boots
+    /// a neighbour instead (`--model gateway/glm-5` can come up on
+    /// `glm-5-flash`). The RPC `set_model` resolves exactly, which makes it
+    /// both the correction and the proof that the pick is gone. One attempt
+    /// per process: a refusal is reported, never retried.
+    pub(super) fn reconcile_startup_model(
+        &mut self,
+        data: &serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(slot) = self.startup_model_expected.clone() else {
+            return;
+        };
+        let Some(expected) = slot.as_pair() else {
+            // Nothing was actually requested; there is nothing to check.
+            self.startup_model_expected = None;
+            return;
+        };
+        let Some(reported) = reported_model_pair(data) else {
+            return;
+        };
+        if same_model(&reported, &expected) {
+            // A correction still out owns the ending: pi lands the switch
+            // before its reply is written, so a matching report can arrive
+            // first — and consuming the request here would make the success
+            // fail its id guard and skip the level the argv carried.
+            if self.startup_model_fix.is_none() {
+                self.startup_model_expected = None;
+            }
+            return;
+        }
+        // One attempt per process, and its *reply* is what ends the hold: a
+        // second report of the substitute changes nothing, so a report can
+        // never be the reason the chips stay held.
+        if self.startup_model_fix.is_some() {
+            return;
+        }
+        // Without a provider the argv was a bare pattern and `set_model`
+        // (which matches provider *and* id) has nothing exact to ask for.
+        if expected.0.is_empty() {
+            self.startup_model_expected = None;
+            return;
+        }
+        match self.send_tracked(
+            CommandBody::SetModel {
+                model_id: expected.1,
+                provider: expected.0,
+            },
+            "set_model",
+        ) {
+            // Tracked by id: a refusal of some *other* model choice (the
+            // reader can pick while this is in flight) is not this one's.
+            Some(id) => self.startup_model_fix = Some(id),
+            // Nothing was written, so nothing will answer: let the chips
+            // follow pi instead of holding a pick nobody is fetching.
+            None => self.startup_model_expected = None,
+        }
+        cx.notify();
+    }
+
+    /// pi refused the one exact correction. The hold is released whatever the
+    /// reason — the `get_state` behind a refused `set_model` then paints what
+    /// pi is really on, so the chips can never stay pinned to a model nothing
+    /// is running. Only a *missing* model also means the catalog that offered
+    /// it is wrong: that re-reads pi's list so the picker drops the dead entry
+    /// and says which pick died. Any other refusal (no API key, a signed-out
+    /// provider) keeps the command's own banner, because naming the model as
+    /// gone would be a lie and dropping a valid entry would cost the reader.
+    pub(super) fn startup_model_refused(
+        &mut self,
+        id: &str,
+        error: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.startup_model_fix.as_deref() != Some(id) {
+            return;
+        }
+        self.startup_model_fix = None;
+        let slot = self.startup_model_expected.take();
+        let missing = error.is_some_and(|error| error.to_ascii_lowercase().contains("not found"));
+        if let (true, Some(slot)) = (missing, slot) {
+            self.refresh_catalogs();
+            if let Some(model) = slot.model_id.filter(|model| !model.is_empty()) {
+                self.toast_warning(tr!("session.startup_model_missing", model = model));
+            }
+        }
+        cx.notify();
+    }
+
+    /// pi accepted the one exact correction, so the request is satisfied and
+    /// the chips follow pi from here on.
+    pub(super) fn startup_model_corrected(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.startup_model_fix.as_deref() != Some(id) {
+            return;
+        }
+        self.startup_model_fix = None;
+        let slot = self.startup_model_expected.take();
+        self.reask_startup_thinking(slot, cx);
+    }
+
+    /// A switch lands with the thinking level reset to the new model's own
+    /// default, which is why the level the argv carried is asked for again —
+    /// validated against the catalog first, since a level this model does not
+    /// offer would only buy a red banner for something the reader never
+    /// clicked. Also runs for a correction whose success was drained while
+    /// parked ([`ParkedSession::startup_model_corrected`]): the switch pi
+    /// landed reset the level just the same.
+    pub(super) fn reask_startup_thinking(
+        &mut self,
+        slot: Option<crate::session_defaults::SessionDefault>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(slot) = slot else {
+            return;
+        };
+        let Some(level) = slot.thinking.clone().filter(|level| !level.is_empty()) else {
+            return;
+        };
+        if !self.thinking_level_fits(&slot, &level) {
+            return;
+        }
+        if self.send(CommandBody::SetThinkingLevel { level }, "set_thinking_level") {
+            cx.notify();
+        }
     }
 
     /// Write the default model and persist it. It takes effect on the next
@@ -1086,8 +1300,15 @@ impl OrbitApp {
             return;
         }
         let cwd = self.task_cwd();
-        if crate::catalog_cache::load().is_fresh_for(&cwd) {
+        if crate::catalog_cache::is_fresh_for(&cwd) {
             return;
+        }
+        // A probe that just failed is not retried on every chip click: the
+        // reason it failed (no pi, no node, a timeout) outlives the click.
+        if let Some(failed) = self.catalog_probe_failed_at {
+            if failed.elapsed() < CATALOG_PROBE_RETRY {
+                return;
+            }
         }
         self.catalog_probing = true;
         let extensions = self.extensions.clone();
@@ -1097,6 +1318,10 @@ impl OrbitApp {
         #[cfg(not(test))]
         let test_bin: Option<PathBuf> = None;
         let probe_cwd = cwd.clone();
+        // Read before the child boots: the catalog it answers with is built
+        // from these files as they are now, and that is what makes the cached
+        // copy trustworthy until one of them moves again.
+        let sources_stamp = crate::catalog_cache::sources_stamp();
         cx.spawn(async move |this, cx| {
             let probed = cx
                 .background_executor()
@@ -1107,10 +1332,12 @@ impl OrbitApp {
                 // A process that came up meanwhile is the authority and has
                 // already reported its own catalog.
                 let Ok((models, commands, state)) = probed else {
+                    app.catalog_probe_failed_at = Some(Instant::now());
                     return;
                 };
+                app.catalog_probe_failed_at = None;
                 if app.client.is_none() {
-                    crate::catalog_cache::store_models(&models);
+                    crate::catalog_cache::store_models_at(&models, sources_stamp);
                     crate::catalog_cache::store_commands(&cwd, &commands);
                     app.apply_models_payload(&models);
                     if app.current_workspace.as_deref() == Some(cwd.as_path()) {
@@ -1162,6 +1389,9 @@ impl OrbitApp {
             self.startup_model_pinned = false;
         }
         let secret_env = self.mcp.secret_env();
+        // Read before the spawn: the child's registry comes from these files
+        // as they are now, and a later edit is not something it can report.
+        let sources_stamp = crate::catalog_cache::sources_stamp();
         let resume_path = self
             .current_session_path
             .clone()
@@ -1188,6 +1418,15 @@ impl OrbitApp {
                 self.adopt_client(client);
                 self.startup_model_reportable =
                     resume_path.is_none() && chosen.is_none() && self.session_default.is_unset();
+                // A resume boots into its file's model; anything else boots
+                // into the argv model, which pi resolves as a fuzzy pattern
+                // and the first `get_state` therefore has to check.
+                self.startup_model_expected = resume_path
+                    .is_none()
+                    .then(|| chosen.clone().unwrap_or_else(|| self.session_default.clone()))
+                    .filter(|slot| !slot.is_unset());
+                self.startup_model_fix = None;
+                self.process_sources_stamp = sources_stamp;
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&cwd));
                 if resume_path.is_some() {
                     let _ = self.begin_resumed_session(cx);
@@ -1216,6 +1455,9 @@ impl OrbitApp {
         // the user asked for it to stop, and hand a waiting message back.
         let was_starting = self.spawn_pending();
         self.invalidate_pending_spawn();
+        // A compaction the cancelled start was going to run is not owed any
+        // more; the button offers it again once a process is up.
+        self.pending_compact = None;
         if let Some(prompt) = self.take_detached_send_here() {
             self.pending_prompt = Some(prompt);
         }
@@ -1273,6 +1515,8 @@ impl OrbitApp {
             "--session".to_string(),
             session_path.to_string_lossy().into_owned(),
         ];
+        // Read before the spawn: the child's catalog is the one on disk now.
+        let sources_stamp = crate::catalog_cache::sources_stamp();
         match self
             .extensions
             .spawn_with_startup_args(&workspace, &args, &self.mcp.secret_env())
@@ -1280,6 +1524,7 @@ impl OrbitApp {
             Ok(client) => {
                 self.adopt_client(client);
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&workspace));
+                self.process_sources_stamp = sources_stamp;
                 let _ = self.begin_resumed_session(cx);
                 cx.notify();
                 true
@@ -1368,6 +1613,31 @@ impl OrbitApp {
     }
 }
 
+/// The `(provider, id)` a `get_state` body names, when it names a model
+/// completely. A reply missing either half is treated as *no report* rather
+/// than as a mismatch: it cannot be compared with the request, and it gives
+/// `set_model` (which matches provider *and* id) nothing exact to ask for.
+fn reported_model_pair(data: &serde_json::Value) -> Option<(String, String)> {
+    let model = data.get("model").filter(|model| model.is_object())?;
+    let text = |key: &str| {
+        model
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    Some((text("provider")?, text("id")?))
+}
+
+/// Whether pi's reported model is the one the argv asked for. Compared
+/// case-insensitively because pi's own CLI resolution lowercases ids: a
+/// correction that differed only in case would be refused by the exact RPC
+/// anyway, so accepting pi's answer beats fighting it.
+fn same_model(reported: &(String, String), expected: &(String, String)) -> bool {
+    reported.0.eq_ignore_ascii_case(&expected.0)
+        && reported.1.eq_ignore_ascii_case(&expected.1)
+}
+
 /// One stderr line, capped so a multi-kilobyte stack trace cannot take over
 /// the error banner.
 fn clip_stderr_line(line: &str) -> String {
@@ -1399,6 +1669,14 @@ pub(super) struct SpawnTicket {
     startup_args: Vec<String>,
     /// `startup_args` came from the open draft, not the session default.
     pub(super) pinned_model: bool,
+    /// The model `startup_args` asks pi to boot on. pi resolves `--model` as
+    /// a fuzzy pattern, so the process can come up on a different model;
+    /// [`OrbitApp::reconcile_startup_model`] checks the first `get_state`
+    /// against this and asks once for the exact one.
+    pub(super) requested_model: Option<crate::session_defaults::SessionDefault>,
+    /// `catalog_cache::sources_stamp()` when the spawn was requested: the
+    /// catalog this child reports is the one it read at boot.
+    pub(super) sources_stamp: u64,
     /// The session file a [`SpawnThen::ResumePrompt`] process attaches to.
     pub(super) session_path: Option<PathBuf>,
 }
@@ -1422,6 +1700,12 @@ pub(super) struct DetachedSpawn {
     pub(super) added: u64,
     pub(super) removed: u64,
 }
+
+/// How long a failed auxiliary catalog probe suppresses the next one. Long
+/// enough that opening the model picker cannot spawn a pi per click while the
+/// reason stands, short enough that a fixed install is picked up without a
+/// relaunch.
+const CATALOG_PROBE_RETRY: Duration = Duration::from_secs(60);
 
 impl SpawnTicket {
     /// The startup flags this child was given.

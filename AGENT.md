@@ -435,11 +435,11 @@ stack is gone; do not resurrect it.
 
 ## How the app runs
 
-1. `OrbitApp::new` spawns `PiClient::spawn(cwd, None)` so sessions land in pi's default store (`~/.pi/agent/sessions/`), shared with the CLI. Tests pass `Some("/tmp/…")` via `--session-dir`.
+1. Nothing spawns pi at launch (D18): the first *send* on a New Task starts it, and a send or a Compact on a session that has no process starts it with `--session <file>`. Sessions land in pi's default store (`~/.pi/agent/sessions/`), shared with the CLI. Tests pass `Some("/tmp/…")` via `--session-dir`.
 2. On connect it sends `get_state`, `get_available_models`, `get_available_thinking_levels`.
 3. `main_window.rs` opens the one window and starts its `spawn` loop: every **90 ms** call `OrbitApp::tick` → `PiClient::drain_events` (`try_recv`, never blocking). The loop is bound to the window, so a reopen restarts it; the `OrbitApp` entity itself is parked in the `Shell` global so the pi process and transcript outlive a close.
 4. Transcript data has two inlets into the same model: `get_messages` rebuilds; `message_start` / `message_update` / `message_end` mutate live.
-5. One `PiClient` = one child. Drop kills the process. `ProcessExited` respawns pi on its own (three tries, refilled only by a run that stayed up — see `AUTO_RESTART_LIMIT`), so the app never sits on a dead transport; when the tryouts are spent it raises the banner and the Reconnect button is the way back.
+5. One `PiClient` = one child. Drop kills the process. There is no auto-restart (D18): an idle exit goes cold silently and the next send starts a fresh process on the file; an exit mid-run raises the banner, and Reconnect (or a send) is the way back.
 6. A few seconds after launch the pi self-update check runs off-thread (`pi_update.rs`): a newer pi installs through `pi update self` and reports via toasts; up-to-date or offline stays quiet.
 
 ## GPUI 0.2.2 API notes (learned on this repo — save re-deriving them)

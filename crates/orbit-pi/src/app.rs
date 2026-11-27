@@ -314,6 +314,11 @@ struct ParkedSession {
     /// MCP config fingerprint this process was spawned with. A later edit does
     /// not drop the process; the next spawn reads the new file.
     mcp_stamp: u64,
+    /// `catalog_cache::sources_stamp()` when this process was spawned. pi
+    /// reads its model files once at start, so the catalog it reports on a
+    /// warm resume is still the one it booted with — and must not be cached
+    /// as though it described the files as they are now.
+    sources_stamp: u64,
     /// Last Turn's clock, parked with the transcript so a warm resume does
     /// not inherit the session that was active in between.
     turns: crate::turn_review::TurnClock,
@@ -347,6 +352,14 @@ struct ParkedSession {
     /// `new_session` has not answered yet. Restored on resume so that reply
     /// does not push the configured default over the argv model.
     startup_model_pinned: bool,
+    /// The model this process's argv asked for, when its check had not
+    /// finished. Restored on resume so a process that came up on a fuzzy
+    /// neighbour of the pick is still put right when the reader comes back.
+    startup_model_expected: Option<crate::session_defaults::SessionDefault>,
+    /// The correction command still out on this process. D17 keeps the child
+    /// alive while parked, so pi may answer it in the background: the drain
+    /// consumes the reply here and resume must not ask a second time.
+    startup_model_fix: Option<String>,
     /// Events drained from this process and not yet applied. The heartbeat
     /// fills this, then applies the foreground queue first.
     pending: VecDeque<Event>,
@@ -356,6 +369,27 @@ struct ParkedSession {
 }
 
 impl ParkedSession {
+    /// The parked process's answer to its own startup-model correction. D17
+    /// keeps the child alive, so pi can accept (or refuse) the exact switch
+    /// while the reader is elsewhere. Consuming the reply here is what stops
+    /// resume from asking a second time; an accepted switch also reset pi's
+    /// thinking level, so the argv level it carried comes back for the
+    /// foreground to re-ask. A refusal leaves nothing owed — the resume's
+    /// `get_state` paints what pi is really on.
+    fn on_startup_model_response(
+        &mut self,
+        id: &str,
+        command: &str,
+        success: bool,
+    ) -> Option<crate::session_defaults::SessionDefault> {
+        if command != "set_model" || self.startup_model_fix.as_deref() != Some(id) {
+            return None;
+        }
+        self.startup_model_fix = None;
+        let slot = self.startup_model_expected.take();
+        success.then_some(slot).flatten()
+    }
+
     fn apply_queue_update(&mut self, value: &Value) {
         if self.queue_wire.ignores_updates() {
             return;
@@ -618,11 +652,20 @@ pub struct OrbitApp {
     staged_acks: Vec<StagedAck>,
     /// An auxiliary catalog probe is in flight (see start_catalog_probe).
     catalog_probing: bool,
+    /// When the last auxiliary catalog probe failed. A probe that cannot
+    /// succeed (pi missing, node gone, a 30 s timeout) must not be re-armed by
+    /// every model-chip click for as long as the reason stands.
+    catalog_probe_failed_at: Option<Instant>,
     /// Test seam: the `pi` launcher a background spawn uses instead of the
     /// bundled-extension spawn, so a test can drive the pending window with a
     /// scripted child instead of a real one. Production never sets it.
     #[cfg(test)]
     spawn_bin: Option<PathBuf>,
+    /// Test seam: every command label written to pi, in order, so a test can
+    /// assert what was actually sent instead of inferring it from a side
+    /// effect. Production never reads it.
+    #[cfg(test)]
+    sent_commands: Vec<String>,
     /// True once the user has asked to stop the current run. pi reports a
     /// cancelled automatic retry as `auto_retry_end { success: false }` — the
     /// same shape an exhausted retry uses — so the request itself, not the
@@ -756,6 +799,13 @@ pub struct OrbitApp {
     fork_ignored_entries: Vec<String>,
     /// pi is compacting right now (`get_state` / `compaction_*`).
     is_compacting: bool,
+    /// A Compact clicked on a session that had no process: pi is being started
+    /// on the file (`--session`), and the compaction is owed the moment pi has
+    /// loaded *that* transcript. Holds the session file it belongs to, so a
+    /// `get_messages` for any other session cannot deliver it. Belongs to the
+    /// page — leaving it, stopping the start, or losing the process drops it
+    /// (see `deliver_pending_compact`).
+    pending_compact: Option<PathBuf>,
     /// pi is inside an automatic-retry delay (`auto_retry_*`). pi doesn't
     /// expose this in `get_state`, so it's event-driven.
     retrying: bool,
@@ -1371,6 +1421,21 @@ pub struct OrbitApp {
     /// argv. The session-birth default push must not replace that choice;
     /// cleared once the birth has been told, or the view moves on.
     startup_model_pinned: bool,
+    /// The model the live process's argv asked pi to boot on, with the
+    /// thinking level that rode along. pi's `--model` is a *fuzzy* pattern, so
+    /// a catalog entry pi's registry no longer lists exactly boots a
+    /// neighbour instead; the first `get_state` compares the two and asks once
+    /// for the exact model (see `OrbitApp::reconcile_startup_model`).
+    startup_model_expected: Option<crate::session_defaults::SessionDefault>,
+    /// The command id of the one exact correction asked for
+    /// [`Self::startup_model_expected`], so a later `get_state` waits for its
+    /// answer instead of resending, and a refusal of some *other* model
+    /// choice is not read as this one's.
+    startup_model_fix: Option<String>,
+    /// `catalog_cache::sources_stamp()` when the live process was spawned.
+    /// pi reads its model files once at start, so the catalog it reports
+    /// cannot describe an edit made after this.
+    process_sources_stamp: u64,
     /// Whether the composer's workflow-mode picker popover is open.
     workflow_menu_open: bool,
     /// Highlighted row in the workflow-mode picker.
@@ -2327,10 +2392,13 @@ impl OrbitApp {
             park_budget_cursor: 0,
             staged_acks: Vec::new(),
             catalog_probing: false,
+            catalog_probe_failed_at: None,
             context_is_snapshot: false,
             cold_summary: None,
             #[cfg(test)]
             spawn_bin: None,
+            #[cfg(test)]
+            sent_commands: Vec::new(),
             rpc_patches,
             sidebar_width: px(crate::layout::sidebar_width()
                 .unwrap_or(SIDEBAR_DEFAULT_W)
@@ -2375,6 +2443,7 @@ impl OrbitApp {
             fork_pending: None,
             fork_ignored_entries: Vec::new(),
             is_compacting: false,
+            pending_compact: None,
             retrying: false,
             retry_detail: None,
             error: None,
@@ -2607,6 +2676,9 @@ impl OrbitApp {
             default_model_armed: false,
             default_model_pushed: DefaultModelPushed::default(),
             startup_model_pinned: false,
+            startup_model_expected: None,
+            startup_model_fix: None,
+            process_sources_stamp: crate::catalog_cache::sources_stamp(),
             workflow_menu_open: false,
             workflow_menu_highlight: 0,
             workflow_menu_focus: cx.focus_handle(),
@@ -4153,6 +4225,8 @@ mod backdrop_layout_tests;
 #[cfg(test)]
 mod cancel_tests;
 #[cfg(test)]
+mod cold_compact_tests;
+#[cfg(test)]
 mod composer_draft_tests;
 #[cfg(test)]
 mod composer_layout_tests;
@@ -4204,6 +4278,8 @@ mod sidebar_sort_tests;
 mod sidepane_full_width_tests;
 #[cfg(test)]
 mod stale_error_tests;
+#[cfg(test)]
+mod startup_model_tests;
 #[cfg(test)]
 mod stop_escalation_tests;
 #[cfg(test)]

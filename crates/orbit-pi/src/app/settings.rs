@@ -5832,7 +5832,17 @@ impl OrbitApp {
     }
 
     pub(super) fn compact_now(&mut self, cx: &mut Context<Self>) {
-        if self.is_compacting {
+        if self.is_compacting || self.pending_compact.is_some() {
+            return;
+        }
+        // A cold session has no process to ask, but it has a file to resume:
+        // start pi on it the way a send does and compact once the transcript
+        // is loaded. A draft with no file has nothing to compact.
+        if self.client.is_none() {
+            let Some(path) = self.cold_session_path() else {
+                return;
+            };
+            self.queue_compact_for_cold_session(path, cx);
             return;
         }
         self.is_compacting = true;

@@ -171,6 +171,13 @@ impl OrbitApp {
         if self.client.is_some() {
             self.refresh_catalogs();
             self.send(CommandBody::GetState, "get_state");
+        } else {
+            // With no process the rows come from the cache, and pi's model
+            // files may have moved since it was probed. Let the auxiliary pi
+            // refresh it while the popup is open: the landing re-syncs these
+            // rows, so an edited catalog shows up without a send.
+            #[cfg(not(test))]
+            self.start_catalog_probe(cx);
         }
         // Mutually exclusive with the composer's add menu and the new-task
         // page's workspace picker.

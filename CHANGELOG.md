@@ -37,6 +37,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads Worked. Scrolling up inside a card leaves it there instead of jumping
   back to the newest line.
 
+- **Compact works on a session with no process.** The context card's Compact
+  button used to disappear on a cold session ("without a process there is
+  nothing to compact"), which is exactly when a long, idle conversation is
+  worth compacting. It is offered again: the click starts pi on that session's
+  file the way a send does, and the compaction runs once pi has loaded the
+  transcript — compacting before that would compact an empty session. The
+  button reads *Compacting…* while pi boots, and the owed compaction belongs to
+  the page and to that one session file: leaving the page (which also gives up
+  the start — before or after it was admitted — rather than parking a process
+  nobody asked to keep), a start that fails, a load that never answers, or a
+  clone/fork queued onto another conversation drops it instead of letting it
+  land on the wrong session. And pi's own "there is nothing to do" — no part
+  of the session falls outside the model's keep-recent window, or it is
+  already compacted — shows as a plain notice rather than a red failure
+  banner, on both the event and the response pi sends for it: only pi knows
+  that window, so a cold Compact cannot check before pi loads the file.
+
 ### Changed
 
 - **Control typography and spacing pass.** Functional text (buttons, chips,
@@ -149,6 +166,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fresh one on the same session. The process kill is a tree kill on Windows, so
   the wedged tool child goes with it instead of outliving the restart. Queue text
   that was waiting behind the stop is handed back to the composer.
+
+- **The model you pick is the model the session runs.** A new task hands the
+  composer's pick to pi as `--provider` / `--model`, and pi resolves that flag
+  as a *pattern*: an exact id first, then a fuzzy match. An id its registry no
+  longer lists exactly — a renamed model, or a catalog Orbit cached before you
+  edited `models.json` — silently booted a neighbour instead, and the chip then
+  showed that substitute, so the model appeared to change itself on send. Orbit
+  now compares the first `get_state` with what the argv asked for and holds the
+  chips on the pick while it re-asks over the RPC, which matches provider *and*
+  id exactly — and asks the thinking level back too, since a switch lands with
+  the level reset to the new model's default — unless you picked a level of
+  your own in the meantime, which supersedes the argv's. A refusal means pi
+  has no such model: the chips follow pi, a toast names the pick that is gone,
+  and the catalog is re-read so the picker drops it. The check rides with the
+  process: a correction pi answers while the session is parked is consumed
+  there (the level re-ask goes to that same child), so coming back never asks
+  a second time.
+
+- **An edited `models.json` reaches the picker on the next launch.** The cached
+  catalog was trusted for six hours, so a change to pi's model files stayed
+  invisible until that TTL ran out — and with pi spawned only on send, nothing
+  else refreshed the list. The cache now carries a stamp of `models.json` — the
+  one model source pi's own preference writes do not touch — and an edit (or
+  deletion) makes it stale at once, and opening the model picker with no
+  process running probes again in the background. A catalog reported by a *running* pi is stored under
+  that process's own boot stamp: pi reads its model files once at start and
+  `get_available_models` answers from that snapshot, so a process older than the
+  edit cannot vouch for the new content.
+
+- **Sending closes the model popup.** The send button was clickable with the
+  model or thinking picker open, and a row clicked after that had nowhere to
+  go: the process was already on its way, so the pick was dropped with a
+  "pi is not running" toast and the chip never moved. Both controls are locked
+  for the duration of a start, so the send now closes the popup first — with
+  focus back on the composer — and the frame that sees a start on its way drops
+  it for every other path.
 
 ## [0.2.13] - 2026-10-27
 

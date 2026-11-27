@@ -1203,6 +1203,13 @@ impl OrbitApp {
         // A manual choice supersedes the session-birth default push. The push
         // itself sends `SetModel` directly so it doesn't disarm itself.
         self.default_model_armed = false;
+        // It supersedes the argv request too, and for the same reason: this
+        // command is the reader's own, sent after it, so pi ends up on this
+        // model. Leaving the request armed would hold the chips on the model
+        // the *argv* asked for — over an explicit pick — until this process
+        // dies, with no way back (see `reconcile_startup_model`).
+        self.startup_model_expected = None;
+        self.startup_model_fix = None;
         self.ensure_blank_launch_draft(cx);
         // A new task has no process yet. Remember the choice on the row and
         // show it; the first message starts pi with these args.
@@ -1378,7 +1385,7 @@ impl OrbitApp {
     /// Whether `level` can ride on `choice`. An unknown catalog entry is
     /// allowed and left for pi to clamp. A known entry with no real choice,
     /// or a level it does not list, is refused.
-    fn thinking_level_fits(
+    pub(super) fn thinking_level_fits(
         &self,
         choice: &crate::session_defaults::SessionDefault,
         level: &str,

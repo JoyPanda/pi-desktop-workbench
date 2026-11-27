@@ -456,9 +456,24 @@ impl OrbitApp {
                 Event::CompactionEnd { value } => {
                     self.is_compacting = false;
                     let aborted = value.get("aborted").and_then(Value::as_bool) == Some(true);
-                    // A failed compaction carries `errorMessage` (docs).
-                    if let Some(error) = value.get("errorMessage").and_then(Value::as_str) {
+                    // A failed compaction carries `errorMessage` (docs). pi
+                    // emits this event *and* rethrows for the failed `compact`
+                    // response; its two "nothing to do" answers belong to that
+                    // response's single notice, not to a red banner raised
+                    // here first and never retired.
+                    let benign = value
+                        .get("errorMessage")
+                        .and_then(Value::as_str)
+                        .and_then(Self::benign_compaction_message)
+                        .is_some();
+                    if let Some(error) = value
+                        .get("errorMessage")
+                        .and_then(Value::as_str)
+                        .filter(|_| !benign)
+                    {
                         self.set_error(tr!("events.compaction_failed", error = error));
+                    } else if benign {
+                        // The response arm owns the notice.
                     } else if aborted {
                         self.set_status(tr!("events.compaction_aborted"));
                     } else {
@@ -488,6 +503,12 @@ impl OrbitApp {
                     // for that birth must not follow the next process.
                     self.startup_model_pinned = false;
                     self.default_model_armed = false;
+                    // A startup-model correction died with it: the chips must
+                    // not stay held on a model no process is running.
+                    self.startup_model_expected = None;
+                    self.startup_model_fix = None;
+                    // A compaction it was going to run died with it too.
+                    self.pending_compact = None;
                     self.pending_session_rename = None;
                     self.session_rename_ready = false;
                     self.busy = false;
@@ -1108,6 +1129,23 @@ impl OrbitApp {
                     ) {
                         staged.push((id.clone(), *success));
                     }
+                    // pi answered this process's own startup correction while
+                    // the reader was elsewhere: consume it here or resume
+                    // would ask a second time.
+                    if let Some(slot) =
+                        parked.on_startup_model_response(id, command, *success)
+                    {
+                        if let Some(level) =
+                            slot.thinking.filter(|level| !level.is_empty())
+                        {
+                            // Straight to the parked child: the foreground may
+                            // have no process at all, or another session's.
+                            let _ = parked.client.send(CommandBody::SetThinkingLevel {
+                                level,
+                            });
+                        }
+                        changed = true;
+                    }
                     take_restore(
                         &mut restore,
                         parked.on_queue_response(id, command, *success),
@@ -1227,6 +1265,34 @@ impl OrbitApp {
         self.queue = PendingQueue::from_value(value);
     }
 
+    /// pi's two "there is nothing to do" compaction answers, as a ready-to-show
+    /// notice. There is no summarizable prefix outside the keep-recent window
+    /// for the model the session runs on, or its newest entry already is a
+    /// compaction: only pi knows either, so a Compact on a session without a
+    /// process cannot check in advance — but a red banner for "nothing to do"
+    /// reads as a broken click. Matched *exactly* against pi's two thrown
+    /// messages (`core/compaction/compaction.js`), never as a substring: a
+    /// real diagnostic that merely mentions one of them is a real failure.
+    fn benign_compaction_message(error: &str) -> Option<String> {
+        // The `compaction_end` event carries pi's decorated form.
+        let error = error.strip_prefix("Compaction failed: ").unwrap_or(error);
+        match error {
+            "Nothing to compact (session too small)" => Some(tr!("events.compaction_too_small")),
+            "Already compacted" => Some(tr!("events.compaction_already")),
+            _ => None,
+        }
+    }
+
+    /// [`Self::benign_compaction_message`] for a refused `compact` response.
+    /// Scoped to that one command: a `prompt` or `set_model` failure whose
+    /// text happens to quote the phrase is still that command's failure.
+    fn benign_compaction_refusal(command: &str, error: Option<&str>) -> Option<String> {
+        if command != "compact" {
+            return None;
+        }
+        Self::benign_compaction_message(error?)
+    }
+
     /// Apply a command response to the app. The arguments are the response's
     /// own fields; `id` is what tells one `prompt` from another.
     #[allow(clippy::too_many_arguments)]
@@ -1334,8 +1400,17 @@ impl OrbitApp {
                 }
                 self.end_replacement(cx);
             }
+            // A load that failed will never deliver what waits on it: an
+            // owed compaction would otherwise leave the card on "Compacting…"
+            // with no click handler and `compact_now` refusing forever.
+            if matches!(command, "get_messages" | "switch_session") {
+                self.pending_compact = None;
+            }
             self.fail_staged(id);
-            self.on_command_failure(command, error, cx);
+            match Self::benign_compaction_refusal(command, error) {
+                Some(notice) => self.toast_info(notice),
+                None => self.on_command_failure(command, error, cx),
+            }
             match command {
                 "compact" => {
                     self.is_compacting = false;
@@ -1346,6 +1421,9 @@ impl OrbitApp {
                 // overridden by the configured thinking level.
                 "set_model" => {
                     self.default_model_armed = false;
+                    // A refused startup correction means pi's registry has no
+                    // such model: release the chips and say which pick died.
+                    self.startup_model_refused(id, error, cx);
                     self.send(CommandBody::GetState, "get_state");
                 }
                 // These changed local UI optimistically; re-read pi's state.
@@ -1371,6 +1449,10 @@ impl OrbitApp {
         // data-required branch below.
         match command {
             "set_model" => {
+                // An accepted startup correction ends the hold and re-asks the
+                // level pi reset when the switch landed; queue it before the
+                // state read so that reply already carries both.
+                self.startup_model_corrected(id, cx);
                 self.send(CommandBody::GetState, "get_state");
                 self.send(
                     CommandBody::GetAvailableThinkingLevels,
@@ -1501,26 +1583,36 @@ impl OrbitApp {
         let Some(data) = data else { return };
         match command {
             "get_state" => {
-                if let Some(model) = data.get("model") {
-                    if let Some(name) = model.get("name").and_then(serde_json::Value::as_str) {
-                        self.model_label = name.to_string();
-                    }
-                    if let Some(id) = model.get("id").and_then(serde_json::Value::as_str) {
-                        self.model_id = id.to_string();
-                    }
-                    if let Some(provider) =
-                        model.get("provider").and_then(serde_json::Value::as_str)
-                    {
-                        self.model_provider = provider.to_string();
+                // pi resolves `--model` as a *fuzzy pattern*, so a process can
+                // come up on a neighbour of the model the composer asked for.
+                // While the one exact correction is in flight the chips stay
+                // on the pick — painting pi's answer here is what read as
+                // "the model switched by itself".
+                let held = self.startup_model_held(data);
+                if !held {
+                    if let Some(model) = data.get("model") {
+                        if let Some(name) = model.get("name").and_then(serde_json::Value::as_str) {
+                            self.model_label = name.to_string();
+                        }
+                        if let Some(id) = model.get("id").and_then(serde_json::Value::as_str) {
+                            self.model_id = id.to_string();
+                        }
+                        if let Some(provider) =
+                            model.get("provider").and_then(serde_json::Value::as_str)
+                        {
+                            self.model_provider = provider.to_string();
+                        }
                     }
                 }
                 // The Git page labels its context with the provider/model.
                 self.sync_review_context(cx);
-                if let Some(level) = data
-                    .get("thinkingLevel")
-                    .and_then(serde_json::Value::as_str)
-                {
-                    self.thinking_label = level.to_string();
+                if !held {
+                    if let Some(level) = data
+                        .get("thinkingLevel")
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        self.thinking_label = level.to_string();
+                    }
                 }
                 self.remember_reported_model(data);
                 if let Some(file) = data.get("sessionFile").and_then(Value::as_str) {
@@ -1593,16 +1685,24 @@ impl OrbitApp {
                 // A `new_session` birth may still need its default model
                 // pushed; this is a no-op otherwise.
                 self.apply_default_model(cx);
+                // The argv model is a request pi may have resolved loosely:
+                // check what actually came up, and ask once for the exact one.
+                self.reconcile_startup_model(data, cx);
             }
             "get_messages" => {
                 self.apply_messages_snapshot(data, cx);
                 // A message that resumed this session was waiting for pi to
                 // load it: the snapshot replaced the transcript it sat on.
                 self.deliver_resume_prompt(cx);
+                // So was a Compact clicked while the session had no process.
+                self.deliver_pending_compact(cx);
                 self.refresh_context_stats();
             }
             "get_available_models" => {
-                crate::catalog_cache::store_models(data);
+                // Stamped with the process's own boot: pi reads its model
+                // files once at start, so this catalog cannot vouch for an
+                // edit made since, and the next launch must probe again.
+                crate::catalog_cache::store_models_at(data, self.process_sources_stamp);
                 self.apply_models_payload(data);
                 self.sync_model_selector(cx);
                 // The model catalog arrived after the session: retry a default
@@ -2034,6 +2134,9 @@ impl OrbitApp {
         self.session_id = None;
         // A branch mirrors its source session; it is not put on the default model.
         self.default_model_armed = false;
+        // Nor is it the session a Compact was clicked on: the fork's own
+        // `get_messages` must not deliver a compaction owed to another file.
+        self.pending_compact = None;
         if let Some(data) = data {
             if let Some(file) = data.get("sessionFile").and_then(Value::as_str) {
                 self.adopt_session_file(PathBuf::from(file));

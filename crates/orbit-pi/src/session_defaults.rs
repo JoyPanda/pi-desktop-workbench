@@ -44,9 +44,24 @@ impl SessionDefault {
         self.model_id.as_deref().is_none_or(str::is_empty)
     }
 
+    /// The `(provider, id)` this slot names, or `None` when it names no
+    /// model. A missing provider reads as "" so the pair can be compared
+    /// with the `(provider, id)` pi reports without a second shape.
+    pub fn as_pair(&self) -> Option<(String, String)> {
+        let id = self.model_id.as_deref().filter(|id| !id.is_empty())?;
+        Some((self.provider.clone().unwrap_or_default(), id.to_string()))
+    }
+
     /// The extra `pi` CLI args this default implies at process spawn — empty
     /// when unset. `--model provider/id` keeps the provider explicit; a slot
-    /// without a provider emits just `--model id` and lets pi fuzzy-match.
+    /// without a provider emits just `--model id`.
+    ///
+    /// pi resolves `--model` as a *pattern* (exact id, then a fuzzy match),
+    /// so an id its registry no longer lists exactly can boot a neighbour
+    /// instead. Callers that must know what the child really came up on
+    /// compare its first `get_state` with [`Self::as_pair`] and re-ask
+    /// through the RPC, which resolves exactly
+    /// (`OrbitApp::reconcile_startup_model`).
     /// `--thinking` is independent of the model suffix so the two stay
     /// readable; pi clamps the level to the model's capabilities.
     pub fn cli_args(&self) -> Vec<String> {

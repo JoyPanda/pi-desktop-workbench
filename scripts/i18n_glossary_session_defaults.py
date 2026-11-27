@@ -11,6 +11,7 @@ GLOSSARY = {
         "Thinking level": "思考级别",
         "The starting reasoning level for the default model.": "默认模型的起始思考级别。",
         "pi default": "pi 默认",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': 'pi 没有模型“%{model}”，此会话保留了 pi 启动时解析出的模型。',
     },
     "ja": {
         "Session defaults": "セッションのデフォルト",
@@ -19,6 +20,7 @@ GLOSSARY = {
         "Thinking level": "思考レベル",
         "The starting reasoning level for the default model.": "デフォルトモデルの開始時の思考レベル。",
         "pi default": "pi のデフォルト",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': 'pi にモデル「%{model}」がないため、このセッションは pi が起動時に解決したモデルを維持しました。',
     },
     "ko": {
         "Session defaults": "세션 기본값",
@@ -27,6 +29,7 @@ GLOSSARY = {
         "Thinking level": "사고 수준",
         "The starting reasoning level for the default model.": "기본 모델의 시작 사고 수준입니다.",
         "pi default": "pi 기본값",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': 'pi에 "%{model}" 모델이 없어 이 세션은 pi가 시작할 때 해석한 모델을 유지했습니다.',
     },
     "es": {
         "Session defaults": "Valores predeterminados de sesión",
@@ -35,6 +38,7 @@ GLOSSARY = {
         "Thinking level": "Nivel de razonamiento",
         "The starting reasoning level for the default model.": "El nivel de razonamiento inicial del modelo predeterminado.",
         "pi default": "Predeterminado de pi",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': 'pi no tiene el modelo "%{model}", así que esta sesión conservó el modelo que pi resolvió al iniciar.',
     },
     "fr": {
         "Session defaults": "Valeurs par défaut des sessions",
@@ -43,6 +47,7 @@ GLOSSARY = {
         "Thinking level": "Niveau de réflexion",
         "The starting reasoning level for the default model.": "Le niveau de réflexion initial du modèle par défaut.",
         "pi default": "Par défaut de pi",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': "pi n'a pas le modèle « %{model} » ; cette session a conservé celui que pi a résolu au démarrage.",
     },
     "de": {
         "Session defaults": "Sitzungs-Standardwerte",
@@ -51,6 +56,7 @@ GLOSSARY = {
         "Thinking level": "Denkstufe",
         "The starting reasoning level for the default model.": "Die anfängliche Denkstufe des Standardmodells.",
         "pi default": "pi-Standard",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': 'pi hat kein Modell „%{model}“; diese Sitzung behielt das Modell, das pi beim Start aufgelöst hat.',
     },
     "pt-BR": {
         "Session defaults": "Padrões de sessão",
@@ -59,6 +65,7 @@ GLOSSARY = {
         "Thinking level": "Nível de raciocínio",
         "The starting reasoning level for the default model.": "O nível de raciocínio inicial do modelo padrão.",
         "pi default": "Padrão do pi",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': 'O pi não tem o modelo "%{model}", então esta sessão manteve o modelo que o pi resolveu ao iniciar.',
     },
     "ru": {
         "Session defaults": "Значения по умолчанию для сеансов",
@@ -67,6 +74,7 @@ GLOSSARY = {
         "Thinking level": "Уровень рассуждений",
         "The starting reasoning level for the default model.": "Начальный уровень рассуждений для модели по умолчанию.",
         "pi default": "По умолчанию pi",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': 'В pi нет модели «%{model}», поэтому сессия осталась на модели, которую pi разрешил при запуске.',
     },
     "it": {
         "Session defaults": "Valori predefiniti delle sessioni",
@@ -75,5 +83,6 @@ GLOSSARY = {
         "Thinking level": "Livello di ragionamento",
         "The starting reasoning level for the default model.": "Il livello di ragionamento iniziale del modello predefinito.",
         "pi default": "Predefinito di pi",
+        'pi has no model "%{model}", so this session kept the model pi resolved at startup.': "pi non ha il modello \"%{model}\", quindi questa sessione ha mantenuto quello risolto da pi all'avvio.",
     },
 }

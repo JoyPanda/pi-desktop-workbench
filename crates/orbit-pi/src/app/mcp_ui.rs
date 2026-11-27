@@ -248,6 +248,8 @@ impl OrbitApp {
             "--session".to_string(),
             session_path.to_string_lossy().into_owned(),
         ];
+        // Read before the spawn: the child's catalog is the one on disk now.
+        let sources_stamp = crate::catalog_cache::sources_stamp();
         match self
             .extensions
             .spawn_with_startup_args(&workspace, &args, &self.mcp.secret_env())
@@ -255,6 +257,7 @@ impl OrbitApp {
             Ok(client) => {
                 self.adopt_client(client);
                 self.mcp_stamp = self.mcp.fingerprint_for(Some(&workspace));
+                self.process_sources_stamp = sources_stamp;
                 let _ = self.begin_resumed_session(cx);
                 self.set_status(tr!("mcp.applied_restarting"));
                 self.mcp.log_event(

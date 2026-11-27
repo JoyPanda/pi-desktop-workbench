@@ -542,6 +542,11 @@ fn a_model_chosen_before_pi_starts_is_kept_and_used(cx: &mut gpui::TestAppContex
                 thinking: Some("high".into()),
             };
             assert_eq!(ticket.startup_args(), expected.cli_args());
+            assert_eq!(
+                ticket.requested_model.as_ref(),
+                Some(&expected),
+                "the landing checks what pi booted against the pick"
+            );
             assert!(
                 !app.startup_model_pinned,
                 "a spawn that has not landed must not pin the next session"
@@ -583,6 +588,11 @@ fn the_first_send_uses_the_default_model_when_none_was_chosen(cx: &mut gpui::Tes
 
             let ticket = app.pending_spawn.clone().expect("a ticket");
             assert_eq!(ticket.startup_args(), app.session_default.cli_args());
+            assert_eq!(
+                ticket.requested_model.as_ref(),
+                Some(&app.session_default.clone()),
+                "a default on the argv is checked like a pick"
+            );
             assert!(!app.startup_model_pinned);
         });
     });
@@ -966,6 +976,61 @@ fn staged_choices_merge_into_the_resumed_process(cx: &mut gpui::TestAppContext) 
 }
 
 
+/// A catalog a *running* pi reports is filed under that process's own boot
+/// stamp, not under the files as they are now: pi reads its model config once
+/// at start, so a process older than an edit cannot make the cache look
+/// current, and the next launch probes again instead of trusting it.
+#[gpui::test]
+fn a_live_catalog_reply_keeps_the_process_boot_stamp(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("boot-stamp");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|_, cx| {
+        app.update(cx, |app, cx| {
+            crate::catalog_cache::reset_for_test();
+            // The cache already describes the files as they are now (0: no
+            // test file), so the older process's reply must not overwrite it.
+            crate::catalog_cache::set_sources_at_for_test(0);
+            app.process_sources_stamp = 4242;
+            let mut refresh_sessions = false;
+            app.on_response(
+                "get_available_models",
+                true,
+                Some(&serde_json::json!({ "models": [] })),
+                None,
+                "models-1",
+                &mut refresh_sessions,
+                cx,
+            );
+            assert_eq!(
+                crate::catalog_cache::sources_at_for_test(),
+                0,
+                "a boot-stamped reply cannot displace the current read"
+            );
+            // With no current read on file, the same reply files under the
+            // process's own boot stamp — never under the files as they are.
+            crate::catalog_cache::reset_for_test();
+            crate::catalog_cache::set_sources_at_for_test(7);
+            app.on_response(
+                "get_available_models",
+                true,
+                Some(&serde_json::json!({ "models": [] })),
+                None,
+                "models-2",
+                &mut refresh_sessions,
+                cx,
+            );
+            assert_eq!(
+                crate::catalog_cache::sources_at_for_test(),
+                4242,
+                "the reply is filed under the stamp the process booted with"
+            );
+        });
+    });
+}
+
 /// A cold launch shows the cached catalog and commands with no process.
 #[gpui::test]
 fn a_cold_launch_shows_the_cached_catalog(cx: &mut gpui::TestAppContext) {
@@ -977,9 +1042,10 @@ fn a_cold_launch_shows_the_cached_catalog(cx: &mut gpui::TestAppContext) {
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
             let cwd = app.task_cwd();
-            crate::catalog_cache::store_models(&serde_json::json!({
+            crate::catalog_cache::reset_for_test();
+            crate::catalog_cache::store_models_at(&serde_json::json!({
                 "models": [{ "id": "cached-model", "name": "Cached", "provider": "anthropic" }]
-            }));
+            }), 0);
             crate::catalog_cache::store_commands(
                 &cwd,
                 &serde_json::json!({ "commands": [{ "name": "cached-cmd", "description": "d" }] }),
@@ -1066,10 +1132,11 @@ fn a_cold_launch_shows_pis_default_model(cx: &mut gpui::TestAppContext) {
 
     cx.update(|_, cx| {
         app.update(cx, |app, cx| {
-            crate::catalog_cache::store_models(&serde_json::json!({
+            crate::catalog_cache::reset_for_test();
+            crate::catalog_cache::store_models_at(&serde_json::json!({
                 "models": [{ "id": "dflt", "name": "Default One", "provider": "anthropic",
                              "reasoning": true }]
-            }));
+            }), 0);
             crate::catalog_cache::store_state(&serde_json::json!({
                 "model": { "id": "dflt", "name": "Default One", "provider": "anthropic" },
                 "thinkingLevel": "medium"
@@ -1497,6 +1564,90 @@ fn a_refused_cold_resume_hands_the_images_back(cx: &mut gpui::TestAppContext) {
             assert!(app.pending_prompt.is_none(), "nothing was queued");
             assert_eq!(app.attachments.len(), 1, "the image is back in the tray");
             assert!(app.input.read(cx).text().contains("refused message"));
+        });
+    });
+}
+
+/// The send button is clickable with the model popup open, and from the first
+/// message on the model is locked until pi is up. The popup goes with the
+/// send, so a row clicked a moment later cannot be silently dropped with a
+/// "pi is not running" toast.
+#[gpui::test]
+fn a_send_closes_the_model_popup_beside_it(cx: &mut gpui::TestAppContext) {
+    let fake = FakePi::start("send-closes-picker");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.available_models = vec![catalog_model("gpt-default", "GPT Default", "openai")];
+            app.on_new_session(&crate::NewSession, window, cx);
+            app.input.update(cx, |input, cx| input.set_text("hello", cx));
+            app.open_picker(crate::model_selector::PickerKind::Model, window, cx);
+            assert!(app.model_selector.is_some(), "the popup is open");
+
+            app.on_send_click(
+                &gpui::MouseUpEvent {
+                    button: gpui::MouseButton::Left,
+                    position: gpui::point(gpui::px(0.), gpui::px(0.)),
+                    modifiers: gpui::Modifiers::none(),
+                    click_count: 1,
+                },
+                window,
+                cx,
+            );
+
+            assert!(app.model_selector.is_none(), "the send closed it");
+            assert!(app.spawn_pending(), "and started pi with the message");
+        });
+    });
+
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        app.update(cx, |app, _cx| app.drop_client());
+    });
+}
+
+/// A start on its way locks the model, so the frame that sees it drops an
+/// open popup — and, unlike a window-less spawn path, can hand focus back to
+/// the composer. A row clicked after the send therefore cannot be a pick that
+/// has nowhere to go.
+#[gpui::test]
+fn a_pending_start_drops_the_open_model_popup_on_the_next_frame(
+    cx: &mut gpui::TestAppContext,
+) {
+    let fake = FakePi::start("spawn-drops-picker");
+    prepare(cx);
+    let cx = cx.add_empty_window();
+    let app = app_without_a_process(cx, &fake);
+
+    cx.update(|window, cx| {
+        app.update(cx, |app, cx| {
+            app.available_models = vec![catalog_model("gpt-default", "GPT Default", "openai")];
+            app.on_new_session(&crate::NewSession, window, cx);
+            app.open_picker(crate::model_selector::PickerKind::Model, window, cx);
+            assert!(app.model_selector.is_some(), "the popup is open");
+
+            app.submit("hello".into(), cx);
+
+            assert!(app.spawn_pending(), "the send started pi");
+        });
+    });
+
+    let _ = cx.draw(
+        gpui::point(gpui::px(0.), gpui::px(0.)),
+        gpui::size(gpui::px(1200.), gpui::px(820.)),
+        |_, _| app.clone(),
+    );
+
+    cx.update(|_, cx| {
+        app.update(cx, |app, _cx| {
+            assert!(
+                app.model_selector.is_none(),
+                "the frame that sees the start drops the popup"
+            );
+            app.drop_client();
         });
     });
 }
