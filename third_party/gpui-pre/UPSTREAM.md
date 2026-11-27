@@ -26,7 +26,7 @@ project with the behavior checklist behind it, never a routine `cargo update`.
 
 ## Local hunks
 
-Four app-relevant defects in 0.3.3 are patched here; everything else is
+Five app-relevant defects in 0.3.3 are patched here; everything else is
 byte-identical to the published crate.
 
 1. **`src/elements/list.rs`, `StateInner::scroll` — wheel tail fixes** (ported
@@ -68,6 +68,15 @@ byte-identical to the published crate.
    is not part of the root), so the focused node is gone and the key is dropped.
    Modality only affects paint, so the dirty mark now happens after the dispatch:
    the same frame is painted either way, just not in the middle of a dispatch.
+5. **`src/app/test_context.rs`, `VisualTestContext::draw` — no arena clear.** The
+   arena moved from a thread-local (`gpui` 0.2.2, cleared by the next
+   `Window::draw`) into the `App`, and upstream now clears it at the end of the
+   probe draw. A probe's deferred elements (`deferred(...)` overlays) are still
+   queued in `next_frame.deferred_draws` for the next real draw to prepaint, so
+   that clear frees them out from under it and the next draw panics with
+   "attempted to dereference an ArenaRef after its Arena was cleared". The clear
+   is left to the `Window::draw` that consumes them, as in 0.2.2.
+
 Nothing else is forked: `ListItem::Unmeasured` / `remeasure_items` (the
 streaming remeasure), `FollowMode`, and window-level selection are upstream and
 are used as published.

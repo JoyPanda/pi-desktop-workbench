@@ -914,7 +914,12 @@ impl VisualTestContext {
             window.refresh();
 
             drop(element);
-            arena_scope.exit(&cx.element_arena).clear(cx);
+            // Fork hunk: do not clear the arena here. The probe's deferred
+            // elements still live in `next_frame.deferred_draws` and are
+            // prepainted by the next real draw; clear them there (the arena is
+            // cleared at the end of every `Window::draw`) instead of pulling
+            // memory out from under them.
+            let _arena_clear = arena_scope.exit(&cx.element_arena);
 
             (request_layout_state, prepaint_state)
         })
