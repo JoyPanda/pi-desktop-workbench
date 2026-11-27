@@ -10,8 +10,8 @@
 use crate::{
     AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, Edges, Element, EntityId,
     FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, IntoElement,
-    Overflow, Pixels, Point, ScrollDelta, ScrollWheelEvent, Size, Style, StyleRefinement, Styled,
-    Window, point, px, size,
+    Overflow, Pixels, Point, ScrollWheelEvent, Size, Style, StyleRefinement, Styled, Window, point,
+    px, size,
 };
 use collections::VecDeque;
 use refineable::Refineable as _;
@@ -913,26 +913,29 @@ impl StateInner {
         let padding = self.last_padding.unwrap_or_default();
         let scroll_max =
             (self.items.summary().height + padding.top + padding.bottom - height).max(px(0.));
-        let new_scroll_top = (self.scroll_top(scroll_top) - delta.y)
-            .max(px(0.))
-            .min(scroll_max);
+        // A bottom-aligned tail has no anchor, so `scroll_top` reports the
+        // content end — one viewport past the real maximum. Clamp before
+        // applying the wheel, or a normal notch never leaves the tail.
+        let base = self.scroll_top(scroll_top).min(scroll_max).max(px(0.));
+        let new_scroll_top = (base - delta.y).max(px(0.)).min(scroll_max);
+
+        let (start, ..) =
+            self.items
+                .find::<ListItemSummary, _>((), &Height(new_scroll_top), Bias::Right);
+        let new_logical_scroll_top = ListOffset {
+            item_ix: start.count,
+            offset_in_item: new_scroll_top - start.height,
+        };
 
         if self.alignment == ListAlignment::Bottom && new_scroll_top == scroll_max {
             self.pending_scroll = None;
             self.logical_scroll_top = None;
         } else {
-            let (start, ..) =
-                self.items
-                    .find::<ListItemSummary, _>((), &Height(new_scroll_top), Bias::Right);
-            let scroll_top = ListOffset {
-                item_ix: start.count,
-                offset_in_item: new_scroll_top - start.height,
-            };
             // The user's scroll supersedes the position stashed by a
             // remeasure; re-anchor the pending adjustment so it doesn't revert
             // this scroll on the next layout.
-            self.rebase_pending_scroll(scroll_top);
-            self.logical_scroll_top = Some(scroll_top);
+            self.rebase_pending_scroll(new_logical_scroll_top);
+            self.logical_scroll_top = Some(new_logical_scroll_top);
         }
 
         if delta.y > px(0.) {
@@ -940,7 +943,11 @@ impl StateInner {
         }
 
         if let Some(handler) = self.scroll_handler.as_mut() {
-            let visible_range = Self::visible_range(&self.items, height, scroll_top);
+            // The tail stays unanchored, but the event reports the row that is
+            // actually at the top of the viewport. The incoming offset is the
+            // past-the-end sentinel while pinned, and reporting that would
+            // mark one row past the last item as visible.
+            let visible_range = Self::visible_range(&self.items, height, &new_logical_scroll_top);
             handler(
                 &ListScrollEvent {
                     visible_range,
@@ -1594,14 +1601,19 @@ impl Element for List {
         // to prevent the list from scrolling. This matches the ordering of
         // div-based scroll containers.
         let list_state = self.state.clone();
-        let height = bounds.size.height;
-        let scroll_top = prepaint.layout.scroll_top;
         let hitbox_id = prepaint.hitbox.id;
-        let mut accumulated_scroll_delta = ScrollDelta::default();
+        // Apply only this event's delta to the live offset. The listener is
+        // reused across frames, and folding every delta back onto the scroll
+        // position captured at the first paint replays the whole gesture and
+        // yanks a reader who has since returned to the tail.
         window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && hitbox_id.should_handle_scroll(window) {
-                accumulated_scroll_delta = accumulated_scroll_delta.coalesce(event.delta);
-                let pixel_delta = accumulated_scroll_delta.pixel_delta(px(20.));
+                let pixel_delta = event.delta.pixel_delta(px(20.));
+                let scroll_top = list_state.logical_scroll_top();
+                let height = list_state.viewport_bounds().size.height;
+                if height <= px(0.) {
+                    return;
+                }
                 list_state.0.borrow_mut().scroll(
                     &scroll_top,
                     height,

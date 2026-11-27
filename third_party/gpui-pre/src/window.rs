@@ -2541,6 +2541,15 @@ impl Window {
         count
     }
 
+    /// Whether [`Self::refresh`] has marked this window to be drawn again.
+    ///
+    /// Orbit fork: tests assert that a `refresh` scheduled on the next frame
+    /// actually took, which needs a read of the invalidator.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn is_dirty(&self) -> bool {
+        self.invalidator.is_dirty()
+    }
+
     /// Spawn the future returned by the given closure on the application thread pool.
     /// The closure is provided a handle to the current window and an `AsyncWindowContext` for
     /// use within your future.

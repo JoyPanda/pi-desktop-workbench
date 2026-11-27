@@ -1,23 +1,14 @@
 #![allow(clippy::disallowed_methods, reason = "build scripts are exempt")]
 
+// Orbit fork: the upstream script embeds `resources/windows/gpui.manifest.xml`
+// into every Windows binary whenever the `windows-manifest` feature is on, and
+// `gpui-pre-platform` turns that feature on unconditionally. Orbit embeds its
+// own `crates/orbit-pi/resources/windows.manifest` from the app's build script,
+// and two `RT_MANIFEST` resources of the same type/id/language make CVTRES fail
+// the link with `CVT1100: duplicate resource`. So the embed is a no-op here and
+// the app's manifest — the superset, with per-monitor-v2 DPI, long paths,
+// `asInvoker`, and the supportedOS list — is the one that ships.
+
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(gles)");
-
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
-
-    if target_os == "windows" {
-        #[cfg(feature = "windows-manifest")]
-        embed_resource();
-    }
-}
-
-#[cfg(feature = "windows-manifest")]
-fn embed_resource() {
-    let manifest = std::path::Path::new("resources/windows/gpui.manifest.xml");
-    let rc_file = std::path::Path::new("resources/windows/gpui.rc");
-    println!("cargo:rerun-if-changed={}", manifest.display());
-    println!("cargo:rerun-if-changed={}", rc_file.display());
-    embed_resource::compile(rc_file, embed_resource::NONE)
-        .manifest_required()
-        .unwrap();
 }

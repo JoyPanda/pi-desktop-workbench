@@ -341,20 +341,22 @@ impl DirectXRenderer {
         self.present()
     }
 
-    /// Clear the render target for `background_appearance` and encode every
-    /// primitive batch of `scene` into it, without presenting. Shared by
+    /// Clear the render target to transparent and encode every primitive
+    /// batch of `scene` into it, without presenting. Shared by
     /// [`draw`](Self::draw) (which then presents) and
     /// [`render_to_image`](Self::render_to_image) (which reads the target back
     /// instead), so the two cannot drift.
     fn render(
         &mut self,
         scene: &Scene,
-        background_appearance: WindowBackgroundAppearance,
+        _background_appearance: WindowBackgroundAppearance,
     ) -> Result<()> {
-        self.pre_draw(&match background_appearance {
-            WindowBackgroundAppearance::Opaque => [1.0f32; 4],
-            _ => [0.0f32; 4],
-        })?;
+        // Orbit fork: keep the transparent clear for every background
+        // appearance. The scene covers the window in the same frame, and
+        // upstream's opaque white clear flashes on a dark theme during resize,
+        // on the first frame, and during device-lost recovery. Matches the
+        // vendored gpui 0.2.2 `pre_draw`.
+        self.pre_draw(&[0.0f32; 4])?;
         self.upload_scene_buffers(scene)?;
 
         let annotation = self
