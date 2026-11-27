@@ -1,7 +1,7 @@
 # Plan — Migrate the UI foundation to gpui-pre 0.3.3, then adopt gpui-ai card components
 
 **Status:** Phase 1 steps 1–6 implemented on `feat/gpui-pre-foundation` (commits
-`4580f4e`..`14bc665`, suite 1552/0/7 on macOS). Step 7 pending: Windows regression (D10)
+`24f0d4b`..`68d443e`, suite 1552/0/7 on macOS). Step 7 pending: Windows regression (D10)
 and the D11 stop-loss judgment. Phase 2 not started.
 **Owner:** TBD
 **Scope:** `crates/orbit-pi` (the only crate that depends on gpui), `third_party/`,
