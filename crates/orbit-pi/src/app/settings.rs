@@ -6997,7 +6997,7 @@ impl OrbitApp {
                                 app.settings_filter
                                     .update(cx, |filter, cx| filter.clear(cx));
                                 let handle = app.settings_filter.read(cx).focus_handle(cx);
-                                window.focus(&handle);
+                                window.focus(&handle, cx);
                             }
                             cx.notify();
                         });
@@ -7206,7 +7206,7 @@ impl OrbitApp {
             )
             .w_full()
             .h(list_h)
-            .track_scroll(self.settings_select_scroll.clone())
+            .track_scroll(&self.settings_select_scroll)
             .py(list_pad_y)
             .into_any_element()
         };
@@ -7282,7 +7282,7 @@ impl OrbitApp {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Window)
-                        .anchor(Corner::TopRight)
+                        .anchor(Anchor::TopRight)
                         .offset(point(px(0.), size.height(&theme) + popover::MENU_OFFSET))
                         .child(deferred(popup)),
                 )
@@ -7607,7 +7607,7 @@ impl OrbitApp {
         self.settings_open = false;
         self.provider_editor = None;
         self.provider_key_editor = None;
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
         self.sync_terminal_active(cx);
         cx.notify();
     }
@@ -7927,7 +7927,7 @@ impl OrbitApp {
                 .with_placeholder("sk-…")
         });
         let focus = key.read(cx).focus_handle(cx);
-        window.focus(&focus);
+        window.focus(&focus, cx);
         self.provider_key_editor = Some(ProviderKeyEditor {
             provider_id,
             provider_name,
@@ -8121,7 +8121,7 @@ impl OrbitApp {
         } else {
             id_input.read(cx).focus_handle(cx)
         };
-        window.focus(&focus);
+        window.focus(&focus, cx);
         self.provider_editor = Some(ProviderEditor {
             original_id: provider_id,
             in_catalog,
@@ -8648,7 +8648,7 @@ mod about_banner_tests {
             })
         });
         let viewport = cx.update(|window, _| window.viewport_size());
-        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
 
         let banner = cx
             .debug_bounds("about-star-banner")

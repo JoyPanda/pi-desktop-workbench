@@ -53,7 +53,7 @@ fn draw(cx: &mut gpui::VisualTestContext, app: &Entity<OrbitApp>) {
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(720.), px(400.)),
-        |_, cx| cx.new(|_| TrayProbe { app: app.clone() }),
+        |_, cx| cx.new(|_| TrayProbe { app: app.clone() }).into_any_element(),
     );
 }
 

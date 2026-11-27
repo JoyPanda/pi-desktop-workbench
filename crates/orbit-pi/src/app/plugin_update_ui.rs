@@ -1,5 +1,4 @@
 use super::*;
-use gpui::Timer;
 
 /// Let the session startup work settle before checking package registries.
 const PLUGIN_UPDATE_CHECK_DELAY: Duration = Duration::from_secs(5);
@@ -28,7 +27,9 @@ impl OrbitApp {
         let skipped = self.plugin_update_skips.clone();
         cx.spawn(async move |this, cx| {
             if delayed {
-                Timer::after(PLUGIN_UPDATE_CHECK_DELAY).await;
+                cx.background_executor()
+                    .timer(PLUGIN_UPDATE_CHECK_DELAY)
+                    .await;
             }
             let updates = cx
                 .background_executor()

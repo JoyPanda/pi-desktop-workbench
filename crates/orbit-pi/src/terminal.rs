@@ -49,8 +49,8 @@ use gpui::{
     ClipboardItem, Context, CursorStyle, Entity, FocusHandle, Focusable, Font, FontFallbacks,
     FontFeatures, FontStyle, FontWeight, Hsla, IntoElement, Keystroke, MouseButton, MouseDownEvent,
     MouseMoveEvent, ParentElement, Pixels, Point, Render, Rgba, ScrollDelta, ScrollHandle,
-    ScrollWheelEvent, SharedString, StrikethroughStyle, Styled, Task, TextRun, UnderlineStyle,
-    Window,
+    ScrollWheelEvent, SharedString, StrikethroughStyle, Styled, Task, TextAlign, TextRun,
+    UnderlineStyle, Window,
 };
 
 use crate::app::{
@@ -1233,7 +1233,7 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         if event.button != MouseButton::Left {
             return;
         }
@@ -1492,8 +1492,22 @@ impl TerminalView {
                         state.origin.x,
                         state.origin.y + state.cell_height * row as f32,
                     );
-                    let _ = line.paint_background(origin, state.cell_height, window, cx);
-                    let _ = line.paint(origin, state.cell_height, window, cx);
+                    let _ = line.paint_background(
+                        origin,
+                        state.cell_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                    let _ = line.paint(
+                        origin,
+                        state.cell_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
                 }
                 if let Some((paint, rect)) = state.cursor {
                     let thickness = px(2.);
@@ -1703,7 +1717,7 @@ impl TerminalPanel {
                 // the keyboard back in it.
                 Some(terminal) => {
                     self.sync_active(true, cx);
-                    window.focus(&terminal.read(cx).handle());
+                    window.focus(&terminal.read(cx).handle(), cx);
                 }
                 None => self.new_tab(window, cx),
             }
@@ -1724,7 +1738,7 @@ impl TerminalPanel {
         // The tab that was visible stops asking for frames; its shell keeps
         // running and keeps draining into its own grid.
         self.sync_active(true, cx);
-        window.focus(&terminal.read(cx).handle());
+        window.focus(&terminal.read(cx).handle(), cx);
         self.tab_scroll.scroll_to_item(self.active);
         cx.notify();
     }
@@ -1752,7 +1766,7 @@ impl TerminalPanel {
         self.active = self.active.min(self.tabs.len() - 1);
         self.sync_active(true, cx);
         if let Some(terminal) = self.active_terminal() {
-            window.focus(&terminal.read(cx).handle());
+            window.focus(&terminal.read(cx).handle(), cx);
         }
         self.tab_scroll.scroll_to_item(self.active);
         cx.notify();
@@ -1771,7 +1785,7 @@ impl TerminalPanel {
         self.active = index;
         self.sync_active(true, cx);
         if let Some(terminal) = self.active_terminal() {
-            window.focus(&terminal.read(cx).handle());
+            window.focus(&terminal.read(cx).handle(), cx);
         }
         self.tab_scroll.scroll_to_item(self.active);
         cx.notify();
@@ -1851,7 +1865,7 @@ impl TerminalPanel {
         cx: &mut Context<Self>,
     ) {
         if let Some(terminal) = self.active_terminal() {
-            window.focus(&terminal.read(cx).handle());
+            window.focus(&terminal.read(cx).handle(), cx);
         }
     }
 
@@ -2568,9 +2582,12 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             size(px(400.), px(160.)),
-            move |_, _| element.clone(),
+            move |_, _| element.clone().into_any_element(),
         );
-        cx.update(|window, cx| view.read(cx).handle().focus(window));
+        cx.update(|window, cx| {
+            let handle = view.read(cx).handle();
+            window.focus(&handle, cx);
+        });
         // A frame must land between focusing and typing: the focus handle is
         // registered while the grid prepaints, and key dispatch resolves it
         // against the rendered frame.
@@ -2578,7 +2595,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             size(px(400.), px(160.)),
-            move |_, _| element.clone(),
+            move |_, _| element.clone().into_any_element(),
         );
         cx.simulate_keystrokes("o r b i t");
 
@@ -2621,7 +2638,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             size(px(400.), px(200.)),
-            move |_, _| p.clone(),
+            move |_, _| p.clone().into_any_element(),
         );
 
         // Open it the way ⌘J does: create the view and focus it.
@@ -2630,7 +2647,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             size(px(400.), px(200.)),
-            move |_, _| p.clone(),
+            move |_, _| p.clone().into_any_element(),
         );
 
         // The autostart shell is the login shell; swap in `cat` so the test is
@@ -2654,7 +2671,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             size(px(400.), px(200.)),
-            move |_, _| p.clone(),
+            move |_, _| p.clone().into_any_element(),
         );
         cx.simulate_keystrokes("o r b i t");
 
@@ -2704,7 +2721,7 @@ mod tests {
                 session.write(b"printf 'GRID%s\\n' -OK\r".to_vec());
                 std::thread::sleep(Duration::from_millis(200));
                 view.update(cx, |view, _| view.session = Some(session));
-                view
+                view.into_any_element()
             },
         );
 

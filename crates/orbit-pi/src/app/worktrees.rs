@@ -1217,7 +1217,7 @@ impl OrbitApp {
                         // over its own button.
                         anchored()
                             .position_mode(AnchoredPositionMode::Window)
-                            .anchor(Corner::TopRight)
+                            .anchor(Anchor::TopRight)
                             .offset(point(
                                 px(0.),
                                 ButtonSize::Medium.height(&theme) + popover::MENU_OFFSET,
@@ -2535,14 +2535,14 @@ impl OrbitApp {
         let rows = self.work_in_rows().unwrap_or_default();
         self.work_in_menu_highlight = self.work_in_selected_ix(&rows);
         self.work_in_menu_open = true;
-        window.focus(&self.work_in_menu_focus);
+        window.focus(&self.work_in_menu_focus, cx);
         cx.notify();
     }
 
     pub(super) fn close_work_in_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.work_in_menu_open {
             self.work_in_menu_open = false;
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
         }
     }
@@ -2662,7 +2662,7 @@ impl OrbitApp {
         self.worktree_name_input
             .update(cx, |input, cx| input.set_text(suggestion, cx));
         let handle = self.worktree_name_input.read(cx).focus_handle(cx);
-        window.focus(&handle);
+        window.focus(&handle, cx);
         cx.notify();
     }
 
@@ -2916,7 +2916,7 @@ impl OrbitApp {
         Some(
             anchored()
                 .position_mode(AnchoredPositionMode::Local)
-                .anchor(Corner::BottomLeft)
+                .anchor(Anchor::BottomLeft)
                 .offset(point(px(0.), -popover::MENU_OFFSET))
                 .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                 .child(deferred(popup))
@@ -3036,11 +3036,11 @@ fn worktree_row_menu(
         })
         .child(body);
     let anchor = if let Some(at) = menu.at {
-        anchored().anchor(Corner::TopLeft).position(at)
+        anchored().anchor(Anchor::TopLeft).position(at)
     } else {
         anchored()
             .position_mode(AnchoredPositionMode::Local)
-            .anchor(Corner::TopRight)
+            .anchor(Anchor::TopRight)
             .offset(point(
                 px(0.),
                 ButtonSize::Compact.height(&theme) + popover::MENU_OFFSET,

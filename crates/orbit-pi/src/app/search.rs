@@ -56,7 +56,7 @@ impl OrbitApp {
             index: 0,
             matched_count: self.transcript.message_count(),
         });
-        window.focus(&handle);
+        window.focus(&handle, cx);
         cx.notify();
     }
 
@@ -119,7 +119,7 @@ impl OrbitApp {
         self.close_search(cx);
         // Hand focus back to the composer so typing resumes immediately.
         let handle = self.input.read(cx).focus_handle(cx);
-        window.focus(&handle);
+        window.focus(&handle, cx);
     }
 
     /// Matching message indices for the current query, for the transcript's

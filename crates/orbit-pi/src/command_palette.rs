@@ -1088,7 +1088,7 @@ mod tests {
         let cx = cx.add_empty_window();
         let palette = open_test_palette(cx);
         let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(700.)), |_, _| {
-            palette.clone()
+            palette.clone().into_any_element()
         });
 
         assert_eq!(cx.update(|_, cx| palette.read(cx).highlighted), 0);
@@ -1117,7 +1117,7 @@ mod tests {
         let cx = cx.add_empty_window();
         let palette = open_test_palette(cx);
         let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(700.)), |_, _| {
-            palette.clone()
+            palette.clone().into_any_element()
         });
 
         let metrics = PaletteMetrics::new(&Theme::dark());
@@ -1205,7 +1205,7 @@ mod tests {
                     cx,
                 )
             });
-            window.focus(&palette.read(cx).focus_handle(cx));
+            window.focus(&palette.read(cx).focus_handle(cx), cx);
             palette
         })
     }

@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     anchored, canvas, deferred, div, fill, hsla, img, point, prelude::*, px, size,
-    AnchoredPositionMode, AnyElement, Background, Bounds, ClickEvent, Context, Corner, Entity,
+    AnchoredPositionMode, AnyElement, Background, Bounds, ClickEvent, Context, Anchor, Entity,
     Focusable, FontWeight, Hsla, MouseDownEvent, ObjectFit, PathBuilder, Pixels, Render,
     ScrollHandle, Subscription, Window,
 };
@@ -1734,7 +1734,7 @@ impl GitPanel {
                     };
                     if opening {
                         this.clear_branch_filter(cx);
-                        window.focus(&this.branch_filter.read(cx).focus_handle(cx));
+                        window.focus(&this.branch_filter.read(cx).focus_handle(cx), cx);
                     }
                     cx.notify();
                 }),
@@ -2828,12 +2828,12 @@ impl GitPanel {
             // The click that dismissed the menu was this chip: the editor held
             // focus before the popup opened, so give it back instead of leaving
             // it on the now-hidden search field.
-            self.message.read(cx).focus_handle(cx).focus(window);
+            crate::composer::focus_input(&self.message, window, cx);
             return;
         }
         if self.commit_model_menu_open {
             self.close_commit_model_menu(cx);
-            self.message.read(cx).focus_handle(cx).focus(window);
+            crate::composer::focus_input(&self.message, window, cx);
             return;
         }
         self.commit_model_menu_open = true;
@@ -2844,7 +2844,7 @@ impl GitPanel {
         self.commit_model_highlight = self.commit_model_selected_row(&rows).unwrap_or(0);
         self.commit_model_scroll
             .scroll_to_item(self.commit_model_highlight);
-        window.focus(&self.commit_model_filter.read(cx).focus_handle(cx));
+        window.focus(&self.commit_model_filter.read(cx).focus_handle(cx), cx);
         cx.notify();
     }
 
@@ -2897,7 +2897,7 @@ impl GitPanel {
             });
         self.commit_model.persist();
         self.commit_model_menu_open = false;
-        self.message.read(cx).focus_handle(cx).focus(window);
+        crate::composer::focus_input(&self.message, window, cx);
         cx.notify();
     }
 
@@ -2947,7 +2947,7 @@ impl GitPanel {
             .on_mouse_up(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(|this, _: &crate::PickerCancel, window, cx| {
                 this.close_commit_model_menu(cx);
-                this.message.read(cx).focus_handle(cx).focus(window);
+                crate::composer::focus_input(&this.message, window, cx);
             }))
             .on_action(cx.listener(|this, _: &crate::PickerConfirm, window, cx| {
                 this.confirm_commit_model(window, cx)
@@ -2987,7 +2987,7 @@ impl GitPanel {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::BottomLeft)
+                        .anchor(Anchor::BottomLeft)
                         .offset(point(px(0.), px(-6.)))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(menu)),
@@ -3328,7 +3328,7 @@ impl GitPanel {
         self.branch_more_open = false;
         self.menu_dismissed_at = Some(Instant::now());
         let focus = self.branch_input.read(cx).focus_handle(cx);
-        window.focus(&focus);
+        window.focus(&focus, cx);
         cx.notify();
     }
 
@@ -3422,7 +3422,7 @@ impl GitPanel {
         }
         self.branch_menu_open = opening;
         if opening {
-            window.focus(&self.branch_filter.read(cx).focus_handle(cx));
+            window.focus(&self.branch_filter.read(cx).focus_handle(cx), cx);
         }
         cx.notify();
     }
@@ -4003,7 +4003,7 @@ impl GitPanel {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopRight)
+                        .anchor(Anchor::TopRight)
                         .offset(point(px(0.), px(6.)))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(menu)),
@@ -4103,7 +4103,7 @@ impl GitPanel {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopRight)
+                        .anchor(Anchor::TopRight)
                         .offset(point(px(0.), px(6.)))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(menu)),
@@ -4449,7 +4449,7 @@ impl GitPanel {
                     .on_mouse_up(
                         gpui::MouseButton::Left,
                         cx.listener(|this, _, window, cx| {
-                            this.message.read(cx).focus_handle(cx).focus(window);
+                            crate::composer::focus_input(&this.message, window, cx);
                         }),
                     )
                     .on_action(cx.listener(|this, _: &crate::GitCommitSubmit, _, cx| {

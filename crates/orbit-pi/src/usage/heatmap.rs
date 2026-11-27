@@ -766,7 +766,7 @@ mod tests {
                         hover,
                         theme,
                         width,
-                    })
+                    }).into_any_element()
                 },
             );
             let readout = cx

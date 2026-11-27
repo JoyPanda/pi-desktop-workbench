@@ -36,7 +36,7 @@ impl Render for SettingsSelectAnchorProbe {
         let anchored_popup = if self.legacy {
             anchored()
                 .position_mode(AnchoredPositionMode::Local)
-                .anchor(Corner::BottomRight)
+                .anchor(Anchor::BottomRight)
                 .offset(point(px(0.), px(-4.)))
                 .snap_to_window()
                 .child(deferred(popup))
@@ -44,7 +44,7 @@ impl Render for SettingsSelectAnchorProbe {
         } else {
             anchored()
                 .position_mode(AnchoredPositionMode::Window)
-                .anchor(Corner::TopRight)
+                .anchor(Anchor::TopRight)
                 .offset(point(px(0.), px(30.)))
                 .child(deferred(popup))
                 .into_any_element()
@@ -87,7 +87,7 @@ fn local_snap_anchor_covers_the_chip_near_the_viewport_top(cx: &mut gpui::TestAp
             cx.new(|_| SettingsSelectAnchorProbe {
                 legacy: true,
                 near_bottom: false,
-            })
+            }).into_any_element()
         },
     );
     let chip = cx.debug_bounds("anchor-chip").expect("chip laid out");
@@ -111,7 +111,7 @@ fn settings_select_popup_opens_below_its_chip(cx: &mut gpui::TestAppContext) {
             cx.new(|_| SettingsSelectAnchorProbe {
                 legacy: false,
                 near_bottom: false,
-            })
+            }).into_any_element()
         },
     );
     let chip = cx.debug_bounds("anchor-chip").expect("chip laid out");
@@ -140,7 +140,7 @@ fn settings_select_popup_flips_above_near_the_viewport_bottom(cx: &mut gpui::Tes
             cx.new(|_| SettingsSelectAnchorProbe {
                 legacy: false,
                 near_bottom: true,
-            })
+            }).into_any_element()
         },
     );
     let chip = cx.debug_bounds("anchor-chip").expect("chip laid out");
@@ -174,7 +174,7 @@ impl Render for SettingsPopupListTestView {
                     })
                     .collect()
             })
-            .track_scroll(self.0.clone())
+            .track_scroll(&self.0)
             .w_full()
             .h(px(list_h))
             .px(px(4.))
@@ -195,7 +195,7 @@ fn settings_popup_list_keeps_a_viewport_in_zero_height_context(cx: &mut gpui::Te
     let cx = cx.add_empty_window();
     let scroll = gpui::UniformListScrollHandle::new();
     let _ = cx.draw(point(px(0.), px(0.)), size(px(200.), px(0.)), |_, cx| {
-        cx.new(|_| SettingsPopupListTestView(scroll.clone()))
+        cx.new(|_| SettingsPopupListTestView(scroll.clone())).into_any_element()
     });
     let state = scroll.0.borrow();
     let size = state.last_item_size.expect("list was laid out");
@@ -214,7 +214,7 @@ fn max_h_collapses_uniform_list_in_zero_height_context(cx: &mut gpui::TestAppCon
     let cx = cx.add_empty_window();
     let scroll = gpui::UniformListScrollHandle::new();
     let _ = cx.draw(point(px(0.), px(0.)), size(px(200.), px(0.)), |_, cx| {
-        cx.new(|_| MaxHeightListTestView(scroll.clone()))
+        cx.new(|_| MaxHeightListTestView(scroll.clone())).into_any_element()
     });
     let state = scroll.0.borrow();
     let size = state.last_item_size.expect("list was laid out");
@@ -250,8 +250,8 @@ fn worktree_advanced_menu_opens_below_its_button(cx: &mut gpui::TestAppContext) 
         });
     });
     // The page settles over a frame (workspace discovery, then a refresh).
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
 
     let button = cx
         .debug_bounds("worktrees-advanced")
@@ -341,7 +341,7 @@ impl Render for ContextMenuProbe {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopLeft)
+                        .anchor(Anchor::TopLeft)
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(popup)),
                 ),
@@ -358,7 +358,7 @@ fn context_menu_shell_lays_out_on_zeds_metrics(cx: &mut gpui::TestAppContext) {
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(300.), px(400.)),
-        |_, cx| cx.new(|_| ContextMenuProbe),
+        |_, cx| cx.new(|_| ContextMenuProbe).into_any_element(),
     );
     let viewport = cx.update(|window, _| window.viewport_size());
     let menu = cx.debug_bounds("menu").expect("menu laid out");
@@ -409,7 +409,7 @@ impl Render for MaxHeightListTestView {
                 })
                 .collect()
         })
-        .track_scroll(self.0.clone())
+        .track_scroll(&self.0)
         .w_full()
         .max_h(px(220.))
         .px(px(4.))
@@ -466,7 +466,7 @@ fn modal_card_uses_zeds_header_and_footer_metrics(cx: &mut gpui::TestAppContext)
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(600.), px(400.)),
-        |_, cx| cx.new(|_| ModalCardProbe),
+        |_, cx| cx.new(|_| ModalCardProbe).into_any_element(),
     );
     let header = cx.debug_bounds("modal-header").expect("header laid out");
     let title = cx.debug_bounds("modal-title").expect("title laid out");
@@ -502,7 +502,7 @@ fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     // A catalog big enough to be keyboard-navigable, then open the popup the
@@ -527,7 +527,7 @@ fn model_picker_arrows_move_the_highlight(cx: &mut gpui::TestAppContext) {
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     let highlighted = |cx: &mut gpui::VisualTestContext| {
@@ -589,7 +589,7 @@ fn model_picker_arrows_work_after_the_palette_route(cx: &mut gpui::TestAppContex
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     cx.update(|window, cx| {
@@ -619,7 +619,7 @@ fn model_picker_arrows_work_after_the_palette_route(cx: &mut gpui::TestAppContex
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     let filter_focused = cx.update(|window, cx| {
@@ -669,7 +669,7 @@ fn chip_click_does_not_let_the_composer_steal_picker_focus(cx: &mut gpui::TestAp
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     cx.update(|_, cx| {
@@ -692,7 +692,7 @@ fn chip_click_does_not_let_the_composer_steal_picker_focus(cx: &mut gpui::TestAp
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     // The chip's own handler (what `on_mouse_up` calls) opens the popup.
@@ -704,7 +704,7 @@ fn chip_click_does_not_let_the_composer_steal_picker_focus(cx: &mut gpui::TestAp
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
     let filter_focused = cx.update(|window, cx| {
         let (_, selector) = app
@@ -792,7 +792,7 @@ fn quota_popup_scrolls_instead_of_clipping_its_last_card(cx: &mut gpui::TestAppC
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     // Five providers with two windows each: comfortably past the 460px cap
@@ -822,7 +822,7 @@ fn quota_popup_scrolls_instead_of_clipping_its_last_card(cx: &mut gpui::TestAppC
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     let popup = cx
@@ -864,7 +864,7 @@ fn quota_popup_moves_hidden_providers_into_their_own_group(cx: &mut gpui::TestAp
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     cx.update(|_, cx| {
@@ -887,7 +887,7 @@ fn quota_popup_moves_hidden_providers_into_their_own_group(cx: &mut gpui::TestAp
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     assert!(
@@ -925,7 +925,7 @@ fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     // A throwaway MCP configuration with one server, and no quota reports:
@@ -961,7 +961,7 @@ fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     assert!(
@@ -1018,7 +1018,7 @@ fn quota_popup_mcp_tab_swaps_the_pane(cx: &mut gpui::TestAppContext) {
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
     assert!(cx.debug_bounds("quota-popup-body").is_some());
     assert!(cx.debug_bounds("quota-mcp-body").is_none());
@@ -1046,7 +1046,7 @@ fn model_and_thinking_pickers_stay_shut_while_running(cx: &mut gpui::TestAppCont
     let _ = cx.draw(
         point(px(0.), px(0.)),
         gpui::size(px(1200.), px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     cx.update(|_, cx| {
@@ -1105,7 +1105,7 @@ fn mode_popups_span_the_composer_and_rows_never_reflow(cx: &mut gpui::TestAppCon
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let space = gpui::size(px(1200.), px(820.));
     let redraw = |cx: &mut gpui::VisualTestContext| {
-        let _ = cx.draw(point(px(0.), px(0.)), space, |_, _| app.clone());
+        let _ = cx.draw(point(px(0.), px(0.)), space, |_, _| app.clone().into_any_element());
     };
     redraw(cx);
 

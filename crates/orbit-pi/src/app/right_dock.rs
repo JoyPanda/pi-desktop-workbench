@@ -11,7 +11,7 @@
 //! frame, so every path that opens or closes a panel (palette, shortcut,
 //! transcript card, Git page) keeps the strip honest without knowing about it.
 
-use gpui::{anchored, deferred, point, AnchoredPositionMode, ClickEvent, Corner};
+use gpui::{anchored, deferred, point, AnchoredPositionMode, ClickEvent, Anchor};
 
 use super::helpers::*;
 use super::view::header_menu_row;
@@ -621,7 +621,7 @@ impl OrbitApp {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopRight)
+                        .anchor(Anchor::TopRight)
                         .offset(point(px(0.), popover::MENU_OFFSET))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(menu)),

@@ -652,7 +652,7 @@ impl OrbitApp {
                     let armed = thumb_contains(
                         f32::from(bounds.origin.y),
                         f32::from(bounds.size.height),
-                        f32::from(handle.max_offset().height),
+                        f32::from(handle.max_offset().y),
                         f32::from(handle.offset().y),
                         f32::from(position.y),
                     );
@@ -683,7 +683,7 @@ impl OrbitApp {
             return;
         };
         let viewport = f32::from(handle.bounds().size.height);
-        let max = f32::from(handle.max_offset().height);
+        let max = f32::from(handle.max_offset().y);
         let Some(offset_y) = dragged_offset(start_offset, f32::from(y) - start_y, viewport, max)
         else {
             return;
@@ -746,7 +746,7 @@ impl OrbitApp {
             return;
         };
         let offset = handle.offset();
-        let max = handle.max_offset().height;
+        let max = handle.max_offset().y;
         let previous = before.get();
         // The pane clamps the event the platform already applied, so a notch at
         // either edge stops here. Nothing about this wheel belongs to the
@@ -886,7 +886,7 @@ fn follow_after(handle: &ScrollHandle, event: &ScrollWheelEvent, line: Pixels) -
         return None;
     }
     let offset = handle.offset();
-    let max = handle.max_offset().height;
+    let max = handle.max_offset().y;
     let previous = offset.y - delta_y;
     let clamped = (previous + delta_y).clamp(-max, px(0.));
     if max <= px(0.) || clamped <= -max {
@@ -947,7 +947,7 @@ fn overlay_thumb(handle: &ScrollHandle, color: gpui::Hsla) -> AnyElement {
         move |bounds, _, window, _| {
             let Some((top, height)) = thumb_rect(
                 f32::from(bounds.size.height),
-                f32::from(handle.max_offset().height),
+                f32::from(handle.max_offset().y),
                 f32::from(handle.offset().y),
             ) else {
                 return;

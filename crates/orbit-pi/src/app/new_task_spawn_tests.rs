@@ -77,7 +77,7 @@ fn the_first_send_starts_the_process(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("build the thing", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
 
             app.on_submit(&crate::Submit, window, cx);
 
@@ -124,7 +124,7 @@ fn a_failed_spawn_hands_the_message_back(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("keep this", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             let ticket = app.pending_spawn.clone().expect("a ticket");
 
@@ -164,7 +164,7 @@ fn stopping_a_starting_process_hands_the_message_back(cx: &mut gpui::TestAppCont
             app.input
                 .update(cx, |input, cx| input.set_text("never mind", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             let ticket = app.pending_spawn.clone().expect("a ticket");
             assert!(app.spawn_pending());
@@ -198,7 +198,7 @@ fn a_spawn_that_lost_the_view_is_dropped(cx: &mut gpui::TestAppContext) {
             app.on_new_session(&crate::NewSession, window, cx);
             app.input.update(cx, |input, cx| input.set_text("lost", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             let ticket = app.pending_spawn.clone().expect("a ticket");
             let cwd = cwd_of(app);
@@ -352,7 +352,7 @@ fn leaving_during_the_start_keeps_the_spawn(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("unsent work", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.pending_prompt.is_some());
 
@@ -383,7 +383,7 @@ fn stop_during_the_start_hands_the_message_back(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("abandoned", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.pending_prompt.is_some());
 
@@ -413,7 +413,7 @@ fn a_second_message_while_starting_stays_in_the_composer(cx: &mut gpui::TestAppC
             app.input
                 .update(cx, |input, cx| input.set_text("first", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.pending_prompt.is_some());
 
@@ -532,7 +532,7 @@ fn a_model_chosen_before_pi_starts_is_kept_and_used(cx: &mut gpui::TestAppContex
             app.input
                 .update(cx, |input, cx| input.set_text("use the chosen model", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
 
             let ticket = app.pending_spawn.clone().expect("the send started pi");
@@ -583,7 +583,7 @@ fn the_first_send_uses_the_default_model_when_none_was_chosen(cx: &mut gpui::Tes
             app.input
                 .update(cx, |input, cx| input.set_text("plain", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
 
             let ticket = app.pending_spawn.clone().expect("a ticket");
@@ -627,7 +627,7 @@ fn stopping_a_starting_process_clears_a_model_pin(cx: &mut gpui::TestAppContext)
             app.input
                 .update(cx, |input, cx| input.set_text("hold", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.spawn_pending());
             app.startup_model_pinned = true;
@@ -1214,7 +1214,7 @@ fn returning_to_a_booting_send_reattaches_it(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("first message", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.spawn_pending(), "the resume send asked for a process");
             assert!(app.pending_prompt.is_some());
@@ -1258,7 +1258,7 @@ fn a_parked_resume_whose_process_dies_hands_the_prompt_back(cx: &mut gpui::TestA
             app.input
                 .update(cx, |input, cx| input.set_text("stranded work", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             // Leave before landing: the resume spawn detaches.
             app.switch_to_session(session_at("parked-exit-b.jsonl"), false, cx);
@@ -1309,7 +1309,7 @@ fn returning_to_a_booting_new_task_reattaches_it(cx: &mut gpui::TestAppContext) 
             app.input
                 .update(cx, |input, cx| input.set_text("first task message", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.spawn_pending());
 
@@ -1348,7 +1348,7 @@ fn a_blank_launch_send_gets_a_draft_row(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("launch message", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.current_draft_id.is_some(), "the send now has a row");
             assert_eq!(app.listed_drafts.len(), 1);
@@ -1385,7 +1385,7 @@ fn stopping_a_booting_send_restores_images_and_keeps_newer_text(cx: &mut gpui::T
             app.input
                 .update(cx, |input, cx| input.set_text("first message", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.pending_prompt.is_some());
             assert!(app.attachments.is_empty(), "the image rode with the send");
@@ -1420,7 +1420,7 @@ fn resume_replay_keeps_text_typed_since_the_send(cx: &mut gpui::TestAppContext) 
             app.input
                 .update(cx, |input, cx| input.set_text("first message", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.pending_prompt.is_some());
         });
@@ -1558,7 +1558,7 @@ fn a_refused_cold_resume_hands_the_images_back(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("refused message", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.worktree_dialog.is_some(), "the send was refused");
             assert!(app.pending_prompt.is_none(), "nothing was queued");
@@ -1638,7 +1638,7 @@ fn a_pending_start_drops_the_open_model_popup_on_the_next_frame(
     let _ = cx.draw(
         gpui::point(gpui::px(0.), gpui::px(0.)),
         gpui::size(gpui::px(1200.), gpui::px(820.)),
-        |_, _| app.clone(),
+        |_, _| app.clone().into_any_element(),
     );
 
     cx.update(|_, cx| {

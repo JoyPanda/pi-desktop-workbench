@@ -460,7 +460,7 @@ pub(crate) fn mode_menu_row(
     ))
     .child(
         div()
-            .flex_shrink()
+            .flex_shrink(1.)
             .min_w_0()
             .truncate()
             .font_weight(tokens::weight::FUNCTIONAL)
@@ -738,6 +738,7 @@ fn header_lifted(theme: &Theme) -> gpui::StyleRefinement {
             offset: point(px(0.), px(1.)),
             blur_radius: px(3.),
             spread_radius: px(-1.),
+            inset: false,
         }])
 }
 

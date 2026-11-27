@@ -29,10 +29,6 @@ struct AvatarClient {
 }
 
 impl HttpClient for AvatarClient {
-    fn type_name(&self) -> &'static str {
-        "AvatarClient"
-    }
-
     fn user_agent(&self) -> Option<&HeaderValue> {
         None
     }

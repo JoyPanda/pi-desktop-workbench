@@ -1499,7 +1499,7 @@ pub(crate) fn render_side_row(
                         app.clear_session_card(cx);
                         app.sidebar_cursor = None;
                         app.on_open_session(session, cx);
-                        app.input.read(cx).focus(window);
+                        crate::composer::focus_input(&app.input, window, cx);
                     });
                 });
             // Status sits beside the task. Workspace, branch, and providers
@@ -1724,7 +1724,7 @@ pub(crate) fn render_side_row(
                     div().absolute().top_0().right_0().size(px(0.)).child(
                         anchored()
                             .position_mode(AnchoredPositionMode::Local)
-                            .anchor(Corner::TopLeft)
+                            .anchor(Anchor::TopLeft)
                             .offset(point(tooltip::offset_x(&theme), px(0.)))
                             .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                             .child(deferred(session_card(&hover, &theme))),
@@ -2036,11 +2036,11 @@ pub(crate) fn session_menu_popup(
     // above the rest of the list — same convention as the composer chip
     // pickers. `snap_to_window` keeps it inside the window near the edges.
     let anchor = if let Some(at) = menu.at {
-        anchored().anchor(Corner::TopLeft).position(at)
+        anchored().anchor(Anchor::TopLeft).position(at)
     } else {
         anchored()
             .position_mode(AnchoredPositionMode::Local)
-            .anchor(Corner::TopLeft)
+            .anchor(Anchor::TopLeft)
             .offset(point(
                 px(0.),
                 TextSize::Default.px(&theme) + DynamicSpacing::Base06.px(&theme),
@@ -2234,11 +2234,11 @@ pub(crate) fn workspace_menu_popup(
         .child(body);
 
     let anchor = if let Some(at) = menu.at {
-        anchored().anchor(Corner::TopLeft).position(at)
+        anchored().anchor(Anchor::TopLeft).position(at)
     } else {
         anchored()
             .position_mode(AnchoredPositionMode::Local)
-            .anchor(Corner::TopLeft)
+            .anchor(Anchor::TopLeft)
             .offset(point(
                 px(0.),
                 ButtonSize::Compact.height(&theme) + popover::MENU_OFFSET,
@@ -2534,7 +2534,7 @@ fn sidebar_show_popup(show: SidebarShow, this: Entity<OrbitApp>, theme: Theme) -
     // anchors beside the Show row and paints with its parent instead.
     anchored()
         .position_mode(AnchoredPositionMode::Local)
-        .anchor(Corner::TopLeft)
+        .anchor(Anchor::TopLeft)
         .offset(point(popover::MENU_OFFSET, px(0.)))
         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
         .child(popup)
@@ -2762,7 +2762,7 @@ pub(crate) fn sidebar_options_popup(
 
     anchored()
         .position_mode(AnchoredPositionMode::Local)
-        .anchor(Corner::TopLeft)
+        .anchor(Anchor::TopLeft)
         .offset(point(
             px(0.),
             ButtonSize::Compact.height(&theme) + popover::MENU_OFFSET,
@@ -2950,13 +2950,13 @@ impl OrbitApp {
     /// through here.
     fn dismiss_transient_popups(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.command_palette.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
         }
         if self.branch_picker.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
         }
         if self.workspace_picker.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
         }
         if self.model_selector.is_some() {
             self.close_model_selector(window, cx);
@@ -3364,9 +3364,7 @@ impl OrbitApp {
                             )
                         })
                         .ok()
-                })
-                .ok()
-                .flatten();
+                });
             if let Some(answer) = answer {
                 if let Ok(0) = answer.await {
                     let _ = this.update(cx, |app, cx| then(app, cx));
@@ -3484,7 +3482,7 @@ impl OrbitApp {
         let rows = self.sidebar_rows_for_nav();
         self.sidebar_cursor =
             (!rows.is_empty()).then(|| self.active_session_row(&rows).unwrap_or(0));
-        window.focus(&self.sidebar_focus);
+        window.focus(&self.sidebar_focus, cx);
         cx.notify();
     }
 
@@ -3633,7 +3631,7 @@ impl OrbitApp {
                 // The row is a destination: hand focus back to the composer
                 // so typing resumes immediately.
                 self.sidebar_cursor = None;
-                self.input.read(cx).focus(window);
+                crate::composer::focus_input(&self.input, window, cx);
             }
             SideRow::Workspace { label, .. } => {
                 let working = self.workspace_label();
@@ -3677,7 +3675,7 @@ impl OrbitApp {
             return;
         }
         self.sidebar_cursor = None;
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
         cx.notify();
     }
 
@@ -3716,7 +3714,7 @@ impl OrbitApp {
             at: None,
             draft: session.draft.is_some(),
         });
-        window.focus(&self.sidebar_focus);
+        window.focus(&self.sidebar_focus, cx);
         cx.notify();
     }
 

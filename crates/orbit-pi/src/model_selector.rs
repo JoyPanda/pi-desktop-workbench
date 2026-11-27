@@ -805,7 +805,9 @@ impl ModelSelector {
         for delay in [16_u64, 50, 120, 250] {
             let this = cx.weak_entity();
             cx.spawn(async move |_, cx| {
-                gpui::Timer::after(Duration::from_millis(delay)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(delay))
+                    .await;
                 this.update(cx, |selector, cx| {
                     let rows = selector.rows(&selector.last_filter);
                     let ix = selector.highlighted;
@@ -2068,13 +2070,13 @@ mod tests {
                     cx,
                 )
             });
-            window.focus(&selector.read(cx).focus_handle(cx));
+            window.focus(&selector.read(cx).focus_handle(cx), cx);
             selector
         });
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(360.), px(700.)),
-            |_, _| selector.clone(),
+            |_, _| selector.clone().into_any_element(),
         );
 
         let theme = Theme::for_id(ThemeKey::ORBIT);
@@ -2145,7 +2147,7 @@ mod tests {
                     cx,
                 )
             });
-            window.focus(&selector.read(cx).focus_handle(cx));
+            window.focus(&selector.read(cx).focus_handle(cx), cx);
             selector
         })
     }
@@ -2164,7 +2166,7 @@ mod tests {
             let _ = cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(360.), px(700.)),
-                |_, _| selector.clone(),
+                |_, _| selector.clone().into_any_element(),
             );
         };
         draw(cx);
@@ -2199,7 +2201,7 @@ mod tests {
             let _ = cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(360.), px(700.)),
-                |_, _| selector.clone(),
+                |_, _| selector.clone().into_any_element(),
             );
         };
         draw(cx);
@@ -2243,7 +2245,7 @@ mod tests {
             let _ = cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(360.), px(700.)),
-                |_, _| selector.clone(),
+                |_, _| selector.clone().into_any_element(),
             );
         };
         draw(cx);
@@ -2266,7 +2268,7 @@ mod tests {
     /// there too, or ↑/↓ move the composer caret and the list never moves.
     #[gpui::test]
     fn arrow_keys_resolve_inside_the_anchored_popup(cx: &mut gpui::TestAppContext) {
-        use gpui::{anchored, deferred, AnchoredPositionMode, Corner};
+        use gpui::{anchored, deferred, AnchoredPositionMode, Anchor};
 
         struct Host(Entity<ModelSelector>);
         impl Render for Host {
@@ -2274,7 +2276,7 @@ mod tests {
                 div().relative().size_full().child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::BottomLeft)
+                        .anchor(Anchor::BottomLeft)
                         .offset(point(px(0.), -px(8.)))
                         .snap_to_window_with_margin(px(8.))
                         .child(deferred(self.0.clone())),
@@ -2290,7 +2292,7 @@ mod tests {
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(700.)),
-            |_, _| host.clone(),
+            |_, _| host.clone().into_any_element(),
         );
         assert_eq!(cx.update(|_, cx| selector.read(cx).highlighted), 1);
         cx.simulate_keystrokes("down");
@@ -2323,7 +2325,7 @@ mod tests {
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(360.), px(700.)),
-            |_, _| selector.clone(),
+            |_, _| selector.clone().into_any_element(),
         );
         assert_eq!(cx.update(|_, cx| selector.read(cx).highlighted), 1);
         cx.simulate_keystrokes("down");
@@ -2364,7 +2366,7 @@ mod tests {
                     cx,
                 )
             });
-            window.focus(&selector.read(cx).focus_handle(cx));
+            window.focus(&selector.read(cx).focus_handle(cx), cx);
             selector
         })
     }
@@ -2387,7 +2389,7 @@ mod tests {
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(900.)),
-            |_, _| model.clone(),
+            |_, _| model.clone().into_any_element(),
         );
         let model_surface = cx.debug_bounds("picker-surface").expect("model surface");
         assert_eq!(model_surface.size.width, px(MODEL_POPOVER_W));
@@ -2409,7 +2411,7 @@ mod tests {
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(900.)),
-            |_, _| thinking.clone(),
+            |_, _| thinking.clone().into_any_element(),
         );
         let thinking_surface = cx.debug_bounds("picker-surface").expect("thinking surface");
         assert_eq!(thinking_surface.size.width, px(THINKING_POPOVER_W));

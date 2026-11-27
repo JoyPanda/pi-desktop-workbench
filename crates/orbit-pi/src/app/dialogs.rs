@@ -239,7 +239,7 @@ impl OrbitApp {
                     app.respond_to_dialog(&id, &response);
                     // The dialog's focus handle dies with it; hand focus back
                     // to the composer so typing continues.
-                    app.input.read(cx).focus(window);
+                    crate::composer::focus_input(&app.input, window, cx);
                     cx.notify();
                 })
                 .ok();
@@ -308,7 +308,7 @@ impl OrbitApp {
             None => DialogResponse::Cancelled,
         };
         self.respond_to_dialog(&request.id, &response);
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
         cx.notify();
     }
 

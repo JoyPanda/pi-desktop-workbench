@@ -126,7 +126,7 @@ mod workspace_picker;
 mod worktree;
 mod worktree_setup;
 
-use gpui::{actions, App, Application, KeyBinding, Menu, MenuItem, SystemMenuType};
+use gpui::{actions, App, KeyBinding, Menu, MenuItem, SystemMenuType};
 
 // Composer-scoped actions (bound in the `Composer` key context).
 actions!(
@@ -587,6 +587,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
     let app = tr!("app.name");
     vec![
         Menu {
+            disabled: false,
             name: app.clone().into(),
             items: vec![
                 MenuItem::action(tr!("menu.about", app = app.clone()), OpenAbout),
@@ -600,6 +601,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: tr!("menu.file").into(),
             items: vec![
                 MenuItem::action(tr!("menu.new_task"), NewSession),
@@ -609,6 +611,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
         // Editing keys ride the `Composer` context, so these enable while a
         // text field owns focus and grey out elsewhere.
         Menu {
+            disabled: false,
             name: tr!("menu.edit").into(),
             items: vec![
                 MenuItem::action(tr!("menu.cut"), Cut),
@@ -618,6 +621,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
             ],
         },
         Menu {
+            disabled: false,
             name: tr!("menu.view").into(),
             items: vec![
                 MenuItem::action(tr!("menu.command_palette"), ToggleCommandPalette),
@@ -646,7 +650,10 @@ fn main() {
         std::process::exit(code);
     }
 
-    let mut application = Application::new().with_assets(assets::Assets);
+    // `gpui` no longer builds its own application: the platform backends
+    // (macOS/Metal, Windows/DirectX, Linux/Blade) live in `gpui-pre-platform`,
+    // and this constructor picks the current target's.
+    let mut application = gpui_platform::application().with_assets(assets::Assets);
     // Remote author avatars need an HTTP client; without one GPUI renders
     // nothing for `img("https://…")` and the monogram fallback shows instead.
     if let Some(client) = http::avatar_client() {

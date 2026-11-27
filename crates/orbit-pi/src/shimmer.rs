@@ -90,18 +90,27 @@ impl Element for ShimmerText {
 
         // Truncate to the row width with gpui's own helper, so the ellipsis
         // matches the rest of the UI. These runs are only shaped for glyph
-        // geometry; the painted colors are rebuilt below.
-        let mut runs = vec![run(self.text.len(), self.base)];
-        let display = window
+        // geometry; the painted colors are rebuilt below. The helper reports
+        // the truncated string together with the runs it rewrote for it.
+        let runs = vec![run(self.text.len(), self.base)];
+        let (display, truncated_runs) = window
             .text_system()
             .line_wrapper(font.clone(), font_size)
-            .truncate_line(self.text.clone(), bounds.size.width, "\u{2026}", &mut runs);
+            .truncate_line(
+                self.text.clone(),
+                bounds.size.width,
+                "\u{2026}",
+                &runs,
+                gpui::TruncateFrom::End,
+            );
 
-        let Ok(measured) =
-            window
-                .text_system()
-                .shape_text(display.clone(), font_size, &runs, None, None)
-        else {
+        let Ok(measured) = window.text_system().shape_text(
+            display.clone(),
+            font_size,
+            &truncated_runs,
+            None,
+            None,
+        ) else {
             return Vec::new();
         };
         let Some(line) = measured.first() else {
@@ -127,7 +136,7 @@ impl Element for ShimmerText {
         window
             .text_system()
             .shape_text(display, font_size, &colored, None, None)
-            .map(|lines| lines.to_vec())
+            .map(|lines| lines.into_vec())
             .unwrap_or_default()
     }
 

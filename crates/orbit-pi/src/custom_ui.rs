@@ -663,7 +663,7 @@ mod render_tests {
         let harness = cx.update(|_, cx| cx.new(|_| Harness { ui }));
 
         let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(700.)), |_, _| {
-            harness.clone()
+            harness.clone().into_any_element()
         });
 
         let card = cx.debug_bounds("custom-ui-card").expect("card painted");
@@ -730,7 +730,7 @@ mod render_tests {
         let harness = cx.update(|_, cx| cx.new(|_| Harness { ui }));
 
         let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(700.)), |_, _| {
-            harness.clone()
+            harness.clone().into_any_element()
         });
 
         assert!(
@@ -790,7 +790,7 @@ mod render_tests {
 
         let draw = |cx: &mut gpui::VisualTestContext| {
             let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(700.)), |_, _| {
-                host.clone()
+                host.clone().into_any_element()
             });
         };
         draw(cx);

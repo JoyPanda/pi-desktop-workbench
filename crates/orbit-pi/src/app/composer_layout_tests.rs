@@ -70,7 +70,7 @@ fn queue_bar_is_one_compact_grouped_surface(cx: &mut gpui::TestAppContext) {
                 cx.new(|_| QueueBarProbe {
                     app: app.clone(),
                     width,
-                })
+                }).into_any_element()
             },
         );
         cx.debug_bounds("queue-bar")
@@ -225,7 +225,7 @@ fn sending_hints_match_footer_metrics_and_share_the_context_row(cx: &mut gpui::T
                     cx.new(|_| ComposerStatusProbe {
                         app: app.clone(),
                         width,
-                    })
+                    }).into_any_element()
                 },
             );
             let hints = cx
@@ -294,7 +294,7 @@ fn an_idle_status_row_keeps_the_send_hints_out_of_the_chrome(cx: &mut gpui::Test
                     cx.new(|_| ComposerStatusProbe {
                         app: app.clone(),
                         width,
-                    })
+                    }).into_any_element()
                 },
             );
             assert!(
@@ -345,7 +345,7 @@ fn the_thinking_chip_appears_only_when_the_model_has_a_ladder(cx: &mut gpui::Tes
         let _ = window.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(60.)),
-            |_, cx| cx.new(|_| ComposerRowProbe { app: app.clone() }),
+            |_, cx| cx.new(|_| ComposerRowProbe { app: app.clone() }).into_any_element(),
         );
         assert_eq!(
             can_choose,
@@ -386,7 +386,7 @@ fn the_access_chip_names_the_mode_only_when_it_is_not_the_default(cx: &mut gpui:
         let _ = window.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(60.)),
-            |_, cx| cx.new(|_| ComposerRowProbe { app: app.clone() }),
+            |_, cx| cx.new(|_| ComposerRowProbe { app: app.clone() }).into_any_element(),
         );
         assert!(
             window.debug_bounds("access-chip").is_some(),
@@ -410,7 +410,7 @@ fn the_access_chip_names_the_mode_only_when_it_is_not_the_default(cx: &mut gpui:
         let _ = window.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(60.)),
-            |_, cx| cx.new(|_| ComposerRowProbe { app: app.clone() }),
+            |_, cx| cx.new(|_| ComposerRowProbe { app: app.clone() }).into_any_element(),
         );
         let open = window
             .debug_bounds("access-chip")
@@ -472,7 +472,7 @@ fn send_stays_inside_the_composer_row_at_narrow_widths(cx: &mut gpui::TestAppCon
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(width), px(60.)),
-            |_, _| probe.clone(),
+            |_, _| probe.clone().into_any_element(),
         );
         let row = cx.debug_bounds("composer-row").expect("composer row laid out");
         let send = cx.debug_bounds("composer-send").expect("send control laid out");

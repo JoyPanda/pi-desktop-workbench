@@ -13,7 +13,7 @@
 use std::{cell::RefCell, time::Duration};
 
 use gpui::{
-    prelude::*, px, size, App, Application, AsyncApp, Bounds, Entity, Focusable, Global, Timer,
+    prelude::*, px, size, App, Application, AsyncApp, Bounds, Entity, Focusable, Global,
     WindowBackgroundAppearance, WindowBounds, WindowOptions,
 };
 
@@ -136,7 +136,7 @@ pub fn open(cx: &mut App) {
             app.update(cx, |app, cx| {
                 app.watch_window_activation(window, cx);
                 let handle = app.input.read(cx).focus_handle(cx);
-                window.focus(&handle);
+                window.focus(&handle, cx);
             });
 
             app
@@ -166,12 +166,11 @@ fn spawn_heartbeat(cx: &mut App, app: &Entity<OrbitApp>) {
     cx.spawn(async move |cx: &mut AsyncApp| {
         let mut delay = Duration::from_millis(90);
         loop {
-            Timer::after(delay).await;
-            // The shell lives in a global until the app quits, so a failure
-            // here means the app is going away and there is nothing to tick.
-            let Ok(active) = heartbeat.update(cx, |app: &mut OrbitApp, cx| app.tick(cx)) else {
-                return;
-            };
+            cx.background_executor().timer(delay).await;
+            // The shell lives in a global until the app quits, so there is no
+            // released-entity case to handle any more: quitting drops this
+            // foreground task.
+            let active = heartbeat.update(cx, |app: &mut OrbitApp, cx| app.tick(cx));
             delay = if active {
                 Duration::from_millis(16)
             } else {

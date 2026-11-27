@@ -2344,7 +2344,7 @@ impl SidePane {
                         .when(cursor, |row| row.bg(theme.overlay_strong))
                         .when(!cursor, |row| row.hover(|row| row.bg(theme.surface_hover)))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            window.focus(&this.tree_focus);
+                            window.focus(&this.tree_focus, cx);
                             this.tree_cursor = Some(index);
                             this.toggle_dir(path.clone(), cx);
                         }))
@@ -2434,7 +2434,7 @@ impl SidePane {
                                 row.hover(|row| row.bg(theme.surface_hover))
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                window.focus(&this.tree_focus);
+                                window.focus(&this.tree_focus, cx);
                                 this.tree_cursor = Some(index);
                                 this.select_file(file_index, cx);
                             }))
@@ -2993,7 +2993,7 @@ mod tests {
                     cx.notify();
                 });
             });
-            let _ = cx.draw(point(px(0.), px(0.)), viewport(), |_, _| pane.clone());
+            let _ = cx.draw(point(px(0.), px(0.)), viewport(), |_, _| pane.clone().into_any_element());
         }
     }
 

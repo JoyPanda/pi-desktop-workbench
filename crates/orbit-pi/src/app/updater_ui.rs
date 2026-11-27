@@ -188,7 +188,7 @@ impl OrbitApp {
     pub(super) fn dismiss_update_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.updater_history_open = false;
         if self.updater_dialog.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
         }
     }
@@ -1220,7 +1220,7 @@ mod tests {
         let _ = cx.draw(
             gpui::point(px(0.), px(0.)),
             gpui::size(px(800.), px(400.)),
-            |_, cx| cx.new(|_| Probe),
+            |_, cx| cx.new(|_| Probe).into_any_element(),
         );
         let card = cx.debug_bounds("probe-update-card").expect("card laid out");
         let copy = cx.debug_bounds("probe-update-copy").expect("copy laid out");
@@ -1302,7 +1302,7 @@ mod tests {
         let _ = cx.draw(
             gpui::point(px(0.), px(0.)),
             gpui::size(px(800.), px(600.)),
-            |_, cx| cx.new(|_| Probe),
+            |_, cx| cx.new(|_| Probe).into_any_element(),
         );
         let card = cx.debug_bounds("probe-update-card").expect("card laid out");
         let footer = cx

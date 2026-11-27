@@ -1588,7 +1588,7 @@ impl OrbitApp {
         // closed, Tab is the workbench's focus-traversal key and must not be
         // swallowed by this binding.
         if !self.commit_autocomplete_if_open(CompletionIntent::Accept, cx) {
-            window.focus_next();
+            window.focus_next(cx);
         }
     }
 
@@ -1632,12 +1632,12 @@ impl OrbitApp {
             return;
         }
         if self.command_palette.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
             return;
         }
         if self.workspace_picker.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
             return;
         }
@@ -1723,7 +1723,7 @@ impl OrbitApp {
         // field), so Escape closes it before falling through to aborting a run.
         if self.session_details_open {
             self.session_details_open = false;
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
             return;
         }
@@ -2273,7 +2273,7 @@ impl OrbitApp {
         cx: &mut Context<Self>,
     ) {
         if self.blank_draft_in(&cwd, cx) {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
             return;
         }
@@ -2373,7 +2373,7 @@ impl OrbitApp {
         self.current_session_path = None;
         self.paint_unsent_model();
         self.apply_composer(None, cx);
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
         cx.notify();
     }
 
@@ -3902,7 +3902,7 @@ impl OrbitApp {
         self.session_details_open = true;
         self.seed_session_name_input(cx);
         let handle = self.session_name_input.read(cx).focus_handle(cx);
-        window.focus(&handle);
+        window.focus(&handle, cx);
         cx.notify();
     }
 
@@ -4178,7 +4178,7 @@ impl OrbitApp {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopRight)
+                        .anchor(Anchor::TopRight)
                         .offset(point(px(0.), popover::MENU_OFFSET))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(popup)),
@@ -4561,7 +4561,7 @@ impl OrbitApp {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopRight)
+                        .anchor(Anchor::TopRight)
                         .offset(point(px(0.), popover::MENU_OFFSET))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(popup)),
@@ -4945,7 +4945,7 @@ impl OrbitApp {
         if !self.sidebar_visible {
             self.sidebar_cursor = None;
             if had_focus {
-                self.input.read(cx).focus(window);
+                crate::composer::focus_input(&self.input, window, cx);
             }
         }
     }
@@ -5320,7 +5320,7 @@ impl OrbitApp {
         if self.composer_popup_open() {
             return;
         }
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
     }
 
     pub(super) fn on_refresh(
@@ -5717,7 +5717,7 @@ mod quota_reset_tests {
 #[cfg(test)]
 mod finish_turn_fold_tests {
     use super::super::OrbitApp;
-    use gpui::{point, px, AppContext, Context, Entity, Render, Window};
+    use gpui::{point, px, AppContext, Context, Entity, IntoElement, Render, Window};
 
     struct TurnFoldProbe {
         app: Entity<OrbitApp>,
@@ -5777,7 +5777,7 @@ mod finish_turn_fold_tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(1400.)),
-                |_, cx| cx.new(|_| TurnFoldProbe { app: app.clone() }),
+                |_, cx| cx.new(|_| TurnFoldProbe { app: app.clone() }).into_any_element(),
             );
         };
         paint(cx);

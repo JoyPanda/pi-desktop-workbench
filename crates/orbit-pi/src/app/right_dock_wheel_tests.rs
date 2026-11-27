@@ -26,7 +26,7 @@ fn wheel(
         ..Default::default()
     });
     let viewport = cx.update(|window, _| window.viewport_size());
-    let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
 }
 
 /// An app with a conversation long enough to scroll and one subagent leaf whose
@@ -65,7 +65,7 @@ fn a_wheel_over_the_subagent_tab_never_moves_the_conversation(cx: &mut gpui::Tes
     let mut cx = cx.add_empty_window();
     let viewport = cx.update(|window, _| window.viewport_size());
     for _ in 0..2 {
-        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     }
 
     let body = cx
@@ -81,7 +81,7 @@ fn a_wheel_over_the_subagent_tab_never_moves_the_conversation(cx: &mut gpui::Tes
     });
     let conversation = cx.update(|_, cx| app.read(cx).transcript.first_visible_index());
     assert!(
-        handle.max_offset().height > px(0.),
+        handle.max_offset().y > px(0.),
         "the pane must be scrollable for this test to mean anything"
     );
 
@@ -99,7 +99,7 @@ fn a_wheel_over_the_subagent_tab_never_moves_the_conversation(cx: &mut gpui::Tes
     });
     handle.set_offset(point(px(0.), px(0.)));
     let viewport = cx.update(|window, _| window.viewport_size());
-    let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     wheel(&mut cx, &app, at, 400.);
     assert_eq!(
         handle.offset().y,
@@ -132,7 +132,7 @@ fn a_wheel_over_the_subagent_tab_never_moves_the_conversation(cx: &mut gpui::Tes
     }
     assert_eq!(
         handle.offset().y,
-        -handle.max_offset().height,
+        -handle.max_offset().y,
         "the pane stops at its own bottom"
     );
     assert_eq!(
@@ -166,7 +166,7 @@ fn new_output_sticks_to_the_bottom_until_the_reader_scrolls(cx: &mut gpui::TestA
     let cx = cx.add_empty_window();
     let viewport = cx.update(|window, _| window.viewport_size());
     for _ in 0..2 {
-        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     }
 
     let handle = cx.update(|_, cx| {
@@ -177,12 +177,12 @@ fn new_output_sticks_to_the_bottom_until_the_reader_scrolls(cx: &mut gpui::TestA
             .expect("the pane tracked its scroll offset")
     });
     assert!(
-        handle.max_offset().height > px(0.),
+        handle.max_offset().y > px(0.),
         "the pane must be scrollable for this test to mean anything"
     );
     assert_eq!(
         handle.offset().y,
-        -handle.max_offset().height,
+        -handle.max_offset().y,
         "the pane opens on the newest line"
     );
 
@@ -199,15 +199,15 @@ fn new_output_sticks_to_the_bottom_until_the_reader_scrolls(cx: &mut gpui::TestA
     });
     let viewport = cx.update(|window, _| window.viewport_size());
     for _ in 0..2 {
-        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     }
     assert!(
-        handle.max_offset().height > px(0.),
+        handle.max_offset().y > px(0.),
         "the longer inspect still overflows"
     );
     assert_eq!(
         handle.offset().y,
-        -handle.max_offset().height,
+        -handle.max_offset().y,
         "new lines keep the reader on the bottom when they have not scrolled away"
     );
 }
@@ -241,7 +241,7 @@ fn a_detached_reader_stays_put_in_a_final_answer_with_no_messages(
     let cx = cx.add_empty_window();
     let viewport = cx.update(|window, _| window.viewport_size());
     for _ in 0..2 {
-        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+        let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     }
     let handle = cx.update(|_, cx| {
         app.read(cx)
@@ -251,7 +251,7 @@ fn a_detached_reader_stays_put_in_a_final_answer_with_no_messages(
             .expect("the pane tracked its scroll offset")
     });
     assert!(
-        handle.max_offset().height > px(0.),
+        handle.max_offset().y > px(0.),
         "the final answer must overflow for this test to mean anything"
     );
     cx.update(|_, cx| {
@@ -260,7 +260,7 @@ fn a_detached_reader_stays_put_in_a_final_answer_with_no_messages(
         });
     });
     handle.set_offset(point(px(0.), px(0.)));
-    let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     assert_eq!(
         handle.offset().y,
         px(0.),

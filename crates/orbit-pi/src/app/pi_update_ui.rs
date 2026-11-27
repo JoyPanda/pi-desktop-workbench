@@ -1,7 +1,6 @@
 use super::*;
 use crate::pi_install::{self, InstallOutcome, UnsupportedReason, UpdatePlan};
 use crate::pi_update;
-use gpui::Timer;
 
 /// How long the launch check waits before touching the network, so the
 /// session's own startup traffic (state, catalogs, quota) goes first.
@@ -41,7 +40,7 @@ impl OrbitApp {
         let before = self.pi_install.version.clone().unwrap_or_default();
 
         cx.spawn(async move |this, cx| {
-            Timer::after(PI_CHECK_DELAY).await;
+            cx.background_executor().timer(PI_CHECK_DELAY).await;
             let (latest, installation) = cx
                 .background_executor()
                 .spawn(async { (pi_update::latest_version(), pi_install::detect()) })
@@ -99,7 +98,7 @@ impl OrbitApp {
                 if Instant::now() >= deadline {
                     break;
                 }
-                Timer::after(PI_QUIET_POLL).await;
+                cx.background_executor().timer(PI_QUIET_POLL).await;
             }
             if !quiet {
                 let _ = this.update(cx, |app, cx| {

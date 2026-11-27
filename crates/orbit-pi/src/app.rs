@@ -34,7 +34,7 @@ use base64::Engine as _;
 use gpui::{
     anchored, deferred, div, img, linear_color_stop, linear_gradient, list, point, prelude::*, px,
     radians, relative, uniform_list, AnchoredPositionMode, Animation, AnimationExt, AnyElement,
-    App, ClipboardItem, Context, Corner, CursorStyle, DragMoveEvent, ElementId, Entity,
+    App, ClipboardItem, Context, Anchor, CursorStyle, DragMoveEvent, ElementId, Entity,
     ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla, Image, ImageSource, IntoElement,
     ListAlignment, ListState, MouseButton, MouseDownEvent, MouseUpEvent, ObjectFit,
     PathPromptOptions, Pixels, Point, Render, Resource, ScrollHandle, ScrollStrategy, SharedString,
@@ -1745,15 +1745,9 @@ struct Attachment {
 
 impl Attachment {
     fn from_image(image: &gpui::Image, index: usize) -> Self {
-        let ext = match image.format {
-            gpui::ImageFormat::Png => "png",
-            gpui::ImageFormat::Jpeg => "jpg",
-            gpui::ImageFormat::Webp => "webp",
-            gpui::ImageFormat::Gif => "gif",
-            gpui::ImageFormat::Bmp => "bmp",
-            gpui::ImageFormat::Svg => "svg",
-            gpui::ImageFormat::Tiff => "tiff",
-        };
+        // `ImageFormat::extension` is gpui's own table and is the same mapping
+        // this used to spell out (it gained `ico` and `pnm`).
+        let ext = image.format.extension();
         Self::from_bytes(
             tr!("app.pasted_image", index = index + 1, ext = ext),
             &image.bytes,
@@ -2892,7 +2886,7 @@ impl OrbitApp {
         // the window usually was frontmost when the user closed it — which
         // would keep a run that settles with no window open from notifying.
         let this = cx.weak_entity();
-        let closed = cx.on_window_closed(move |cx| {
+        let closed = cx.on_window_closed(move |cx, _window_id| {
             this.update(cx, |app, _| app.window_active = false).ok();
         });
         self._window_watchers = vec![activation, closed];

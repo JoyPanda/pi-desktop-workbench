@@ -146,7 +146,7 @@ impl BranchPicker {
         if self.mode == Mode::Create {
             self.mode = Mode::Browse;
             self.highlighted = 0;
-            window.focus(&self.filter.read(cx).focus_handle(cx));
+            window.focus(&self.filter.read(cx).focus_handle(cx), cx);
             cx.notify();
             return;
         }
@@ -244,7 +244,7 @@ impl BranchPicker {
         self.create_input.update(cx, |input, cx| {
             input.clear(cx);
         });
-        window.focus(&self.create_input.read(cx).focus_handle(cx));
+        window.focus(&self.create_input.read(cx).focus_handle(cx), cx);
         cx.notify();
     }
 }

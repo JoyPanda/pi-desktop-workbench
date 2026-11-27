@@ -8,6 +8,7 @@
 //! commits/cancellations clear it (see `EntityInputHandler` below).
 
 use std::ops::Range;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -16,7 +17,7 @@ use gpui::{
     ContentMask, Context, CursorStyle, Element, ElementInputHandler, Entity, EntityInputHandler,
     FocusHandle, Focusable, GlobalElementId, Image, InspectorElementId, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, ScrollWheelEvent,
-    SharedString, Style, Task, TextAlign, TextRun, Timer, UTF16Selection, Window, WrappedLine,
+    SharedString, Style, Task, TextAlign, TextRun, UTF16Selection, Window, WrappedLine,
 };
 
 use crate::{
@@ -173,7 +174,7 @@ pub struct ComposerInput {
     marked_range: Option<Range<usize>>,
     /// Layout snapshot from the last prepaint, for hit-testing and IME
     /// bounds outside the paint pass.
-    last_lines: Vec<WrappedLine>,
+    last_lines: Rc<Vec<WrappedLine>>,
     /// Byte offset of each logical line's first byte (`WrappedLine::len`
     /// excludes the newline that `shape_text` split off, hence +1 steps).
     last_line_starts: Vec<usize>,
@@ -255,7 +256,7 @@ impl ComposerInput {
             selection_reversed: false,
             is_selecting: false,
             marked_range: None,
-            last_lines: Vec::new(),
+            last_lines: Rc::new(Vec::new()),
             last_line_starts: Vec::new(),
             last_line_height: px(18.),
             last_bounds: None,
@@ -511,9 +512,6 @@ impl ComposerInput {
         self.replace_range(at..at, text, cx);
     }
 
-    pub fn focus(&self, window: &mut Window) {
-        window.focus(&self.focus_handle);
-    }
 
     // ── caret blink ────────────────────────────────────────────────────
 
@@ -566,9 +564,9 @@ impl ComposerInput {
 
     fn schedule_blink(&mut self, after: Duration, epoch: usize, cx: &mut Context<Self>) {
         self._blink_task = Some(cx.spawn(async move |this, cx| {
-            Timer::after(after).await;
+            cx.background_executor().timer(after).await;
             if let Some(this) = this.upgrade() {
-                this.update(cx, |input, cx| input.blink(epoch, cx)).ok();
+                this.update(cx, |input, cx| input.blink(epoch, cx));
             }
         }));
     }
@@ -882,7 +880,7 @@ impl ComposerInput {
         // Focus on press, like a native field: the arrows and clipboard keys
         // are live before the button is released, and the input does not
         // depend on an ancestor's mouse-up handler to claim focus.
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.is_selecting = true;
         let offset = self.index_for_mouse_position(event.position);
         match event.click_count {
@@ -950,6 +948,10 @@ impl ComposerInput {
                     .filter_map(|entry| match entry {
                         ClipboardEntry::Image(image) => Some(image.clone()),
                         ClipboardEntry::String(_) => None,
+                        // A pasted file path: the text branch below turns it
+                        // into an attachment, exactly as before gpui grew the
+                        // variant.
+                        ClipboardEntry::ExternalPaths(_) => None,
                     })
                     .collect()
             })
@@ -1230,6 +1232,16 @@ impl ComposerInput {
             .map(|i| offset + i)
             .unwrap_or(self.content.len())
     }
+}
+
+/// Put the keyboard in a composer input.
+///
+/// `Window::focus` takes the `App` as well now, so this is a free function over
+/// the entity: the focus handle is read out first, because a `read(cx)` borrow
+/// cannot stay alive across a call that takes `cx` mutably.
+pub(crate) fn focus_input(input: &Entity<ComposerInput>, window: &mut Window, cx: &mut App) {
+    let handle = input.read(cx).focus_handle(cx);
+    window.focus(&handle, cx);
 }
 
 /// Whether a character is part of a word for Option+arrow / double-click
@@ -1706,7 +1718,10 @@ impl IntoElement for TextElement {
 }
 
 struct PrepaintState {
-    lines: Vec<WrappedLine>,
+    /// Shared with [`ComposerInput::last_lines`]: the shaped lines are read by
+    /// both the paint pass and the hit-testing state, and `WrappedLine` is not
+    /// `Clone`.
+    lines: Rc<Vec<WrappedLine>>,
     /// y offset of each logical line in content coordinates.
     line_y: Vec<Pixels>,
     scroll_offset: Pixels,
@@ -1847,11 +1862,13 @@ impl Element for TextElement {
         } else {
             px(0.)
         };
-        let lines: Vec<WrappedLine> = window
-            .text_system()
-            .shape_text(display_text, font_size, &runs, wrap_width, None)
-            .map(|shaped| shaped.to_vec())
-            .unwrap_or_default();
+        let lines: Rc<Vec<WrappedLine>> = Rc::new(
+            window
+                .text_system()
+                .shape_text(display_text, font_size, &runs, wrap_width, None)
+                .map(|shaped| shaped.into_vec())
+                .unwrap_or_default(),
+        );
 
         // Byte offset and y of each logical line (`WrappedLine::len`
         // excludes the newline that `shape_text` split off).
@@ -1860,7 +1877,7 @@ impl Element for TextElement {
         let mut line_y = Vec::with_capacity(lines.len());
         let mut byte_acc = 0usize;
         let mut y_acc = px(0.);
-        for line in &lines {
+        for line in lines.iter() {
             line_starts.push(byte_acc);
             line_lens.push(line.len());
             line_y.push(y_acc);
@@ -2047,7 +2064,7 @@ impl Element for TextElement {
                 window
                     .text_system()
                     .shape_text(text.into(), font_size, &[run], None, None)
-                    .map(|shaped| shaped.to_vec())
+                    .map(|shaped| shaped.into_vec())
                     .unwrap_or_default()
             } else {
                 Vec::new()
@@ -2517,7 +2534,7 @@ mod geometry_tests {
 
     fn draw(cx: &mut VisualTestContext, harness: &Entity<Harness>) {
         let _ = cx.draw(point(px(0.), px(0.)), size(px(500.), px(400.)), |_, _| {
-            harness.clone()
+            harness.clone().into_any_element()
         });
     }
 
@@ -2659,7 +2676,7 @@ mod geometry_tests {
         });
         draw(cx, &harness);
         cx.update(|_, cx| input.update(cx, |input, cx| input.set_text("abc\ndef", cx)));
-        cx.update(|window, cx| input.update(cx, |input, _| input.focus(window)));
+        cx.update(|window, cx| focus_input(&input, window, cx));
         draw(cx, &harness);
 
         // Caret starts at the end (byte 7); two lefts land on byte 5.
@@ -2718,7 +2735,7 @@ mod geometry_tests {
                             .on_mouse_up(
                                 MouseButton::Left,
                                 cx.listener(|this, _, window, cx| {
-                                    this.input.read(cx).focus(window);
+                                    crate::composer::focus_input(&this.input, window, cx);
                                 }),
                             )
                             .child(self.input.clone()),
@@ -2744,17 +2761,17 @@ mod geometry_tests {
             })
         });
         let _ = cx.draw(point(px(0.), px(0.)), size(px(500.), px(400.)), |_, _| {
-            harness.clone()
+            harness.clone().into_any_element()
         });
         cx.update(|_, cx| input.update(cx, |input, cx| input.set_text("abc\ndef", cx)));
         let _ = cx.draw(point(px(0.), px(0.)), size(px(500.), px(400.)), |_, _| {
-            harness.clone()
+            harness.clone().into_any_element()
         });
 
         let bounds = cx.debug_bounds("composer-input").expect("input bounds");
         cx.simulate_click(bounds.center(), Modifiers::none());
         let _ = cx.draw(point(px(0.), px(0.)), size(px(500.), px(400.)), |_, _| {
-            harness.clone()
+            harness.clone().into_any_element()
         });
 
         let focused = cx.update(|window, cx| input.read(cx).focus_handle(cx).is_focused(window));
@@ -2798,7 +2815,7 @@ mod geometry_tests {
         });
         draw(cx, &harness);
         cx.update(|_, cx| input.update(cx, |input, cx| input.set_text("hello world\nfoo bar", cx)));
-        cx.update(|window, cx| input.update(cx, |input, _| input.focus(window)));
+        cx.update(|window, cx| focus_input(&input, window, cx));
         draw(cx, &harness);
         let caret =
             |cx: &mut VisualTestContext| cx.update(|_, cx| input.read(cx).selected_range.start);
@@ -2849,7 +2866,7 @@ mod geometry_tests {
 
     fn draw_editor(cx: &mut VisualTestContext, harness: &Entity<EditorHarness>) {
         let _ = cx.draw(point(px(0.), px(0.)), size(px(500.), px(300.)), |_, _| {
-            harness.clone()
+            harness.clone().into_any_element()
         });
     }
 

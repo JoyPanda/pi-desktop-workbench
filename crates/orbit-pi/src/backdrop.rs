@@ -732,7 +732,7 @@ mod tests {
             })
         });
         let _ = cx.draw(point(px(0.), px(0.)), size(px(900.), px(620.)), |_, _| {
-            view.clone()
+            view.clone().into_any_element()
         });
     }
 }

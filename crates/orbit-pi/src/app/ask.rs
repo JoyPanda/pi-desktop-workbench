@@ -284,7 +284,7 @@ impl OrbitApp {
             current_id: Some(id.clone()),
         });
         // Hand focus back to the composer: the panel is now read-only.
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
         cx.notify();
         self.ask_replay_reply(&id, if first_is_multi { "input" } else { "select" });
     }
@@ -330,7 +330,7 @@ impl OrbitApp {
         self.ask_replay = None;
         self.ask_focus_pending = false;
         self.respond_to_dialog(&id, &DialogResponse::Cancelled);
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
         cx.notify();
     }
 

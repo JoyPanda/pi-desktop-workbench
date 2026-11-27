@@ -683,7 +683,7 @@ impl OrbitApp {
         Some(
             anchored()
                 .position_mode(AnchoredPositionMode::Local)
-                .anchor(Corner::BottomLeft)
+                .anchor(Anchor::BottomLeft)
                 .offset(point(px(0.), -popover::MENU_OFFSET))
                 .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                 .child(deferred(popup))
@@ -977,7 +977,7 @@ impl OrbitApp {
             self.input.update(cx, |input, cx| {
                 input.insert_at_caret(&format!("{} ", path.display()), cx);
             });
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
         }
         cx.notify();
     }
@@ -1047,7 +1047,7 @@ impl OrbitApp {
                     app.input.update(cx, |input, cx| {
                         input.insert_at_caret(&format!("{} ", path.display()), cx);
                     });
-                    app.input.read(cx).focus(window);
+                    crate::composer::focus_input(&app.input, window, cx);
                 }
                 cx.notify();
             });
@@ -1088,7 +1088,7 @@ impl OrbitApp {
         self.add_menu_open = true;
         self.add_menu_highlight = 0;
         // Focus the menu so ↑/↓/Enter/Escape dispatch to it.
-        window.focus(&self.add_menu_focus);
+        window.focus(&self.add_menu_focus, cx);
         cx.notify();
     }
 
@@ -1097,7 +1097,7 @@ impl OrbitApp {
         if self.add_menu_open {
             self.add_menu_open = false;
             self.add_menu_highlight = 0;
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
         }
     }
@@ -1159,7 +1159,7 @@ impl OrbitApp {
                 .input
                 .update(cx, |input, cx| input.insert_at_caret("@", cx)),
         }
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
         cx.notify();
     }
 
@@ -1657,7 +1657,7 @@ impl OrbitApp {
             .position(|mode| *mode == self.access_mode)
             .unwrap_or(0);
         // Focus the menu so ↑/↓/Enter/Escape dispatch to it.
-        window.focus(&self.access_menu_focus);
+        window.focus(&self.access_menu_focus, cx);
         cx.notify();
     }
 
@@ -1665,7 +1665,7 @@ impl OrbitApp {
     pub(super) fn close_access_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.access_menu_open {
             self.access_menu_open = false;
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
         }
     }
@@ -1774,7 +1774,7 @@ impl OrbitApp {
             .iter()
             .position(|mode| *mode == self.workflow_mode)
             .unwrap_or(0);
-        window.focus(&self.workflow_menu_focus);
+        window.focus(&self.workflow_menu_focus, cx);
         cx.notify();
     }
 
@@ -1782,7 +1782,7 @@ impl OrbitApp {
     pub(super) fn close_workflow_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.workflow_menu_open {
             self.workflow_menu_open = false;
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
         }
     }

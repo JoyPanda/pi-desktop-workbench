@@ -764,7 +764,7 @@ mod tests {
         };
         let _ = cx.draw(point(px(0.), px(0.)), size(px(800.), px(600.)), |_, cx| {
             let on_respond = Box::new(|_: DialogResponse, _: &mut Window, _: &mut App| {});
-            cx.new(|cx| Dialog::new(request, on_respond, cx))
+            cx.new(|cx| Dialog::new(request, on_respond, cx)).into_any_element()
         });
         let card = cx
             .debug_bounds("dialog-card")

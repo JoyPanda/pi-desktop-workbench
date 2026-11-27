@@ -35,7 +35,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    anchored, deferred, div, prelude::*, px, relative, AnyElement, App, Context, Corner, Entity,
+    anchored, deferred, div, prelude::*, px, relative, AnyElement, App, Context, Anchor, Entity,
     Font, FontFeatures, FontWeight, IntoElement, MouseButton, Render, SharedString, Window,
 };
 
@@ -280,7 +280,7 @@ impl UsagePage {
             "usage-export-anchor",
             button,
             true,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || panel,
         )
@@ -324,7 +324,7 @@ impl UsagePage {
             "usage-range-anchor",
             range_chip,
             range_open,
-            Corner::TopLeft,
+            Anchor::TopLeft,
             theme,
             move || range_panel.unwrap_or_else(|| div().into_any_element()),
         ));
@@ -435,12 +435,12 @@ impl UsagePage {
             },
         );
         if !open {
-            return filters::chip_with_menu(id, chip, false, Corner::TopLeft, theme, || {
+            return filters::chip_with_menu(id, chip, false, Anchor::TopLeft, theme, || {
                 div().into_any_element()
             });
         }
         let panel = filters::multi_menu(self, kind, ranked, all, selected, cx, theme);
-        filters::chip_with_menu(id, chip, true, Corner::TopLeft, theme, move || panel)
+        filters::chip_with_menu(id, chip, true, Anchor::TopLeft, theme, move || panel)
     }
 
     /// The active-filter bar (§45): every narrowing filter as a removable
@@ -1589,7 +1589,7 @@ impl UsagePage {
                 "usage-bucket-columns-anchor",
                 chip,
                 false,
-                Corner::TopRight,
+                Anchor::TopRight,
                 theme,
                 || div().into_any_element(),
             );
@@ -1599,7 +1599,7 @@ impl UsagePage {
             "usage-bucket-columns-anchor",
             chip,
             true,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || panel,
         )
@@ -1662,7 +1662,7 @@ impl UsagePage {
             "usage-bucket-page-size-anchor",
             size_chip,
             size_open,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || size_panel.unwrap_or_else(|| div().into_any_element()),
         );
@@ -1716,7 +1716,7 @@ impl UsagePage {
                 "usage-failure-columns-anchor",
                 chip,
                 false,
-                Corner::TopRight,
+                Anchor::TopRight,
                 theme,
                 || div().into_any_element(),
             );
@@ -1726,7 +1726,7 @@ impl UsagePage {
             "usage-failure-columns-anchor",
             chip,
             true,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || panel,
         )
@@ -1780,7 +1780,7 @@ impl UsagePage {
             "usage-failure-page-size-anchor",
             size_chip,
             size_open,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || size_panel.unwrap_or_else(|| div().into_any_element()),
         );
@@ -2015,7 +2015,7 @@ impl UsagePage {
                 "usage-breakdown-columns-anchor",
                 chip,
                 false,
-                Corner::TopRight,
+                Anchor::TopRight,
                 theme,
                 || div().into_any_element(),
             );
@@ -2025,7 +2025,7 @@ impl UsagePage {
             "usage-breakdown-columns-anchor",
             chip,
             true,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || panel,
         )
@@ -2113,7 +2113,7 @@ impl UsagePage {
             "usage-breakdown-page-size-anchor",
             size_chip,
             size_open,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || size_panel.unwrap_or_else(|| div().into_any_element()),
         );
@@ -3270,7 +3270,7 @@ impl UsagePage {
                 "usage-columns-anchor",
                 chip,
                 false,
-                Corner::TopRight,
+                Anchor::TopRight,
                 theme,
                 || div().into_any_element(),
             );
@@ -3280,7 +3280,7 @@ impl UsagePage {
             "usage-columns-anchor",
             chip,
             true,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || panel,
         )
@@ -3363,7 +3363,7 @@ impl UsagePage {
             "usage-page-size-anchor",
             size_chip,
             size_open,
-            Corner::TopRight,
+            Anchor::TopRight,
             theme,
             move || size_panel.unwrap_or_else(|| div().into_any_element()),
         );
@@ -3598,7 +3598,7 @@ fn session_context_menu(row: &SessionRow, theme: Theme, page: Entity<UsagePage>)
 
     anchored()
         .position_mode(gpui::AnchoredPositionMode::Local)
-        .anchor(Corner::TopLeft)
+        .anchor(Anchor::TopLeft)
         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
         .child(deferred(context_menu_shell(theme, page, items)))
         .into_any_element()

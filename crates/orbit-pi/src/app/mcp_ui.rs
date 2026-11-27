@@ -475,7 +475,7 @@ impl OrbitApp {
             oauth_text(&oauth.scope),
             cx,
         );
-        window.focus(&name.read(cx).focus_handle(cx));
+        window.focus(&name.read(cx).focus_handle(cx), cx);
         self.mcp_editor = Some(McpEditor {
             original: server,
             kind,

@@ -575,7 +575,7 @@ impl ProjectPanel {
             error: None,
             _sub: sub,
         });
-        input.read(cx).focus(window);
+        crate::composer::focus_input(&input, window, cx);
         cx.notify();
     }
 
@@ -618,7 +618,7 @@ impl ProjectPanel {
 
     fn cancel_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.entry.take().is_some() {
-            window.focus(&self.focus);
+            window.focus(&self.focus, cx);
             cx.notify();
         }
     }
@@ -1038,7 +1038,7 @@ impl ProjectPanel {
                         this.cancel_entry(window, cx);
                         return;
                     }
-                    window.focus(&this.focus);
+                    window.focus(&this.focus, cx);
                     this.cursor = Some(index);
                     this.activate(index, cx);
                 }))
@@ -1047,7 +1047,7 @@ impl ProjectPanel {
                     cx.listener({
                         let row = row.clone();
                         move |this, event: &MouseDownEvent, window, cx| {
-                            window.focus(&this.focus);
+                            window.focus(&this.focus, cx);
                             this.cursor = Some(index);
                             this.open_menu(row.clone(), event.position, cx);
                         }
@@ -1343,7 +1343,7 @@ impl ProjectPanel {
             // `SwitchAnchor` fit mode. Previously it was pinned to the panel's
             // top-left regardless of where the row was clicked.
             gpui::anchored()
-                .anchor(gpui::Corner::TopLeft)
+                .anchor(gpui::Anchor::TopLeft)
                 .position(menu.position)
                 .child(popup)
                 .into_any_element(),

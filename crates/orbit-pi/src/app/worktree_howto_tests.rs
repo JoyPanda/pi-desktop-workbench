@@ -51,8 +51,8 @@ fn howto_card_fits_the_page_column(cx: &mut gpui::TestAppContext) {
         });
     });
     // The page settles over a frame (workspace discovery, then a refresh).
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
 
     let card = cx.debug_bounds("worktree-howto-card").expect("howto card");
     let list = cx.debug_bounds("worktree-page-list").expect("list section");

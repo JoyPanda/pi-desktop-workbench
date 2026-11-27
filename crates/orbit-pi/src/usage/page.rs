@@ -1452,7 +1452,7 @@ impl UsagePage {
             Some(MenuKind::Workspace) | Some(MenuKind::Provider) | Some(MenuKind::Model)
         ) {
             let handle = self.menu_query.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
         }
         cx.notify();
     }

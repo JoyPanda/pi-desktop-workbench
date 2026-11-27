@@ -15,7 +15,7 @@ use crate::app::{
 };
 use chrono::Datelike;
 use gpui::{
-    anchored, deferred, div, point, prelude::*, px, AnyElement, App, Corner, ElementId, Entity,
+    anchored, deferred, div, point, prelude::*, px, AnyElement, App, Anchor, ElementId, Entity,
     FontWeight, IntoElement, MouseButton, MouseDownEvent, SharedString, Window,
 };
 
@@ -50,7 +50,7 @@ pub fn chip_with_menu(
     id: &'static str,
     chip: impl IntoElement,
     open: bool,
-    corner: Corner,
+    anchor: Anchor,
     theme: Theme,
     panel: impl FnOnce() -> AnyElement,
 ) -> AnyElement {
@@ -69,7 +69,7 @@ pub fn chip_with_menu(
             // `settings.rs`.
             anchored()
                 .position_mode(gpui::AnchoredPositionMode::Local)
-                .anchor(corner)
+                .anchor(anchor)
                 .offset(point(
                     px(-1.),
                     TRIGGER_SIZE.height(&theme) + popover::MENU_OFFSET,

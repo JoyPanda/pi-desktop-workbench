@@ -20,7 +20,7 @@ use gpui::{
     div, img, prelude::*, px, AnyElement, App, ClickEvent, Context, Entity, FocusHandle, Focusable,
     Font, FontFeatures, FontStyle, FontWeight, Hsla, Image, ImageFormat, ImageSource,
     ListAlignment, ListState, ObjectFit, Render, ScrollHandle, StyledText, Subscription, TextRun,
-    Timer, Window,
+    Window,
 };
 
 use crate::app::{
@@ -704,7 +704,7 @@ impl FileViewer {
         self.save_epoch = self.save_epoch.wrapping_add(1);
         let epoch = self.save_epoch;
         cx.spawn(async move |this, cx| {
-            Timer::after(AUTOSAVE_DELAY).await;
+            cx.background_executor().timer(AUTOSAVE_DELAY).await;
             let _ = this.update(cx, |this, cx| {
                 if this.save_epoch == epoch {
                     this.flush_all(cx);
@@ -1408,7 +1408,7 @@ impl Render for FileViewer {
                     Some(target)
                 });
                 if let Some(target) = target {
-                    window.focus(&target);
+                    window.focus(&target, cx);
                 }
             });
         }
@@ -1611,9 +1611,9 @@ mod tests {
             }
         });
         let _ = cx.draw(point(px(0.), px(0.)), size(px(420.), px(600.)), |_, _| {
-            viewer.clone()
+            viewer.clone().into_any_element()
         });
-        let max = cx.update(|_, app| viewer.read(app).tab_scroll.max_offset().width);
+        let max = cx.update(|_, app| viewer.read(app).tab_scroll.max_offset().x);
         assert!(
             max > px(0.),
             "the strip must scroll when 12 tabs overflow a 420px window, max offset {max:?}"

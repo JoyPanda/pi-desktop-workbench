@@ -136,7 +136,7 @@ fn blur_slider_handle_tracks_sigma(cx: &mut gpui::TestAppContext) {
             cx.new(|_| BlurSliderProbe {
                 app: app.clone(),
                 sigma,
-            })
+            }).into_any_element()
         });
         let track = cx.debug_bounds("backdrop-blur-slider").expect("track");
         let knob = cx.debug_bounds("backdrop-blur-knob").expect("knob");
@@ -383,7 +383,7 @@ fn provider_name_column_has_a_real_width(cx: &mut gpui::TestAppContext) {
 
     let cx = cx.add_empty_window();
     let _ = cx.draw(point(px(0.), px(0.)), size(px(1000.), px(300.)), |_, cx| {
-        cx.new(|_| CardHeaderTestView)
+        cx.new(|_| CardHeaderTestView).into_any_element()
     });
     let name = cx.debug_bounds("provider-name").expect("name laid out");
     let id = cx.debug_bounds("provider-id").expect("id laid out");
@@ -497,7 +497,7 @@ fn settings_cards_stay_inside_the_content_column(cx: &mut gpui::TestAppContext) 
 
     let cx = cx.add_empty_window();
     let _ = cx.draw(point(px(0.), px(0.)), size(px(1240.), px(700.)), |_, cx| {
-        cx.new(|_| SettingsCardTestView)
+        cx.new(|_| SettingsCardTestView).into_any_element()
     });
     let card = cx.debug_bounds("settings-card").expect("card");
     let desc = cx.debug_bounds("settings-card-desc").expect("description");
@@ -604,7 +604,7 @@ fn provider_grid_columns_fit_inside_the_content_column(cx: &mut gpui::TestAppCon
 
     let cx = cx.add_empty_window();
     let _ = cx.draw(point(px(0.), px(0.)), size(px(1240.), px(700.)), |_, cx| {
-        cx.new(|_| ProviderGridTestView)
+        cx.new(|_| ProviderGridTestView).into_any_element()
     });
     let scroll = cx.debug_bounds("grid-scroll").expect("scroll container");
     assert_eq!(scroll.size.width, px(CONTENT_MAX_W));
@@ -672,7 +672,7 @@ fn flex_none_keeps_icons_from_collapsing(cx: &mut gpui::TestAppContext) {
 
     let cx = cx.add_empty_window();
     let _ = cx.draw(point(px(0.), px(0.)), size(px(400.), px(200.)), |_, cx| {
-        cx.new(|_| Probe)
+        cx.new(|_| Probe).into_any_element()
     });
     let fixed = cx.debug_bounds("probe-icon-fixed").expect("fixed icon");
     let shrunk = cx.debug_bounds("probe-icon-shrunk").expect("shrunk icon");

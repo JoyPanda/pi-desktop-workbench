@@ -25,7 +25,7 @@ fn expanding_review_opens_the_sessions_sidebar(cx: &mut gpui::TestAppContext) {
             app.sidepane.update(cx, |pane, cx| pane.toggle(cx));
         });
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     assert!(
         !cx.update(|_, cx| app.read(cx).sidebar_visible),
         "the sidebar starts closed for this test"
@@ -38,7 +38,7 @@ fn expanding_review_opens_the_sessions_sidebar(cx: &mut gpui::TestAppContext) {
                 .update(cx, |pane, cx| pane.toggle_full_width(cx));
         });
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert!(app.sidepane.read(cx).is_full_width());
@@ -76,7 +76,7 @@ fn expanding_fills_the_page_beside_the_sidebar(cx: &mut gpui::TestAppContext) {
             });
         });
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
 
     // Docked: the pane keeps the width the reader dialed in.
     assert_eq!(
@@ -90,7 +90,7 @@ fn expanding_fills_the_page_beside_the_sidebar(cx: &mut gpui::TestAppContext) {
                 .update(cx, |pane, cx| pane.toggle_full_width(cx));
         });
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     let sidebar_width = cx.update(|_, cx| app.read(cx).sidebar_width);
     assert_eq!(
         cx.update(|_, cx| app.read(cx).sidepane.read(cx).width()),
@@ -104,7 +104,7 @@ fn expanding_fills_the_page_beside_the_sidebar(cx: &mut gpui::TestAppContext) {
                 .update(cx, |pane, cx| pane.leave_full_width(cx));
         });
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     assert_eq!(
         cx.update(|_, cx| app.read(cx).sidepane.read(cx).width()),
         px(400.),
@@ -139,7 +139,7 @@ fn a_wide_docked_review_stays_inside_the_window(cx: &mut gpui::TestAppContext) {
             });
         });
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
 
     let pane = cx.debug_bounds("side-pane").expect("pane laid out");
     assert!(
@@ -174,7 +174,7 @@ fn the_right_dock_hosts_changes_and_files_as_tabs(cx: &mut gpui::TestAppContext)
     });
     // Let the Review pane's notification reach the app first, as a click would.
     cx.update(|_, cx| app.update(cx, |app, cx| app.open_files_tab(cx)));
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     cx.update(|_, cx| {
         let dock = &app.read(cx).right_dock;
         assert_eq!(dock.tabs(), &[DockTab::Changes, DockTab::Files]);
@@ -191,7 +191,7 @@ fn the_right_dock_hosts_changes_and_files_as_tabs(cx: &mut gpui::TestAppContext)
     cx.update(|_, cx| {
         app.update(cx, |app, cx| app.activate_dock_tab(&DockTab::Changes, cx));
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     let pane = cx.debug_bounds("side-pane").expect("Changes is shown");
     let dock = cx.debug_bounds("right-dock").expect("dock laid out");
     assert!(
@@ -202,7 +202,7 @@ fn the_right_dock_hosts_changes_and_files_as_tabs(cx: &mut gpui::TestAppContext)
     cx.update(|_, cx| {
         app.update(cx, |app, cx| app.close_dock_tab(&DockTab::Changes, cx));
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert!(
@@ -226,7 +226,7 @@ fn full_width_applies_to_any_tab_and_hiding_ends_it(cx: &mut gpui::TestAppContex
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let viewport = cx.update(|window, _| window.viewport_size());
     let draw = |cx: &mut gpui::VisualTestContext| {
-        let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+        let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     };
 
     cx.update(|_, cx| {
@@ -296,7 +296,7 @@ fn side_panel_toggle_opens_then_collapses_the_dock(cx: &mut gpui::TestAppContext
 
     for (step, expect_visible) in [(0, true), (1, false), (2, true)] {
         cx.update(|_, cx| app.update(cx, |app, cx| app.toggle_side_panel(cx)));
-        let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+        let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
         cx.update(|_, cx| {
             let app = app.read(cx);
             assert_eq!(app.dock_visible(), expect_visible, "after toggle {step}");
@@ -323,7 +323,7 @@ fn full_width_follows_the_dock_not_a_tab(cx: &mut gpui::TestAppContext) {
     let app = cx.update(|_, cx| cx.new(OrbitApp::new));
     let viewport = cx.update(|window, _| window.viewport_size());
     let draw = |cx: &mut gpui::VisualTestContext| {
-        let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+        let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     };
 
     cx.update(|_, cx| {
@@ -383,7 +383,7 @@ fn opening_a_file_ends_full_width(cx: &mut gpui::TestAppContext) {
             app.toggle_dock_full_width(cx);
         });
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     cx.update(|_, cx| assert!(app.read(cx).dock_full_width(cx)));
 
     cx.update(|_, cx| {
@@ -419,11 +419,11 @@ fn show_side_panel_under_usage_leaves_usage(cx: &mut gpui::TestAppContext) {
             app.usage_open = true;
         });
     });
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     cx.update(|_, cx| assert!(!app.read(cx).dock_visible(), "Usage hides the dock"));
 
     cx.update(|_, cx| app.update(cx, |app, cx| app.toggle_side_panel(cx)));
-    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone());
+    let _ = cx.draw(gpui::point(px(0.), px(0.)), viewport, |_, _| app.clone().into_any_element());
     cx.update(|_, cx| {
         let app = app.read(cx);
         assert!(!app.usage_open, "Show leaves the Usage page");

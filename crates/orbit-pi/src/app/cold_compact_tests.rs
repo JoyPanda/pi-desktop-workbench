@@ -296,7 +296,7 @@ fn leaving_keeps_a_send_that_is_still_booting(cx: &mut gpui::TestAppContext) {
             app.input
                 .update(cx, |input, cx| input.set_text("keep this", cx));
             let handle = app.input.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
             app.on_submit(&crate::Submit, window, cx);
             assert!(app.spawn_pending(), "the send started pi");
             assert!(app.pending_prompt.is_some());

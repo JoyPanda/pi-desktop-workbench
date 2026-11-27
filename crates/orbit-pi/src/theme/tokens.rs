@@ -1153,6 +1153,7 @@ fn drop_shadow(offset_y: f32, blur: f32, alpha: f32) -> BoxShadow {
         offset: point(px(0.), px(offset_y)),
         blur_radius: px(blur),
         spread_radius: px(0.),
+        inset: false,
     }
 }
 
@@ -1236,12 +1237,14 @@ pub fn button_shadow(theme: &Theme) -> Vec<BoxShadow> {
             offset: point(px(0.), px(1.)),
             blur_radius: px(1.),
             spread_radius: px(0.),
+            inset: false,
         },
         BoxShadow {
             color: ambient,
             offset: point(px(0.), px(1.)),
             blur_radius: px(3.),
             spread_radius: px(-1.),
+            inset: false,
         },
     ]
 }

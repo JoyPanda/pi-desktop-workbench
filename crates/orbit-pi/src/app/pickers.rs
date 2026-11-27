@@ -46,7 +46,7 @@ impl OrbitApp {
             }
         }
         if self.workspace_picker.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
             return;
         }
@@ -95,7 +95,7 @@ impl OrbitApp {
                     app.menu_dismissed_at = Some(Instant::now());
                 }
                 app.workspace_picker = None;
-                app.input.read(cx).focus(window);
+                crate::composer::focus_input(&app.input, window, cx);
                 cx.notify();
             })
             .ok();
@@ -104,7 +104,7 @@ impl OrbitApp {
         let picker = cx.new(|cx| {
             WorkspacePicker::new(entries, current, width, on_pick, on_browse, on_dismiss, cx)
         });
-        window.focus(&picker.read(cx).focus_handle(cx));
+        window.focus(&picker.read(cx).focus_handle(cx), cx);
         self.workspace_picker = Some(picker);
         cx.notify();
     }
@@ -236,7 +236,7 @@ impl OrbitApp {
             )
         });
         // Focus the popup's filter input so typing filters immediately.
-        window.focus(&selector.read(cx).focus_handle(cx));
+        window.focus(&selector.read(cx).focus_handle(cx), cx);
         self.model_selector = Some((kind, selector));
         cx.notify();
     }
@@ -244,7 +244,7 @@ impl OrbitApp {
     /// Drop the popup (if open) and put focus back on the composer.
     pub(super) fn close_model_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.model_selector.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
         }
     }
@@ -271,7 +271,7 @@ impl OrbitApp {
             }
         }
         if self.command_palette.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
             return;
         }
@@ -344,7 +344,7 @@ impl OrbitApp {
                 app.command_palette = None;
                 // The palette's focus handle dies with it; hand focus back to
                 // the composer so typing continues after Escape.
-                app.input.read(cx).focus(window);
+                crate::composer::focus_input(&app.input, window, cx);
                 cx.notify();
             })
             .ok();
@@ -353,7 +353,7 @@ impl OrbitApp {
         let palette =
             cx.new(|cx| CommandPalette::new(snapshot, on_open, on_command, on_dismiss, cx));
         // Focus the palette's filter input so typing filters immediately.
-        window.focus(&palette.read(cx).focus_handle(cx));
+        window.focus(&palette.read(cx).focus_handle(cx), cx);
         self.command_palette = Some(palette);
         cx.notify();
     }
@@ -399,7 +399,7 @@ impl OrbitApp {
             CommandId::NewSession => self.on_new_session(&crate::NewSession, window, cx),
             CommandId::RefreshSessions => self.on_refresh(&crate::RefreshSessions, window, cx),
             CommandId::FocusComposer => {
-                self.input.read(cx).focus(window);
+                crate::composer::focus_input(&self.input, window, cx);
             }
             CommandId::FocusSessions => {
                 self.on_focus_sessions(&crate::FocusSessions, window, cx);
@@ -558,7 +558,7 @@ impl OrbitApp {
             }
         }
         if self.branch_picker.take().is_some() {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
             return;
         }
@@ -629,7 +629,7 @@ impl OrbitApp {
                 cx,
             )
         });
-        window.focus(&picker.read(cx).focus_handle(cx));
+        window.focus(&picker.read(cx).focus_handle(cx), cx);
         self.branch_picker = Some(picker);
         cx.notify();
     }
@@ -709,7 +709,7 @@ impl OrbitApp {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopLeft)
+                        .anchor(Anchor::TopLeft)
                         .offset(point(px(0.), popover::MENU_OFFSET))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(picker)),
@@ -729,7 +729,7 @@ impl OrbitApp {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::BottomLeft)
+                        .anchor(Anchor::BottomLeft)
                         .offset(point(px(0.), -popover::MENU_OFFSET))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(picker)),

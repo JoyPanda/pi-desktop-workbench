@@ -116,7 +116,7 @@ impl OrbitApp {
             self.open_in_filter
                 .update(cx, |filter, cx| filter.clear(cx));
             let handle = self.open_in_filter.read(cx).focus_handle(cx);
-            window.focus(&handle);
+            window.focus(&handle, cx);
         }
         cx.notify();
     }
@@ -318,7 +318,7 @@ impl OrbitApp {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopRight)
+                        .anchor(Anchor::TopRight)
                         .offset(point(px(0.), popover::MENU_OFFSET))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(popup)),

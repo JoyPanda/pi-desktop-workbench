@@ -61,7 +61,7 @@ mod tests {
         let _ = cx.draw(
             point(px(0.), px(0.)),
             AvailableSpace::min_size(),
-            |_, cx| cx.new(|_| Tooltip::new(text)),
+            |_, cx| cx.new(|_| Tooltip::new(text)).into_any_element(),
         );
         cx.debug_bounds("tooltip-card")
             .expect("tooltip card laid out")

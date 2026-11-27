@@ -1194,6 +1194,7 @@ fn paint_link_mark(
     let _ = window.paint_svg(
         bounds,
         "icons/arrow-up-right.svg".into(),
+        None,
         TransformationMatrix::unit(),
         color,
         cx,
@@ -3314,7 +3315,7 @@ fn render_thinking_body(
     // card must not call `scroll_to_bottom` — that flag would apply the next
     // time the reader opens it.
     let detached = thinking_detached.borrow().contains(&key);
-    let at_bottom = thinking_is_at_bottom(handle.offset().y, handle.max_offset().height);
+    let at_bottom = thinking_is_at_bottom(handle.offset().y, handle.max_offset().y);
     match thinking_scroll_action(collapsed, streaming, detached, at_bottom) {
         ThinkingScroll::Follow => handle.scroll_to_bottom(),
         ThinkingScroll::Rejoin => {
@@ -3517,7 +3518,7 @@ fn chain_thinking_scroll(
     cx: &mut App,
 ) {
     let offset = handle.offset();
-    let max = handle.max_offset().height;
+    let max = handle.max_offset().y;
     let previous = before.get();
     let Some((clamped, split_residual)) = split_wheel_since_snapshot(previous, offset.y, max)
     else {
@@ -9530,7 +9531,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(420.), px(420.)),
-            move |_, _| view.clone(),
+            move |_, _| view.clone().into_any_element(),
         );
         cx.run_until_parked();
 
@@ -9587,7 +9588,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(420.), px(420.)),
-                move |_, _| view.clone(),
+                move |_, _| view.clone().into_any_element(),
             );
             cx.run_until_parked();
         };
@@ -9887,7 +9888,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(600.), px(200.)),
-            |_, _| view.clone(),
+            |_, _| view.clone().into_any_element(),
         );
         let state = selection.borrow();
         assert_eq!(state.blocks.len(), 1);
@@ -10702,7 +10703,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(width), px(1600.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
             let plan = plan_table(&header, &rows, Some(width), theme);
             let state = selection.borrow();
@@ -10763,7 +10764,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(width), px(800.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
             let plan = plan_table(&header, &rows, Some(width), theme);
             let state = selection.borrow();
@@ -10794,7 +10795,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(300.), px(300.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
         };
         draw(cx);
@@ -10872,7 +10873,7 @@ mod tests {
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(600.)),
-            |_, _| view.clone(),
+            |_, _| view.clone().into_any_element(),
         );
 
         let chip = cx
@@ -11003,7 +11004,7 @@ mod tests {
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(600.)),
-            |_, _| view.clone(),
+            |_, _| view.clone().into_any_element(),
         );
 
         let bounds = cx
@@ -11060,7 +11061,7 @@ mod tests {
         let _ = cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(900.), px(800.)),
-            |_, _| view.clone(),
+            |_, _| view.clone().into_any_element(),
         );
 
         assert!(
@@ -11132,7 +11133,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(800.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
         }
     }
@@ -11182,7 +11183,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(800.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
         }
     }
@@ -11211,7 +11212,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(1400.), px(900.)),
-            |_, _| view.clone(),
+            |_, _| view.clone().into_any_element(),
         );
         let selection = state.borrow();
         let prose_bounds = selection
@@ -11279,7 +11280,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(width), px(1600.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
             let selection = state.borrow();
             let bounds = |text: &str| {
@@ -11395,7 +11396,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(width), px(1600.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
             let selection = state.borrow();
             let before = selection
@@ -11474,7 +11475,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(1400.), px(1600.)),
-            |_, _| view.clone(),
+            |_, _| view.clone().into_any_element(),
         );
         let selection = state.borrow();
         let bounds = |text: &str| {
@@ -11554,7 +11555,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(width), px(1600.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
             let column_width = px(CONTENT_MAX_WIDTH.min(width - 40.));
             let column_left = (px(width) - column_width) / 2.;
@@ -11662,7 +11663,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(1200.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
         };
 
@@ -11813,7 +11814,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(1200.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
         };
 
@@ -11962,7 +11963,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(1200.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
         };
         paint(cx, false);
@@ -12031,7 +12032,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(1400.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
         };
         paint(cx);
@@ -12124,7 +12125,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(1400.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
         };
         paint(cx);
@@ -12258,7 +12259,7 @@ mod tests {
                 cx.draw(
                     point(px(0.), px(0.)),
                     gpui::size(px(width), height),
-                    |_, _| view.clone(),
+                    |_, _| view.clone().into_any_element(),
                 );
                 let indicator = cx.debug_bounds("working-indicator").unwrap();
                 // The row's `pb` is `DynamicSpacing::Base24`; only that final
@@ -12301,7 +12302,7 @@ mod tests {
         cx.draw(
             point(px(0.), px(0.)),
             gpui::size(px(1800.), height),
-            |_, _| view.clone(),
+            |_, _| view.clone().into_any_element(),
         );
         let last_tool = cx.debug_bounds("tool-card-0-11").unwrap();
         assert!(
@@ -12341,7 +12342,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(600.)),
-                move |_, _| view.clone(),
+                move |_, _| view.clone().into_any_element(),
             );
         };
         paint(cx);
@@ -12395,10 +12396,6 @@ mod tests {
     }
 
     impl gpui::http_client::HttpClient for PngHttpClient {
-        fn type_name(&self) -> &'static str {
-            "PngHttpClient"
-        }
-
         fn user_agent(&self) -> Option<&gpui::http_client::http::HeaderValue> {
             None
         }
@@ -12466,7 +12463,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(300.), px(300.)),
-                move |_, _| view.clone(),
+                move |_, _| view.clone().into_any_element(),
             );
         };
         paint(cx);
@@ -12526,7 +12523,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(300.), px(300.)),
-                move |_, _| view.clone(),
+                move |_, _| view.clone().into_any_element(),
             );
         };
         paint(cx);
@@ -12667,7 +12664,7 @@ mod tests {
             cx.draw(
                 point(px(0.), px(0.)),
                 gpui::size(px(900.), px(1200.)),
-                |_, _| view.clone(),
+                |_, _| view.clone().into_any_element(),
             );
             cx.debug_bounds("tool-card-0-0").is_some()
         };

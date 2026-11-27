@@ -554,7 +554,7 @@ impl Render for OrbitApp {
         if let Some(dialog) = &dialog_layer {
             if self.dialog_focus_pending {
                 self.dialog_focus_pending = false;
-                window.focus(&dialog.read(cx).focus_handle(cx));
+                window.focus(&dialog.read(cx).focus_handle(cx), cx);
             }
         }
         // A custom-UI surface owns the keyboard while it is open; the newest
@@ -563,32 +563,32 @@ impl Render for OrbitApp {
         if self.custom_ui_focus_pending {
             self.custom_ui_focus_pending = false;
             match self.custom_ui.last() {
-                Some(ui) => window.focus(&ui.read(cx).focus_handle(cx)),
-                None => self.input.read(cx).focus(window),
+                Some(ui) => window.focus(&ui.read(cx).focus_handle(cx), cx),
+                None => crate::composer::focus_input(&self.input, window, cx),
             }
         }
         // The inline approval bar owns the keyboard the same way.
         if self.approval_focus_pending {
             self.approval_focus_pending = false;
-            window.focus(&self.approval_focus);
+            window.focus(&self.approval_focus, cx);
         }
         // The update modal owns the keyboard (Escape dismisses) once open.
         if self.updater_dialog_focus_pending {
             self.updater_dialog_focus_pending = false;
-            window.focus(&self.updater_dialog_focus);
+            window.focus(&self.updater_dialog_focus, cx);
         }
         // The inline ask panel owns the keyboard while it is open.
         if self.ask_focus_pending {
             self.ask_focus_pending = false;
             let focus = self.ask_focus.clone();
-            window.focus(&focus);
+            window.focus(&focus, cx);
         }
         // Settings → MCP hands the keyboard to the server list so ↑/↓ walk
         // the rows without a mouse.
         if self.mcp_focus_pending {
             self.mcp_focus_pending = false;
             if self.settings_open && self.settings_section == SettingsSection::Mcp {
-                window.focus(&self.mcp_list_focus);
+                window.focus(&self.mcp_list_focus, cx);
             }
         }
 
@@ -822,7 +822,7 @@ impl Render for OrbitApp {
                                         div()
                                             .id("sidebar-runtime-status")
                                             .flex()
-                                            .flex_shrink()
+                                            .flex_shrink(1.)
                                             .min_w_0()
                                             .items_center()
                                             .gap(DynamicSpacing::Base06.px(&theme))
@@ -1601,7 +1601,7 @@ impl OrbitApp {
             .child(
                 div()
                     .ml_auto()
-                    .flex_shrink()
+                    .flex_shrink(1.)
                     .min_w_0()
                     .flex()
                     .items_center()
@@ -1977,7 +1977,7 @@ impl OrbitApp {
                     .map(|(keys, action)| {
                         // Match the adjacent footer controls without adding click behavior.
                         button_frame(div(), &theme, ButtonSize::Default)
-                            .flex_shrink()
+                            .flex_shrink(1.)
                             .min_w_0()
                             .child(
                                 div()
@@ -2120,7 +2120,7 @@ impl OrbitApp {
         Some(
             anchored()
                 .position_mode(AnchoredPositionMode::Local)
-                .anchor(Corner::BottomLeft)
+                .anchor(Anchor::BottomLeft)
                 .offset(point(px(0.), -popover::MENU_OFFSET))
                 .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                 .child(deferred(popup))
@@ -2139,7 +2139,7 @@ impl OrbitApp {
                 (open_kind == kind).then(move || {
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::BottomLeft)
+                        .anchor(Anchor::BottomLeft)
                         .offset(point(px(0.), -popover::MENU_OFFSET))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(selector))
@@ -2161,13 +2161,13 @@ impl OrbitApp {
             .flex()
             .flex_col()
             .items_start()
-            .flex_shrink()
+            .flex_shrink(1.)
             .min_w_0()
             .children(self.chip_popup(PickerKind::Model))
             .child(
                 chip_frame(div().id("model-chip"), &theme)
                     .debug_selector(|| "model-chip".to_string())
-                    .flex_shrink()
+                    .flex_shrink(1.)
                     .min_w_0()
                     .when(!disabled, |chip| {
                         chip.cursor_pointer()
@@ -2196,7 +2196,7 @@ impl OrbitApp {
                     .child(
                         div()
                             .max_w(px(if compact { 120. } else { 220. }))
-                            .flex_shrink()
+                            .flex_shrink(1.)
                             .min_w_0()
                             .truncate()
                             .text_color(if disabled {
@@ -3627,7 +3627,7 @@ impl OrbitApp {
                 .child(
                     anchored()
                         .position_mode(AnchoredPositionMode::Local)
-                        .anchor(Corner::TopRight)
+                        .anchor(Anchor::TopRight)
                         .offset(point(px(0.), popover::MENU_OFFSET))
                         .snap_to_window_with_margin(popover::WINDOW_MARGIN)
                         .child(deferred(menu)),
@@ -3859,7 +3859,7 @@ impl OrbitApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.input.read(cx).focus(window);
+        crate::composer::focus_input(&self.input, window, cx);
         cx.notify();
     }
 
@@ -3874,7 +3874,7 @@ impl OrbitApp {
         if self.focus_traversal_blocked() {
             return;
         }
-        window.focus_next();
+        window.focus_next(cx);
         cx.notify();
     }
 
@@ -3888,7 +3888,7 @@ impl OrbitApp {
         if self.focus_traversal_blocked() {
             return;
         }
-        window.focus_prev();
+        window.focus_prev(cx);
         cx.notify();
     }
 
@@ -4994,7 +4994,7 @@ impl OrbitApp {
         cx: &mut Context<Self>,
     ) {
         if self.unqueue_to_composer(cx) {
-            self.input.read(cx).focus(window);
+            crate::composer::focus_input(&self.input, window, cx);
             cx.notify();
         }
     }
