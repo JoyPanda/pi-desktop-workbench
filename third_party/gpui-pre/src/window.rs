@@ -5231,9 +5231,7 @@ impl Window {
             PlatformInput::Touch(_) => InputModality::Touch,
             _ => self.last_input_modality,
         };
-        if self.last_input_modality != old_modality {
-            self.refresh();
-        }
+        let modality_changed = self.last_input_modality != old_modality;
 
         // Handlers may set this to false by calling `stop_propagation`.
         cx.propagate_event = true;
@@ -5373,6 +5371,15 @@ impl Window {
         // Must run after the move is dispatched: the platform owns the gesture afterwards, so this
         // is the last chance for drag listeners to see the pointer leave and reset their state.
         self.promote_external_drag_to_platform(&event, cx);
+
+        // Mark the window dirty for the modality change after the event has been
+        // dispatched (fork hunk): modality only affects paint. Refreshing first
+        // made `dispatch_key_event`/`dispatch_mouse_event` draw the window
+        // synchronously before reading its rendered frame, which lets the test
+        // harness's probe frame be replaced mid-dispatch.
+        if modality_changed {
+            self.refresh();
+        }
 
         let caused_invalidation = self.invalidator.update_count() > update_count_before;
         if caused_invalidation {

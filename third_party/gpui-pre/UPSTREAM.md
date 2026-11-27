@@ -26,7 +26,7 @@ project with the behavior checklist behind it, never a routine `cargo update`.
 
 ## Local hunks
 
-Three app-relevant defects in 0.3.3 are patched here; everything else is
+Four app-relevant defects in 0.3.3 are patched here; everything else is
 byte-identical to the published crate.
 
 1. **`src/elements/list.rs`, `StateInner::scroll` — wheel tail fixes** (ported
@@ -57,6 +57,17 @@ byte-identical to the published crate.
    list) and is the one that ships. The feature flag is kept declared because a
    dependency enables it.
 
+4. **`src/window.rs`, `Window::dispatch_event` — the modality refresh runs after
+   the event is dispatched.** Upstream marks the window dirty the moment the
+   input modality changes (keyboard ⇄ mouse, for focus-visible styling and
+   hover suppression) and *before* dispatching, and
+   `dispatch_key_event`/`dispatch_mouse_event` begin by drawing a dirty window.
+   That draw installs the window root's frame before the dispatch reads it — the
+   correct thing for the app, whose root view is the surface, but it discards the
+   frame of an element a test painted with `VisualTestContext::draw` (the probe
+   is not part of the root), so the focused node is gone and the key is dropped.
+   Modality only affects paint, so the dirty mark now happens after the dispatch:
+   the same frame is painted either way, just not in the middle of a dispatch.
 Nothing else is forked: `ListItem::Unmeasured` / `remeasure_items` (the
 streaming remeasure), `FollowMode`, and window-level selection are upstream and
 are used as published.
